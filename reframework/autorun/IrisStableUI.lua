@@ -577,6 +577,7 @@ local function draw_ui()
                 txt(tostring(v), bar_x + bar_w + 8.0 * sc, by, COL.cream)
                 by = by + 27.0 * sc
             end
+            -- symmetric blood: the words go both ways again (mounts only LOOK cushioned)
             local szv = tonumber(iv.size)
             if szv then
                 local word = (szv >= 26 and "A Towering Specimen") or (szv >= 20 and "Larger Than Most")

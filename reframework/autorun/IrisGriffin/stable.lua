@@ -457,7 +457,14 @@ function griffin_tamed_tick()
         if sgo then
             local hname = ""
             pcall(function() hname = tostring(sgo:call("get_Name") or "") end)
-            if hname:find("ch299", 1, true) and (scale_target or 1.0) <= 1.05 then
+            -- ⛔ 08-11 (Aurora: "summoned Quoth, hit max, not changing -- flaws in the
+            -- system"): this guard matched ALL of ch299 -- which is every CRITTER -- so
+            -- crows/rabbits/rats/birds were silently excluded from scale application all
+            -- day while the mult computed perfectly ("previewing gene 30 (mult 2.00)").
+            -- The two-owner fight it guards against is the HORSE module specifically:
+            -- stand down ONLY for the doe/stag chassis IrisWildHorses owns.
+            if (hname:find("ch299011", 1, true) or hname:find("ch299010", 1, true))
+                and (scale_target or 1.0) <= 1.05 then
                 S.route3_scale_target = nil
                 sgo = nil
             end
@@ -468,7 +475,9 @@ function griffin_tamed_tick()
                 -- at application (0.86 small .. 1.15 large, gene 15 = species-true)
                 local want = scale_target
                 pcall(function()
-                    if iris_iv_size_mult then want = scale_target * (tonumber(iris_iv_size_mult()) or 1.0) end
+                    -- target-aware: the gene's drama depends on how big the body is meant
+                    -- to be (full on critters, gentle on mounts -- 08-11 round 3)
+                    if iris_iv_size_mult then want = scale_target * (tonumber(iris_iv_size_mult(scale_target)) or 1.0) end
                 end)
                 local tf = sgo:call("get_Transform")
                 local cur = tf:call("get_LocalScale")

@@ -8681,6 +8681,26 @@ audition_griffin_motion = function(delta)
     status("audition griffin motion " .. tostring(C.motion_bank) .. ":" .. tostring(C.audition_motion) .. " ok=" .. tostring(ok))
 end
 
+-- ⭐ 08-11 per-body species-profile apply, cheap enough for reacquire's hot path: acts only
+-- when the resolved body's IDENTITY changes (script reset, stable switch, summon). This is
+-- what actually cures cross-species C contamination -- register_griffin alone missed the
+-- post-reset path, where the live body returns via reacquire's fast path (field-proven:
+-- griffin jumping with the drake's wind-up after a reset). Global, not local (200-local cap).
+function griffin_profile_ensure()
+    local now = os.clock()
+    if now < (tonumber(S.route3_profile_ensure_at) or 0.0) then return end
+    S.route3_profile_ensure_at = now + 0.5
+    local addr = nil
+    pcall(function() addr = S.griffin_go and S.griffin_go:get_address() end)
+    if not addr or addr == S.route3_profile_applied_addr then return end
+    local raw = tostring(go_name(S.griffin_go) or ""):match("^[^@]+") or ""
+    local skey = raw:match("ch%d+_%a_%d+") or raw:match("ch%d+_%d+")
+    if not skey then return end
+    S.route3_profile_applied_addr = addr
+    S.route3_tamed_species = skey
+    pcall(function() griffin_species_profile_apply(skey) end)
+end
+
 local function register_griffin(ch)
     if not ch then return false end
     -- mounts ACCUMULATES: parked companions keep their protection (relationship
@@ -8704,6 +8724,16 @@ local function register_griffin(ch)
     pcall(function()
         if griffin_stable_prepare_summon then griffin_stable_prepare_summon(ch) end
     end)
+    -- ⭐ 08-11 PER-REGISTER PROFILE APPLY (the griffin-jumped-like-a-drake bug): C is SHARED
+    -- and profiles only applied at TAME time, so switching the active creature carried the
+    -- previous species' tuning across (drake's 2s jump wind-up on the griffin; the drake
+    -- retire flag arming the hold pump = her double loops). This is the one gate every route
+    -- (summon, tame, reclaim, stable switch) passes through -- apply the body's OWN species
+    -- profile here, keyed off its live name. Also keeps griffin_species_key() honest so a
+    -- later SAVE writes to the right species instead of whoever was applied last.
+    S.route3_profile_applied_addr = nil   -- force the ensure to re-apply for this body
+    S.route3_profile_ensure_at = 0.0
+    pcall(griffin_profile_ensure)
     -- EnemySpawner's ovrScale is not reliable for these large-character
     -- templates (the body can arrive at native 1.0 even though cfg says 0.55).
     -- Reassert the active species profile once the spawned body has finished
@@ -8949,6 +8979,7 @@ end
 reacquire_griffin = function()
     if S.griffin and char_go(S.griffin) then
         S.griffin_go = char_go(S.griffin)
+        pcall(griffin_profile_ensure)   -- post-reset/switch: body identity changed -> re-apply profile
         return S.griffin, S.griffin_go
     end
     if S.spawner and S.spawner.instances then
@@ -9259,7 +9290,7 @@ griffin_profile_keys = {
     "route3_rise_ascend_clip", "route3_rise_ascend_start_clip",
     "route3_rise_descend_clip", "route3_rise_descend_start_clip", "route3_rise_clip_bank",
     "route3_ground_jump_windup", "route3_rise_secs", "route3_pawn_ride_back",
-    "route3_rise_retire_at_window",
+    "route3_rise_retire_at_window", "route3_loopcam_dist",
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
@@ -9384,6 +9415,71 @@ function griffin_species_profile_apply(key)
     if p.route3_pawn_ride_back == nil then
         p.route3_pawn_ride_back = key:find("ch257", 1, true) and 3.0
             or (tonumber(C.route3_pawn_ride_back) or 0.0)
+        migrated = true
+    end
+    -- ⭐ SELF-HEAL 2026-08-11: Aurora accidentally SAVED the drake's live tuning over the
+    -- griffin's profile (SAVE captures the shared C under whichever body is active -- a design
+    -- trap, see note at the SAVE button). A ch253 profile carrying drake fingerprints is
+    -- corrupt: restore the known-good griffin block (captured from disk 2026-08-11, pre-
+    -- corruption, plus this file's own migration backfills).
+    if key:find("ch253", 1, true)
+        and (tostring(p.route3_rise_node_up or ""):find("FlightPathTrace", 1, true)
+            or tostring(p.route3_rise_node_up or ""):find("Ch257", 1, true)
+            or p.route3_rise_retire_at_window == true) then
+        p.flap_takeoff_clip = 5210; p.flap_seg_start = 127.0; p.flap_seg_end = 230.0
+        p.flap_glide_clip = 501; p.flap_glide_bank = 50
+        p.flap_clip_loops = false; p.flap_loop_seconds = 1.5
+        p.route3_flap_blend_frames = 20.0
+        p.takeoff_motion = 5210; p.landing_motion = 5030; p.landing_end_motion = 5032
+        p.route3_landing_descent_clip = 5031
+        p.route3_jump_clip_start = 422; p.route3_jump_clip_mid = 423
+        p.route3_jump_clip_fall = 416; p.route3_jump_clip_land = 401
+        p.route3_jump_native_bank = 0; p.route3_jump_native_clip = 440
+        p.route3_rise_node_up = "Fly.Flight.Ch253LoopTheLoopFlight"
+        p.route3_rise_node_down = "Fly.Flight.Ch253LoopTheLoopFlight"
+        p.route3_rise_ascend_clip = 702; p.route3_rise_ascend_start_clip = 700
+        p.route3_rise_descend_clip = 551; p.route3_rise_descend_start_clip = 550
+        p.route3_rise_clip_bank = 50
+        p.route3_ground_jump_windup = 0.5; p.route3_rise_secs = 1.75
+        p.route3_pawn_ride_back = 0.0; p.route3_rise_retire_at_window = false
+        p.route3_loopcam_dist = 14.0
+        p.route3_allow_sprint = true; p.route3_allow_flight = true; p.route3_mountable = true
+        p.root_motion_walk = 100; p.root_motion_run = 200; p.root_motion_idle = -1
+        p.idle_motion = 0
+        p.route3_seat_offset_x = 0.0; p.route3_seat_offset_y = 2.3; p.route3_seat_offset_z = 1.6
+        p.spawn_scale = 0.55
+        migrated = true
+    end
+    -- ⭐ SELF-HEAL part 2 (08-11, found by full disk diff): the v4/v6 BACKFILLS seeded new keys
+    -- from the live shared C "to preserve current tuning" -- but C held the DRAKE's tuning when
+    -- the griffin's profile first gained those keys, so three drake values leaked in under the
+    -- fingerprint radar. Heal them by exact leaked value (hand-tuning stays safe).
+    if key:find("ch253", 1, true) then
+        if tonumber(p.route3_ground_jump_windup) == 3.0 or tonumber(p.route3_ground_jump_windup) == 2.0 then
+            p.route3_ground_jump_windup = 0.5; migrated = true
+        end
+        if tonumber(p.route3_rise_secs) == 3.5 then p.route3_rise_secs = 1.75; migrated = true end
+        -- 0.9 = the ORIGINAL global tuning (recovered from the Wayfarer repo's 17:30 pre-chaos
+        -- snapshot); my first heal's 0.0 stacked the pawn ON TOP of the Arisen
+        if tonumber(p.route3_pawn_ride_back) == 3.0 or tonumber(p.route3_pawn_ride_back) == 0.0 then
+            p.route3_pawn_ride_back = 0.9; migrated = true
+        end
+    end
+    -- v8 2026-08-11 (camtrace verdict): the "native close-up" was TWO cameras both too close
+    -- to a very large body -- the native cling cam locks to ~5.6m during Fly.* (measured), and
+    -- OUR loopcam's griffin-tuned 14m is ALSO a close-up on a drake. Shot distance goes
+    -- per-species; the drake films wide.
+    if p.route3_loopcam_dist == nil then
+        p.route3_loopcam_dist = key:find("ch257", 1, true) and 28.0
+            or (tonumber(C.route3_loopcam_dist) or 14.0)
+        migrated = true
+    end
+    -- v9 2026-08-11: pawn 3m-aft seat reverted (knocking was NOT the pawn -- solo test proved
+    -- it -- and the aft seat looked odd). "Normal" = 0.9, the original pre-split global tuning
+    -- (Wayfarer repo 17:30 snapshot), NOT 0.0 -- zero stacks the pawn on the Arisen.
+    if key:find("ch257", 1, true)
+        and (tonumber(p.route3_pawn_ride_back) == 3.0 or tonumber(p.route3_pawn_ride_back) == 0.0) then
+        p.route3_pawn_ride_back = 0.9
         migrated = true
     end
     -- v5 2026-08-11: v4 shipped windup 3.0; Aurora field-timed it "about a second off" -> 2.0.
@@ -21527,6 +21623,8 @@ function route3_rise_tick()
             tonumber(S.route3_simple_dive_until) or 0.0)
         local hold_node = tostring(S.route3_node_lock_leaf or "")
         if C.route3_rise_hold_node ~= false and tostring(S.route3_node_lock_src or "") == "rise"
+            and C.route3_rise_retire_at_window == true   -- ⛔ per-species: griffin's LoopTheLoop
+            -- FSM flickers mid-loop and an ungated hold RE-FIRED it = double loops (08-11 field)
             and hold_node ~= "" and hold_until > now and S.airborne == true
             and (tonumber(S.route3_rise_hold_fires) or 0) < 12 then
             S.route3_rise_hold_fires = (tonumber(S.route3_rise_hold_fires) or 0) + 1
@@ -25359,7 +25457,9 @@ function griffin_loopcam_active()
     if C.route3_rise_retire_at_window == true then
         local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
             tonumber(S.route3_simple_dive_until) or 0.0)
-        if w > now then cap = math.max(cap, (w - S.route3_loopcam_t0) + 0.6) end
+        -- +1.6 covers the retire pump too, so the native cam only ever resumes in its FAR
+        -- mode (measured: ~5.6m while FSM in Fly.*, 8m+ once parked back in Wait)
+        if w > now then cap = math.max(cap, (w - S.route3_loopcam_t0) + 1.6) end
     end
     if now - S.route3_loopcam_t0 > cap then
         S.route3_loopcam_status = "released (shot over, lock still held)"
@@ -25487,11 +25587,25 @@ function griffin_camtrace_tick()
     end
     local fsm = "?"
     pcall(function() fsm = tostring(read_griffin_fsm_node() or "?") end)
+    -- camera-to-drake distance (render space, same space the camera lives in): a cling
+    -- close-up reads ~2-4m, a normal chase ~8-15m -- numbers instead of screenshots
+    local body_d = nil
+    pcall(function()
+        local dgo = select(2, reacquire_griffin())
+        local bp = dgo and transform_render_pos(dgo)
+        if bp and campos then
+            local dx = campos.x - (tonumber(bp.x) or 0.0)
+            local dy = campos.y - (tonumber(bp.y) or 0.0)
+            local dz = campos.z - (tonumber(bp.z) or 0.0)
+            body_d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        end
+    end)
     st.samples[#st.samples + 1] = {
         t = string.format("%.2f", now),
         wrote = fresh and string.format("%.1f %.1f %.1f", wr.x, wr.y, wr.z) or "(no loopcam write)",
         present = campos and string.format("%.1f %.1f %.1f", campos.x, campos.y, campos.z) or "?",
         stolen_m = stolen and string.format("%.2f", stolen) or "n/a",
+        cam_to_drake_m = body_d and string.format("%.1f", body_d) or "?",
         fsm = fsm,
         lock_held = S.route3_node_lock_at ~= nil,
         cam_ct = tostring(S.route3_loopcam_cam_ct),
@@ -29134,25 +29248,53 @@ end
 -- the SIZE gene as a body-scale multiplier for the LIVE companion; 1.0 when unknown.
 -- GLOBAL on purpose: the scale easer lives in IrisGriffin/stable.lua and other consumers
 -- sit far above IrisIV's declaration (an upvalue there would silently be a nil global).
-function iris_iv_size_mult()
+-- ⭐⭐ THE ONE GENETICS CALCULATOR (08-11): pure function, GLOBAL -- consumed by the
+-- companion easer AND by IrisWildBlood for naturally-spawned creatures, so wild and
+-- tamed sizes can never drift apart. Per-species ceilings/floors (Aurora's calibration
+-- pass, against the spawner at scale 2.0); `up` = extra at gene 30, `dn` = shrink at
+-- gene 1; symmetric -- small blood is a genuinely smaller creature. Bands beat the
+-- target-scale tiers (a companion griffin's ~0.5 base wrongly tier-classed as critter).
+function iris_size_mult_for(species, gene, target_scale)
+    local TUNE = {
+        ch299410 = { up = 1.00, dn = 0.47 },   -- crow    -> up to x2.0
+        ch299430 = { up = 1.00, dn = 0.47 },   -- bird
+        ch299400 = { up = 1.00, dn = 0.47 },   -- bat
+        ch299200 = { up = 0.70, dn = 0.45 },   -- rabbit  -> up to x1.7
+        ch299210 = { up = 0.70, dn = 0.45 },   -- rat
+        ch253000 = { up = 0.40, dn = 0.07 },   -- griffin (0.5 base -> 0.7 max)
+        ch257000 = { up = 0.40, dn = 0.07 },   -- drake
+        ch257001 = { up = 0.40, dn = 0.07 },
+        ch254000 = { up = 0.40, dn = 0.07 },   -- chimera
+        ch258000 = { up = 0.40, dn = 0.07 },   -- wyvern band
+    }
+    local t = tonumber(target_scale) or 1.0
+    gene = math.max(1, math.min(30, tonumber(gene) or 15))
+    local band = tostring(species or ""):match("ch%d+") or ""
+    local tune = TUNE[band]
+    local up, dn
+    if tune then
+        up, dn = tune.up, tune.dn
+    elseif t >= 1.5 then
+        up, dn = 0.125, 0.07    -- wyrm mounts: 1.85 line -> 1.72 .. ~2.08
+    elseif t < 0.9 then
+        up, dn = 0.50, 0.47     -- small unlisted things: full drama
+    else
+        up, dn = 0.30, 0.28     -- wild-size: noticeable both ways
+    end
+    if gene >= 15 then
+        return 1.0 + (gene - 15.0) / 15.0 * up
+    end
+    return 1.0 - (15.0 - gene) / 14.0 * dn
+end
+function iris_iv_size_mult(target_scale)
     local m = 1.0
     pcall(function()
         local rec = griffin_stable_live_rec()
         local iv = rec and rec.iv
         if not iv then return end
-        -- 08-11 round 2 (Aurora: a "towering" rabbit at +11% of a tiny base = invisible):
-        -- spread DOUBLED for everyone (0.70..1.30), and SMALL critters get a full-width
-        -- spread (0.50..1.50) -- size prominence scales inversely with the beast, so a
-        -- chonky rabbit reads as chonky and a giant is genuinely findable. Gene 15 = true.
-        local sp = tostring(rec.species or "")
-        local small = sp:find("ch299", 1, true) == 1
-            and not (sp:find("ch299003", 1, true) == 1    -- ox
-                or sp:find("ch299011", 1, true) == 1      -- horse/doe chassis
-                or sp:find("ch299010", 1, true) == 1)     -- stag
-        local spread = small and 1.0 or 0.6
         -- DEV PREVIEW (Aurora: "see max and min side by side"): _G override wins
         local gene = tonumber(rawget(_G, "IrisSizePreviewGene")) or tonumber(iv.size) or 15
-        m = 1.0 + (gene - 15.0) / 30.0 * spread
+        m = iris_size_mult_for(rec.species, gene, target_scale)
     end)
     return tonumber(m) or 1.0
 end
@@ -29369,8 +29511,13 @@ _G.IrisGriffinBridge = {
             return false, "no companion out - summon one first"
         end
         local nm = tostring(go_name(ggo) or "?")
-        local base = 1.0
-        pcall(function() base = iris_species_base_scale(nm) or 1.0 end)
+        -- ⛔ 08-11 (Aurora: "real size stayed much bigger" on the drake): the body's true
+        -- base is what REGISTER itself snaps -- the species PROFILE scale (C.spawn_scale,
+        -- ~0.5 for big rideables), NOT iris_species_base_scale (the small-species
+        -- normalizer, which answers 1.0 for a drake = double its companion size).
+        -- apply_body_scale's own gate normalizes small species internally, same as
+        -- register: pass the profile and let the shared rule decide.
+        local base = tonumber(C.spawn_scale) or 1.0
         pcall(function() griffin_apply_body_scale(base, true) end)
         pcall(function() log.info(string.format(
             "[GriffinScout] size preview: gene=%s body=%s base=%.2f mult=%.2f -> easer re-armed",
@@ -29580,6 +29727,14 @@ _G.IrisGriffinBridge = {
             or (species:find("ch223001", 1, true) and (species:match("_01$") and "Panther" or "Puma"))
             or (species:find("ch223", 1, true) and "Wolf") or (species:find("ch299003", 1, true) and "Ox")
             or (species:find("ch299", 1, true) and "Critter") or "Companion"
+        -- ⭐ WILD BLOOD CARRY (08-11): if IrisWildBlood already rolled this body's genes
+        -- in the wild, the tame KEEPS them -- the big one you scouted stays the big one
+        local wild_iv = nil
+        pcall(function()
+            local wb = rawget(_G, "IrisWildBlood")
+            local ga = char_go(ch) and char_go(ch):get_address()
+            if wb and wb.take and ga then wild_iv = wb.take(ga) end
+        end)
         -- TAME BLESSING: read the PREVIOUS active companion's luck BEFORE this record
         -- becomes active (st.active still points at the old soul here)
         local bless9 = nil
