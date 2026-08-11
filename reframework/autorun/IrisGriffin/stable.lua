@@ -649,7 +649,9 @@ function companion_nameplate_tick()
             pcall(function() a = gch:get_address() end)
             if a and t.has_pet(a) then return end   -- a critter: IrisTaming's plate owns it
         end
-        local comp2 = griffin_stable_active()
+        -- 08-11: the plate hangs over the BODY -- read the record the body belongs to,
+        -- never the panel selection (griffin_stable_live_rec, species-verified)
+        local comp2 = (griffin_stable_live_rec and griffin_stable_live_rec()) or griffin_stable_active()
         local nm = (comp2 and comp2.name) or C.route3_griffin_name or "Companion"
         local spec = tostring((comp2 and comp2.species) or "")
         if tostring(nm):find("^ch%d") then nm = iris_type_name(spec) end   -- a body is not a name

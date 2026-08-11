@@ -8691,6 +8691,16 @@ local function register_griffin(ch)
     S.griffin_name = char_name(ch)
     S.relation_hits = 0
     S.friend_hits = 0
+    -- ⭐ 08-11 LIVE-RECORD IDENTITY (Aurora: selecting Shadow in the stable re-statted +
+    -- re-scaled the summoned Tails): st.active is the PANEL SELECTION and moves on every
+    -- click; the body keeps belonging to the record it was summoned/tamed from. Stamp that
+    -- identity here -- register_griffin is the one gate every route (summon, tame, reclaim)
+    -- passes through while its own record is still the active one. Body-facing systems
+    -- read griffin_stable_live_rec(), never the selection.
+    pcall(function()
+        local ar = griffin_stable_active()
+        S.live_rec_id = ar and ar.id or nil
+    end)
     pcall(function()
         if griffin_stable_prepare_summon then griffin_stable_prepare_summon(ch) end
     end)
@@ -8942,17 +8952,91 @@ reacquire_griffin = function()
         return S.griffin, S.griffin_go
     end
     if S.spawner and S.spawner.instances then
+        -- ⛔ 08-11 (Aurora: "Tails is still getting big when I select Shadow"): this loop
+        -- used to re-register ANY live spawner instance, species-blind. A stable-list
+        -- click forgets the body (S.griffin = nil) and activates the clicked record --
+        -- the very next reacquire then re-adopted the still-standing OLD body under the
+        -- NEW record: Tails the drake became "Shadow", took her species-profile scale,
+        -- her IVs, her name. Adopt ONLY a body matching the ACTIVE record's species;
+        -- a mismatched body stays parked until the whistle summons the real one.
+        local want = nil
+        pcall(function()
+            local ar = griffin_stable_active()
+            want = ar and tostring(ar.species or ""):match("ch%d+") or nil
+        end)
         for i = #S.spawner.instances, 1, -1 do
             local inst = S.spawner.instances[i]
             local ch = nil
             pcall(function() ch = inst.instance and inst.instance:get_Chara() end)
             if ch and not is_dead(ch) then
-                register_griffin(ch)
-                return S.griffin, S.griffin_go
+                local ok_species = true
+                if want then
+                    local nm = ""
+                    pcall(function() nm = tostring(go_name(char_go(ch)) or "") end)
+                    ok_species = nm:find(want, 1, true) == 1
+                end
+                if ok_species then
+                    register_griffin(ch)
+                    return S.griffin, S.griffin_go
+                end
             end
         end
     end
     return nil, nil
+end
+
+-- the record the LIVE body belongs to -- NOT the panel selection.
+-- ⛔ 08-11 ROUND 2 (Aurora: "tails is still getting big when I select shadow" -- the drake
+-- was summoned BEFORE the stamp existed, so the old fallback-to-selection reproduced the
+-- whole bug): the live BODY's species band is GROUND TRUTH, and no answer leaves this
+-- function without matching it. A stamped or selected record of the wrong species is
+-- DISTRUSTED; when nothing verifiable matches, return nil -- body-facing systems doing
+-- NOTHING is always safer than applying another soul's genes/scale to this body.
+function griffin_stable_live_rec()
+    local st = S.route3_stable
+    if not (st and st.companions) then return nil end
+    local band = nil
+    pcall(function()
+        local _, ago = reacquire_griffin()
+        local nm = ago and tostring(go_name(ago) or "") or ""
+        band = nm:match("ch%d+")
+    end)
+    local function band_ok(r)
+        if not band then return true end   -- no live body readable: trust the pointer
+        return tostring(r and r.species or ""):find(band, 1, true) == 1
+    end
+    -- 1. the stamp (set at register/tame) -- but only if it fits the body
+    if S.live_rec_id then
+        for _, r in ipairs(st.companions) do
+            if r.id == S.live_rec_id then
+                if band_ok(r) then return r end
+                break   -- stamped record is the wrong species for this body: distrust it
+            end
+        end
+    end
+    -- 2. the selection, if (and only if) it fits the body
+    local ar = griffin_stable_active()
+    if ar and band_ok(ar) then
+        -- heal the stamp so the next read is direct
+        if band then S.live_rec_id = ar.id end
+        return ar
+    end
+    -- 3. a UNIQUE species match anywhere in the stable (one drake record + a drake body
+    --    out = unambiguous, whatever the panel has selected)
+    if band then
+        local hit = nil
+        for _, r in ipairs(st.companions) do
+            if band_ok(r) then
+                if hit then return nil end   -- two same-species records: ambiguous, do nothing
+                hit = r
+            end
+        end
+        if hit then
+            S.live_rec_id = hit.id   -- heal the stamp
+            return hit
+        end
+    end
+    return nil
 end
 
 local function clear_griffin()
@@ -8962,6 +9046,7 @@ local function clear_griffin()
     if S.griffin then mounts[S.griffin] = nil end
     S.griffin = nil
     S.griffin_go = nil
+    S.live_rec_id = nil
     S.griffin_name = "(none)"
     S.pending_spawn = false
     S.mounted = false
@@ -9166,6 +9251,7 @@ griffin_profile_keys = {
     "flap_glide_bank", "route3_rise_node_up", "route3_rise_node_down",
     "route3_rise_ascend_clip", "route3_rise_ascend_start_clip",
     "route3_rise_descend_clip", "route3_rise_descend_start_clip", "route3_rise_clip_bank",
+    "route3_ground_jump_windup", "route3_rise_secs",
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
@@ -9258,6 +9344,25 @@ function griffin_species_profile_apply(key)
         p.route3_jump_clip_fall = -1
         p.route3_rise_ascend_clip = -1        -- ascend clip was invisible (same clip as cruise
                                               -- flap); movement-only until Aurora picks a NODE
+        migrated = true
+    end
+    -- v4 2026-08-11 (field round 4, Aurora's timing notes): jump wind-up + rise duration go
+    -- per-species. Drake: her takeoff clip preps ~3s before the leap, so the arc waits for it;
+    -- rise nodes retire with the burst window, so a longer burst = the node animation actually
+    -- plays out. Landing descent 400 was the FULL landing clip = a mid-air impact -- descend on
+    -- wing-beats (5210) instead; 401 stays the single touchdown.
+    if p.route3_ground_jump_windup == nil then
+        if key:find("ch257", 1, true) then
+            p.route3_ground_jump_windup = 3.0
+            p.route3_rise_secs = 3.5
+            p.route3_landing_descent_clip = 5210
+            -- Aurora's field picks (round 4): travel nodes with the good flight animation
+            p.route3_rise_node_up = "Fly.Flight.FlightPathTraceTarget"
+            p.route3_rise_node_down = "Fly.Flight.FlightTarget"
+        else
+            p.route3_ground_jump_windup = tonumber(C.route3_ground_jump_windup) or 0.5
+            p.route3_rise_secs = tonumber(C.route3_rise_secs) or 1.75
+        end
         migrated = true
     end
     -- v2 2026-08-11 (field round 2): the rise CLIP set goes per-species (griffin's are
@@ -23438,7 +23543,7 @@ function griffin_smart_mount()
     -- enough and the same grip press just works.
     local too_small = false
     pcall(function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         local h = rec and rec.hatch
         if not h then return end
         local baby = tonumber(h.baby_scale) or 0.12
@@ -23483,7 +23588,7 @@ function griffin_smart_mount()
             -- grown wolf on the roster, every other ch223 (the panther) inherited its mount
             -- permission. A ch223 may mount ONLY when it IS the active companion's own body
             -- AND that record is grown. Anything else ch223-shaped is pet tier, full stop.
-            local rec = griffin_stable_active()
+            local rec = griffin_stable_live_rec()
             local is_active_body = false
             pcall(function()
                 local _, ago = reacquire_griffin()
@@ -23853,7 +23958,7 @@ function griffin_rt_mount_tick()
         pcall(function()
             -- 08-11: same body-identity rule as the pet-tier gate -- growth only licenses
             -- the ACTIVE companion's own body, never every ch223 in reach.
-            local rec = griffin_stable_active()
+            local rec = griffin_stable_live_rec()
             local _, ago = reacquire_griffin()
             local same = (ago ~= nil) and (ggo ~= nil) and ago:get_address() == ggo:get_address()
             grown = same and rec and rec.wyrm and (tonumber(rec.wyrm.to) or 1.0) >= ((tonumber(C.wyrm_mount_scale) or 1.85) - 0.05)
@@ -28768,7 +28873,7 @@ unwrap_nullable_u32_legacy = function(v)
 end
 
 -- ⭐⭐ IV SYSTEM v1 (2026-08-11, Aurora: pokemon-style genes per tame, breeding later).
--- Six IVs, 0-31 each, rolled ONCE per stable record and persisted in rec.iv:
+-- Six IVs, 1-30 each (no zero genes -- Aurora 08-11), rolled ONCE per stable record (rec.iv):
 --   hp   = hardiness  -> up to -15% damage taken (max-HP writes are unreliable per species
 --                        -- the multi-getter law -- so v1 hp is damage soak, honest and safe)
 --   atk  = ferocity   -> up to +50% damage dealt
@@ -28787,13 +28892,13 @@ local IrisIV = {}
 IrisIV.roll = function(bless_luck)
     local iv = {}
     for _, k in ipairs({ "hp", "atk", "def", "spd", "size", "luck" }) do
-        local r = math.random(0, 31)
+        local r = math.random(1, 30)
         -- TAME BLESSING (Aurora 08-11): a lucky companion at your side blesses a NEW bond --
         -- luck/62 chance per stat to reroll and keep the better. The first tame ever has no
         -- blesser and rolls plain; breed toward luck and later tames come in higher.
         if tonumber(bless_luck) and tonumber(bless_luck) > 0
-            and math.random() < (tonumber(bless_luck) / 62.0) then
-            local r2 = math.random(0, 31)
+            and math.random() < (tonumber(bless_luck) / 60.0) then
+            local r2 = math.random(1, 30)
             if r2 > r then r = r2 end
         end
         iv[k] = r
@@ -28804,11 +28909,11 @@ IrisIV.mults = function(rec)
     local iv = rec and rec.iv
     if not iv then return nil end
     return {
-        atk  = 1.0 + (tonumber(iv.atk) or 0) / 31.0 * 0.5,
-        def  = 1.0 - (tonumber(iv.def) or 0) / 31.0 * 0.25,
-        hp   = 1.0 - (tonumber(iv.hp)  or 0) / 31.0 * 0.15,
-        spd  = 1.0 + (tonumber(iv.spd) or 0) / 31.0 * 0.10,
-        size = 0.98 + (tonumber(iv.size) or 0) / 31.0 * 0.06,
+        atk  = 1.0 + (tonumber(iv.atk) or 0) / 30.0 * 0.5,
+        def  = 1.0 - (tonumber(iv.def) or 0) / 30.0 * 0.25,
+        hp   = 1.0 - (tonumber(iv.hp)  or 0) / 30.0 * 0.15,
+        spd  = 1.0 + (tonumber(iv.spd) or 0) / 30.0 * 0.10,
+        size = 0.98 + (tonumber(iv.size) or 0) / 30.0 * 0.06,
         luck = tonumber(iv.luck) or 0,
     }
 end
@@ -28863,7 +28968,7 @@ re.on_frame(function()
     if now < (IrisIV.pub_at or 0.0) then return end
     IrisIV.pub_at = now + 0.5
     local ok = pcall(function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         local m = IrisIV.mults(rec)
         local ch, ago = reacquire_griffin()
         local addr = nil
@@ -28929,13 +29034,13 @@ _G.IrisGriffinBridge = {
     -- 08-08 (IrisTaming pet-carry gate): is the ACTIVE companion wyrm-grown
     -- to the mount line? true = ride it (don't carry); false/nil = pet tier.
     active_wyrm_grown = function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         return rec and rec.wyrm and (tonumber(rec.wyrm.to) or 1.0) >= ((tonumber(C.wyrm_mount_scale) or 1.85) - 0.05)
     end,
     -- 08-08 (Aurora: testing reset button): clear the active companion's
     -- wyrm growth -- record field + live body scale back to base + save.
     clear_active_wyrm = function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         if not rec then return false end
         rec.wyrm = nil
         pcall(function()
@@ -29000,7 +29105,7 @@ _G.IrisGriffinBridge = {
         -- becomes active (st.active still points at the old soul here)
         local bless9 = nil
         pcall(function()
-            local ar9 = griffin_stable_active()
+            local ar9 = griffin_stable_live_rec()
             bless9 = ar9 and ar9.iv and tonumber(ar9.iv.luck) or nil
         end)
         local rec = { id = "c" .. tostring(os.time()) .. "_" .. tostring(#st.companions + 1), name = nm, species = species,
@@ -29009,6 +29114,7 @@ _G.IrisGriffinBridge = {
             iv = IrisIV.roll(bless9),
             gender = (gender == "female" or gender == "male") and gender or ((math.random() < 0.5) and "female" or "male") }
         st.companions[#st.companions + 1] = rec; st.active = rec.id
+        S.live_rec_id = rec.id   -- the tamed body IS this record, whatever was stamped at register
         C.route3_griffin_name = nm
         pcall(function() griffin_tamed_save() end)
         if C.route3_mountable ~= true then S.companion_order = "follow" end
@@ -29066,7 +29172,7 @@ _G.IrisGriffinBridge = {
     -- growth tick (IrisTaming calls this every few seconds): ease the active hatchling's scale
     -- along its in-game-day growth curve; at full size the hatch record retires for good
     growth_refresh = function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         if not rec then return end
         if rec.hatch then
             local h9 = rec.hatch
@@ -29117,7 +29223,7 @@ _G.IrisGriffinBridge = {
         -- 08-08 (Aurora: "feed the crystal, sleep till morning, wake to a mount" @ 3 crystals):
         -- to_mount = the whole 3-crystal rite -- target jumps straight to the mount line and the
         -- growth window is short (0.3 in-game day ~= 7h) so ONE sleep-till-morning completes it.
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         if not rec then return 0 end
         if rec.hatch then return -1 end   -- a hatchling grows on its OWN clock first
         rec.wyrm = rec.wyrm or { fed = 0 }
@@ -29153,18 +29259,29 @@ _G.IrisGriffinBridge = {
             if type(r.iv) ~= "table" then
                 r.iv = IrisIV.roll(nil)
                 filled = filled + 1
+            else
+                -- 08-11 bounds migration: genes are 1-30 now (no zeros). Old 0-31 rolls
+                -- clamp in place: a 0 becomes a 1, a 31 becomes a 30. Missing keys roll.
+                local touched = false
+                for _, k in ipairs({ "hp", "atk", "def", "spd", "size", "luck" }) do
+                    local v = tonumber(r.iv[k])
+                    if not v then r.iv[k] = math.random(1, 30); touched = true
+                    elseif v < 1 then r.iv[k] = 1; touched = true
+                    elseif v > 30 then r.iv[k] = 30; touched = true end
+                end
+                if touched then filled = filled + 1 end
             end
         end
         if filled > 0 then pcall(function() griffin_stable_write() end) end
         return filled
     end,
-    -- the ACTIVE companion's luck (0-31) -- IrisFarming's produce doubling reads this
+    -- the LIVE companion's luck (1-30) -- IrisFarming's produce doubling reads this
     active_luck = function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         return rec and rec.iv and tonumber(rec.iv.luck) or 0
     end,
     active_ivs = function()
-        local rec = griffin_stable_active()
+        local rec = griffin_stable_live_rec()
         return rec and rec.iv or nil
     end,
     companion_genders = function()
@@ -29192,16 +29309,14 @@ _G.IrisGriffinBridge = {
         return nil
     end,
     companion_info = function()
-        -- the ACTIVE companion's record essentials (the taming side's floating nameplate)
-        local st = S.route3_stable
-        if not (st and st.active and st.companions) then return nil end
-        for _, r in ipairs(st.companions) do
-            -- ⭐ 08-10: `variant` added. IrisWildHorses' stable restore reads it to force
-            -- the RIGHT sub-variant on re-summon; without it in this projection a tamed
-            -- unicorn is invisible to that side and comes back an ordinary horse.
-            if r.id == st.active then return { name = r.name, gender = r.gender, species = r.species, kind = r.kind, variant = r.variant } end
-        end
-        return nil
+        -- the LIVE companion's record essentials (the taming side's floating nameplate
+        -- hangs over the BODY, so it must never follow the panel selection -- 08-11)
+        -- ⭐ 08-10: `variant` included. IrisWildHorses' stable restore reads it to force
+        -- the RIGHT sub-variant on re-summon; without it in this projection a tamed
+        -- unicorn is invisible to that side and comes back an ordinary horse.
+        local r = griffin_stable_live_rec()
+        if not r then return nil end
+        return { name = r.name, gender = r.gender, species = r.species, kind = r.kind, variant = r.variant }
     end,
     -- the taming rite lets the player NAME the new companion; these carry that name into the
     -- stable record + the panel (without them the given name was silently dropped)
@@ -32673,7 +32788,7 @@ function iris_companion_hp_tick()
     if not (hp and hpmax and hpmax > 0) then return end
     local nm = "Companion"
     pcall(function()
-        local r = griffin_stable_active()
+        local r = griffin_stable_live_rec()
         if type(r) == "table" and r.name then nm = tostring(r.name) end
     end)
     -- Persistent, tiny damage receipt. The framework log is commonly empty
@@ -33422,7 +33537,8 @@ re.on_draw_ui(function()
             local rec9 = griffin_stable_active()
             local iv9 = rec9 and rec9.iv
             if iv9 then
-                imgui.text(string.format("IVs:  HP %d | ATK %d | DEF %d | SPD %d | SIZE %d | LUCK %d",
+                imgui.text(string.format("IVs of %s (selected):  HP %d | ATK %d | DEF %d | SPD %d | SIZE %d | LUCK %d",
+                    tostring(rec9.name or "?"),
                     tonumber(iv9.hp) or 0, tonumber(iv9.atk) or 0, tonumber(iv9.def) or 0,
                     tonumber(iv9.spd) or 0, tonumber(iv9.size) or 0, tonumber(iv9.luck) or 0))
             end

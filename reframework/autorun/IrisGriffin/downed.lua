@@ -1452,6 +1452,13 @@ function griffin_downed_tick()
         if next(griffin_downed_state()) ~= nil then griffin_downed_release_all("feature disabled") end
         return
     end
+    -- ⛔ 08-11 (Aurora: CTD while PAUSED mid-revive): pause-frame body work is the
+    -- pause-spawn crash class -- writes land on a world whose systems are stopped and
+    -- the next frame that touches the half-updated body is a native crash pcall cannot
+    -- catch. The whole downed machine (revive writes, clips, AI wake-ups, releases)
+    -- stands down on paused frames and resumes exactly where it was. os.clock deadlines
+    -- that lapse during the pause simply fire on the first LIVE frame after it.
+    if griffin_world_paused and griffin_world_paused() then return end
     -- r73 post-revive watchdog: stamp the disk trail every 0.25s for 4s so a
     -- CTD after the unwind still records how far past the revive it got.
     if type(S.rev_watch) == "table" then
@@ -1596,15 +1603,31 @@ function griffin_downed_tick()
     for addr, ch in pairs(S.downed_prot or {}) do
         if not griffin_downed_state()[addr] then
             local hp_now = nil
+            local hc9 = nil
             pcall(function()
-                local hc = griffin_downed_hit_controller(ch, addr)
-                hp_now = hc and tonumber(hc:call("get_Hp")) or nil
+                hc9 = griffin_downed_hit_controller(ch, addr)
+                hp_now = hc9 and tonumber(hc9:call("get_Hp")) or nil
             end)
             if hp_now and hp_now > floor_now + 0.001 then
                 S.last_safe_hp[addr] = hp_now
             elseif hp_now and hp_now <= floor_now + 0.001 then
-                S.downed_pending_enter = S.downed_pending_enter or {}
-                S.downed_pending_enter[addr] = true
+                -- ⛔ 08-11 (Aurora: 1/1-hp Ratina lived permanently "DOWN"): a creature
+                -- whose whole life fits under the floor can never go down -- the floor IS
+                -- its full health. Down only on a witnessed fall from above the floor,
+                -- and never when max HP itself sits at/under the floor. (A NATIVE death
+                -- still downs it via the death guard -- real kills are unaffected.)
+                local seen_above = (tonumber(S.last_safe_hp[addr]) or 0.0) > floor_now + 0.001
+                local tiny_max = false
+                pcall(function()
+                    if griffin_hp_max_from_component then
+                        local mx = tonumber(griffin_hp_max_from_component(hc9))
+                        tiny_max = (mx ~= nil) and (mx <= floor_now + 1.0)
+                    end
+                end)
+                if seen_above and not tiny_max then
+                    S.downed_pending_enter = S.downed_pending_enter or {}
+                    S.downed_pending_enter[addr] = true
+                end
             end
         end
     end

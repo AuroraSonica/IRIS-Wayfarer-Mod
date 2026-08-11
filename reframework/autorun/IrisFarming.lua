@@ -2897,7 +2897,7 @@ local function _try_animal_produce()
                 pcall(function()
                     local b = rawget(_G, "IrisGriffinBridge")
                     local lk = b and b.active_luck and tonumber(b.active_luck()) or 0
-                    if lk > 0 and math.random() < (lk / 62.0) then n9 = 2 end
+                    if lk > 0 and math.random() < (lk / 60.0) then n9 = 2 end
                 end)
                 _chore_start({ { M.milk_bank or 60, M.milk_clip or 6050, M.milk_f or 240 } }, "milking", function()
                     _ani_hold(a.go, false)
@@ -2910,7 +2910,7 @@ local function _try_animal_produce()
                 pcall(function()
                     local b = rawget(_G, "IrisGriffinBridge")
                     local lk = b and b.active_luck and tonumber(b.active_luck()) or 0
-                    if lk > 0 and math.random() < (lk / 62.0) then n9 = 2 end
+                    if lk > 0 and math.random() < (lk / 60.0) then n9 = 2 end
                 end)
                 _chore_start({ { 60, 6020, 35 }, { 60, 6022, 140 }, { 60, 6023, 90 } }, "egg pickup", function()
                     _ani_hold(a.go, false)
