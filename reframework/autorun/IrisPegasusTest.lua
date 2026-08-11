@@ -83,52 +83,115 @@ local function warm()
 end
 
 -- ------------------------------------------------------------------ griffins
+-- Enumeration copied from the field-proven sweep in `GriffinRideProbe - Iris.lua`
+-- (~:9323). My first attempt guessed at `get_EnemyContexts` and found nothing while
+-- the taming panel was happily listing ch253000_00 two lines above it.
+-- ⚠ TAMED bodies leave the enemy list (the ally switch removes them), so the scene
+-- component sweep is not optional - it is the only one that sees a tamed griffin.
+local function char_go(ch)
+    if not ch then return nil end
+    local go = nil
+    pcall(function() go = ch:call("get_GameObject") end)
+    return go or ch
+end
+
 local function griffins()
-    local out = {}
-    local mgr = sdk.get_managed_singleton("app.CharacterManager")
-    if not mgr then return out end
-    local ok = pcall(function()
-        local list = mgr:call("get_EnemyContexts") or mgr:call("getEnemyList")
-        if not list then return end
-        local n = list:call("get_Count")
-        for i = 0, (n or 0) - 1 do
-            local e = list:call("get_Item", i)
-            local go = e and (e:call("get_GameObject") or e)
-            if go then
-                local nm = go:call("get_Name")
-                if nm and tostring(nm):find("ch253") then out[#out+1] = go end
-            end
-        end
-    end)
-    if not ok or #out == 0 then
-        -- fallback: sweep the scene for a GameObject named ch253*
+    local out, seenmap, names = {}, {}, {}
+    local function consider(ch)
+        local go = char_go(ch)
+        if not go then return end
+        local nm = nil
+        pcall(function() nm = go:call("get_Name") end)
+        nm = tostring(nm or "")
+        if #names < 10 then names[#names+1] = nm end
+        if not nm:find("ch253", 1, true) then return end
+        local addr = nil
+        pcall(function() addr = go:get_address() end)
+        local key = tostring(addr or nm)
+        if seenmap[key] then return end
+        seenmap[key] = true
+        out[#out+1] = go
+    end
+    local function sweep(mgr_name, getters)
         pcall(function()
-            local scn = sdk.call_native_func(
-                sdk.get_native_singleton("via.SceneManager"),
-                sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
-            if not scn then return end
-            local all = scn:call("findGameObjects(System.String)", "ch253")
-            if not all then return end
-            local n = all:call("get_Count") or 0
-            for i = 0, n - 1 do out[#out+1] = all:call("get_Item", i) end
+            local mgr = sdk.get_managed_singleton(mgr_name)
+            if not mgr then return end
+            for _, g in ipairs(getters) do
+                local list = nil
+                pcall(function() list = mgr:call(g) end)
+                local n = 0
+                pcall(function() n = list and list:call("get_Count") or 0 end)
+                if (tonumber(n) or 0) > 0 then
+                    for i = 0, n - 1 do
+                        pcall(function() consider(list:call("get_Item", i)) end)
+                    end
+                    return
+                end
+            end
         end)
     end
+    sweep("app.CharacterManager",
+        { "get_CharacterList", "getCharacterList", "get_AllCharacterList", "get_CharacterAll" })
+    if #out == 0 then
+        sweep("app.EnemyManager",
+            { "get_EnemyList", "getAllEnemies", "get_ActiveEnemyList", "get_EnemyCharacterList" })
+    end
+    if #out == 0 then
+        pcall(function()
+            local sm  = sdk.get_native_singleton("via.SceneManager")
+            local smt = sdk.find_type_definition("via.SceneManager")
+            local scene = sdk.call_native_func(sm, smt, "get_CurrentScene")
+            if not scene then return end
+            local comps = scene:call("findComponents(System.Type)", sdk.typeof("app.Character"))
+            if not comps then return end
+            local arr = comps
+            pcall(function() arr = comps:get_elements() end)
+            for _, comp in ipairs(arr or {}) do pcall(function() consider(comp) end) end
+        end)
+    end
+    R.scan = table.concat(names, " | ")
     return out
 end
 
-local function find_mesh(go)
+-- the body normally carries ONE via.render.Mesh holding every material (proven on the
+-- wolf and the doe), but walk the whole subtree rather than one level in case the
+-- griffin nests it
+local function find_mesh(go, depth)
+    depth = depth or 0
+    if not go or depth > 6 then return nil end
     local m = get_component(go, "via.render.Mesh")
     if m then return m end
-    local t = go:call("get_Transform")
+    local t = nil
+    pcall(function() t = go:call("get_Transform") end)
     if not t then return nil end
-    local child = t:call("get_Child")
+    local child = nil
+    pcall(function() child = t:call("get_Child") end)
     while child do
-        local cgo = child:call("get_GameObject")
-        local cm = cgo and get_component(cgo, "via.render.Mesh")
+        local cgo = nil
+        pcall(function() cgo = child:call("get_GameObject") end)
+        local cm = cgo and find_mesh(cgo, depth + 1)
         if cm then return cm end
-        child = child:call("get_Next")
+        local nxt = nil
+        pcall(function() nxt = child:call("get_Next") end)
+        child = nxt
     end
     return nil
+end
+
+-- read back what the live renderer actually has, so a bad swap is diagnosable
+-- instead of a guess (this is the step that would have saved days on Akamaru)
+local function probe(go)
+    local mesh = find_mesh(go)
+    if not mesh then return "no via.render.Mesh found" end
+    local n = 0
+    pcall(function() n = mesh:call("get_MaterialNum") or 0 end)   -- NOT getMaterialCount
+    local names = {}
+    for i = 0, math.min(n, 30) - 1 do
+        local nm = nil
+        pcall(function() nm = mesh:call("getMaterialName", i) end)
+        names[#names+1] = tostring(nm or "?")
+    end
+    return string.format("materials=%d: %s", n, table.concat(names, ", "))
 end
 
 local function swap(go)
@@ -217,6 +280,14 @@ re.on_draw_ui(function()
     end
     if imgui.button("Count griffins") then
         R.last = "griffins found: " .. #griffins(); log(R.last)
+    end
+    if imgui.button("Probe first griffin (materials)") then
+        local g = griffins()
+        R.last = (#g == 0) and "no griffin found" or probe(g[1])
+        log(R.last)
+    end
+    if R.scan and R.scan ~= "" then
+        imgui.text_colored("scanned: " .. R.scan, 0xFF9999FF)
     end
     imgui.tree_pop()
 end)

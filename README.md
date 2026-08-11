@@ -26,7 +26,8 @@ Built by **AuroraSonica**, co-architected with Iris (Claude).
 
 | Path | What it is |
 |---|---|
-| `reframework/autorun/` | The mod code — every IRIS-family Lua, at install paths |
+| `reframework/autorun/` | The mod code — the distributable Luas, at install paths |
+| `dev/autorun/` | R&D instrumentation (perf probe, flight recorder, tapes) — NOT part of an install |
 | `reframework/data/IRIS/` | Runtime-required data (house blueprints) |
 | `packages/` | Latest Fluffy Mod Manager release zips (asset paks travel inside) |
 | `tools/iris_pak/` | Pak build/packaging scripts (REtool-based; see comments) |

@@ -29563,7 +29563,7 @@ _G.IrisGriffinBridge = {
         -- The FC-off corridor reliably crosses the distant world, but the engine rejects its
         -- transform writes once a wild Griffin becomes fully simulated near the player. Do not
         -- keep climbing a body we no longer own. This is a real relay: dismantle every part of the
-        -- puppet drive first, restore flight/AI authority, establish the PLAYER as live prey, then
+        -- puppet drive first, restore flight/AI authority, establish the supplied live prey, then
         -- enter the Griffin's verified PreSwoop entry node. The bounded hold prevents her restored
         -- decision maker from replacing the dive on its very next think.
         local D = S.oxtame_fly

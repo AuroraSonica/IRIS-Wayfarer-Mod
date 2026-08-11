@@ -15,11 +15,24 @@ function Copy-Into($src, $destDir) {
 }
 
 # ── 1. THE MOD CODE (every IRIS-family Lua, mirrored at install paths) ──────────
+# reframework\ = the DISTRIBUTABLE install set; dev\ = R&D instrumentation that is
+# versioned here but NOT part of a public install (Aurora's call, 2026-08-11).
 $auto = Join-Path $repo "reframework\autorun"
-Copy-Into "$live\autorun\*Iris*.lua"            $auto      # IrisTaming, IrisFarming, !IrisPerfProbe, 000IrisInputGate...
+$devAuto = Join-Path $repo "dev\autorun"
+$devTools = @("!IrisPerfProbe.lua", "IrisFlightRecorder.lua", "IrisSurgeTape.lua",
+              "ReyDauGriffinPort.lua", "IrisPawnObserve.lua")
+Copy-Into "$live\autorun\*Iris*.lua"            $auto      # IrisTaming, IrisFarming, 000IrisInputGate...
 Copy-Into "$live\autorun\Griffin*.lua"          $auto      # GriffinRideProbe - Iris, GriffinScreechThrottle
 Copy-Into "$live\autorun\ReyDauGriffinPort.lua" $auto
 Copy-Into "$live\autorun\IrisGriffin\*.lua"     (Join-Path $auto "IrisGriffin")
+# re-home the dev-only tools out of the install set
+foreach ($t in $devTools) {
+    $src = Join-Path $auto $t
+    if (Test-Path -LiteralPath $src) {
+        if (-not (Test-Path $devAuto)) { New-Item -ItemType Directory -Force $devAuto | Out-Null }
+        Move-Item -LiteralPath $src -Destination (Join-Path $devAuto $t) -Force
+    }
+}
 
 # ── 2. RUNTIME-REQUIRED DATA (shipped blueprints the code loads at runtime) ─────
 $dat = Join-Path $repo "reframework\data\IRIS"

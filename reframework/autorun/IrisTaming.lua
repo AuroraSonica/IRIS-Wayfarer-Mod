@@ -1684,7 +1684,9 @@ local function oxtame_acquire_decoy(st)
             local inst = sp.instances[i]
             born = inst and inst.instance and inst.instance:get_Chara()
         end)
-        if born and char_go(born) then
+        local born_dead = false
+        if born then pcall(function() born_dead = is_dead(born) == true end) end
+        if born and not born_dead and char_go(born) then
             st.decoy_ch = born
             S.oxtame_decoy_ch = born
             local go = char_go(born)
@@ -1710,6 +1712,7 @@ end
 
 local function oxtame_decoy_seat(st, griffin, griffin_go)
     if st and st.decoy_retired then return false end
+    if st and os.clock() < (tonumber(st.decoy_reseat_at) or 0.0) then return false end
     local tgt = oxtame_decoy_target(st)
     if not (tgt and griffin and griffin_go) then return false end
     local ok = false
@@ -7091,7 +7094,6 @@ re.on_application_entry("UpdateBehavior", function()
         -- her roost goal). The lure itself is harmless either way; it only sets a target field.
         if st0.stage == "bait" and not st0.lured and dc0 > 30.0
             and (C.oxtame_live_bait == false or oxtame_decoy_target(st0) ~= nil) then
-            st0.lured = true
             local lok0 = false
             pcall(function()
                 local c253 = comp(wgo0, "app.Ch253000")
@@ -7111,6 +7113,7 @@ re.on_application_entry("UpdateBehavior", function()
             end)
             pcall(function() log.info("[OxTame] LURE: PredationTarget -> live bait beneath the offering (ok=" .. tostring(lok0) .. ")") end)
             if lok0 then
+                st0.lured = true
                 st0.lure_t = nowO
                 -- ⭐⭐⭐ SEND HER THE DESTINATION *WITH* THE LURE (07-26, Aurora: "I downed an ox, the
                 -- griffin flew overhead but completely ignored me -- I think it had the rest node on
@@ -7597,6 +7600,7 @@ re.on_application_entry("UpdateBehavior", function()
         if post_now0 == "catch" and st0.stage == "bait" and not st0.descend then
             if nowO >= (tonumber(st0.catch_cut_at) or 0.0) then
                 st0.catch_cut_at = nowO + 1.5
+                st0.decoy_reseat_at = os.clock() + 2.0 -- allow the native catch controller to release fully
                 pcall(function() local cc0 = comp(wgo0, "app.Ch253000"); if cc0 then cc0:call("set_PredationTarget", nil) end end)
                 pcall(function()
                     local bb0 = comp(wgo0, "app.AIBlackBoardController")
