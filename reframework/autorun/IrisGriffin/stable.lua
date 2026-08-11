@@ -464,14 +464,20 @@ function griffin_tamed_tick()
         end
         if sgo then
             pcall(function()
+                -- ⭐ 08-11 SIZE GENE: stored targets stay BASE; the IV multiplies only here,
+                -- at application (0.86 small .. 1.15 large, gene 15 = species-true)
+                local want = scale_target
+                pcall(function()
+                    if iris_iv_size_mult then want = scale_target * (tonumber(iris_iv_size_mult()) or 1.0) end
+                end)
                 local tf = sgo:call("get_Transform")
                 local cur = tf:call("get_LocalScale")
-                local cx = tonumber(cur and cur.x) or scale_target
+                local cx = tonumber(cur and cur.x) or want
                 local snap_due = (tonumber(S.route3_scale_snap_at) or 0.0) > 0.0
                     and now >= (tonumber(S.route3_scale_snap_at) or 0.0)
-                local nx = snap_due and scale_target or (cx + (scale_target - cx) * 0.02)
-                if snap_due or math.abs(nx - scale_target) < 0.005 then
-                    nx = scale_target
+                local nx = snap_due and want or (cx + (want - cx) * 0.02)
+                if snap_due or math.abs(nx - want) < 0.005 then
+                    nx = want
                     S.route3_scale_target = nil
                     S.route3_scale_snap_at = 0.0
                 end

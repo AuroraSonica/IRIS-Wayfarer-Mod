@@ -9353,7 +9353,7 @@ function griffin_species_profile_apply(key)
     -- wing-beats (5210) instead; 401 stays the single touchdown.
     if p.route3_ground_jump_windup == nil then
         if key:find("ch257", 1, true) then
-            p.route3_ground_jump_windup = 3.0
+            p.route3_ground_jump_windup = 2.0
             p.route3_rise_secs = 3.5
             p.route3_landing_descent_clip = 5210
             -- Aurora's field picks (round 4): travel nodes with the good flight animation
@@ -9363,6 +9363,12 @@ function griffin_species_profile_apply(key)
             p.route3_ground_jump_windup = tonumber(C.route3_ground_jump_windup) or 0.5
             p.route3_rise_secs = tonumber(C.route3_rise_secs) or 1.75
         end
+        migrated = true
+    end
+    -- v5 2026-08-11: v4 shipped windup 3.0; Aurora field-timed it "about a second off" -> 2.0.
+    -- Guarded on the exact v4 value so her own later hand-tuning is never overwritten.
+    if key:find("ch257", 1, true) and tonumber(p.route3_ground_jump_windup) == 3.0 then
+        p.route3_ground_jump_windup = 2.0
         migrated = true
     end
     -- v2 2026-08-11 (field round 2): the rise CLIP set goes per-species (griffin's are
@@ -21241,6 +21247,7 @@ function route3_rise_start_clip(dir, dur, now)
             -- very first frame the node exists must already be protected. Opening it after the
             -- request leaves exactly the one-tick gap that two-owner crashes live in.
             pcall(function() griffin_node_lockout_begin(leaf, now) end)
+            S.route3_rise_hold_fires = 0   -- fresh hold budget per press (rise-node hold)
             S.route3_loopcam_dir = descending and -1.0 or 1.0   -- the PAN camera sweeps this way
             -- ⭐ RIDE DIAG: Aurora cannot find the panel readouts, so the answers go to DISK.
             -- data/GriffinRideProbe (IRIS)_ridediag.json -- one record per node fire.
@@ -21448,6 +21455,26 @@ function route3_rise_tick()
         if grounded_retire then
             S.route3_node_exit_status = "(grounded retire: recover owns the neutral)"
         else
+        -- ⭐ RISE-NODE HOLD (2026-08-11, drake round 5): TRAVEL nodes (FlightPathTraceTarget /
+        -- FlightTarget) self-exit almost immediately when fired with no target to trace -- fc
+        -- tape: fired at 18:52:23, retired to Wait the same second = "doesn't last long enough".
+        -- While the rise/dive burst window is still open, RE-FIRE the node instead of retiring:
+        -- the burst owns the movement window, the node owns the look. No flight-base repaint on
+        -- this path (a fresh forced clip HIDES a node's animation -- the Puppeteer tape law).
+        -- Throttle-capped so an instantly-rejecting node cannot machine-gun requests.
+        local hold_until = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+            tonumber(S.route3_simple_dive_until) or 0.0)
+        local hold_node = tostring(S.route3_node_lock_leaf or "")
+        if C.route3_rise_hold_node ~= false and tostring(S.route3_node_lock_src or "") == "rise"
+            and hold_node ~= "" and hold_until > now and S.airborne == true
+            and (tonumber(S.route3_rise_hold_fires) or 0) < 12 then
+            S.route3_rise_hold_fires = (tonumber(S.route3_rise_hold_fires) or 0) + 1
+            pcall(function() request_griffin_action(hold_node, 4) end)
+            pcall(function() request_griffin_action(hold_node, 0) end)
+            pcall(function() griffin_node_lockout_begin(hold_node, now) end)
+            S.route3_node_exit_status = string.format("hold re-fire #%d: %s",
+                tonumber(S.route3_rise_hold_fires) or 0, hold_node)
+        else
         pcall(function() route3_restore_flight_base() end)
         -- ⭐⭐⭐ RETIRE THE NODE (2026-08-04). THE root cause of the "permanent" rider displacement,
         -- found by Aurora's before/after probe rather than by me guessing:
@@ -21501,6 +21528,7 @@ function route3_rise_tick()
             S.route3_node_exit_from = from_leaf
             S.route3_node_exit_tries = 0
         end
+        end   -- (rise-node hold else-branch)
         end   -- (grounded_retire else-branch)
     end
     pcall(function() griffin_node_exit_pump(now) end)   -- retry the retire until the FSM leaves
@@ -28913,9 +28941,24 @@ IrisIV.mults = function(rec)
         def  = 1.0 - (tonumber(iv.def) or 0) / 30.0 * 0.25,
         hp   = 1.0 - (tonumber(iv.hp)  or 0) / 30.0 * 0.15,
         spd  = 1.0 + (tonumber(iv.spd) or 0) / 30.0 * 0.10,
-        size = 0.98 + (tonumber(iv.size) or 0) / 30.0 * 0.06,
+        -- 08-11 (Aurora: "I want people to NOTICE a large or small creature"): 0.86..1.15,
+        -- gene 15 = species-true 1.0. Applied at the scale CHOKE POINTS only (the register
+        -- easer + growth_refresh) -- stored record scales stay BASE, genetics-free.
+        size = 0.85 + (tonumber(iv.size) or 15) / 30.0 * 0.30,
         luck = tonumber(iv.luck) or 0,
     }
+end
+-- the SIZE gene as a body-scale multiplier for the LIVE companion; 1.0 when unknown.
+-- GLOBAL on purpose: the scale easer lives in IrisGriffin/stable.lua and other consumers
+-- sit far above IrisIV's declaration (an upvalue there would silently be a nil global).
+function iris_iv_size_mult()
+    local m = 1.0
+    pcall(function()
+        local rec = griffin_stable_live_rec()
+        local iv = rec and rec.iv
+        if iv then m = 0.85 + (tonumber(iv.size) or 15) / 30.0 * 0.30 end
+    end)
+    return tonumber(m) or 1.0
 end
 IrisIV.install = function()
     -- _G flag: sdk.hook installs persist across reloads -- a local would stack (the law).
@@ -28988,7 +29031,109 @@ re.on_frame(function()
     if not ok then _G.IrisIVState = nil end
 end)
 
+-- ⭐⭐ STABLE UI PRIMITIVES (08-11, for IrisStableUI.lua -- the in-game d2d stable screen).
+-- iris_stable_select = the panel's own click-switch flow, extracted verbatim: park the
+-- current soul, forget the body, activate the clicked record, arm the shim + restore.
+local function iris_stable_select(id)
+    local st = S.route3_stable
+    if not (st and st.companions) then return false, "stable not loaded" end
+    if S.mounted == true then return false, "dismount first" end
+    local comp = nil
+    for _, r in ipairs(st.companions) do
+        if r.id == id then comp = r break end
+    end
+    if not comp then return false, "unknown companion" end
+    if st.active == comp.id then return true, "already selected" end
+    pcall(function() griffin_tamed_save() end)
+    S.griffin = nil; S.griffin_go = nil
+    st.active = comp.id
+    pcall(function() griffin_stable_set_shim(comp) end)
+    S.route3_tamed_restore_at = os.clock() + 1.0
+    S.route3_tamed_restore_tries = 0
+    pcall(function() griffin_stable_write() end)
+    return true, "selected " .. tostring(comp.name or "?")
+end
+
 _G.IrisGriffinBridge = {
+    -- ── STABLE UI API (08-11) ────────────────────────────────────────────────
+    stable_list = function()
+        local st = S.route3_stable
+        if not (st and st.companions) then return nil end
+        local live_id = S.live_rec_id
+        local out = {}
+        for _, r in ipairs(st.companions) do
+            local label = nil
+            pcall(function()
+                label = (r.kind == "horse" and "Horse") or iris_type_name(r.species)
+            end)
+            if not label or label == "" then
+                label = tostring(r.species or "?"):match("ch%d+") or "?"
+            end
+            -- health: parked souls carry rec.hp/hp_max (the stable-rest fields); the LIVE
+            -- body reads the store that actually moves (the hp bar's own recipe)
+            local hp9, hpmax9 = tonumber(r.hp), tonumber(r.hp_max)
+            if live_id == r.id and S.griffin ~= nil then
+                pcall(function()
+                    local ch9 = S.griffin
+                    local go9 = char_go(ch9)
+                    local addr9 = go9 and go9:get_address() or nil
+                    local hc9 = addr9 and (S.hp_source or {})[addr9] or nil
+                    local h9 = nil
+                    if hc9 then pcall(function() h9 = tonumber(hc9:call("get_Hp")) end) end
+                    if not h9 then h9 = tonumber(griffin_read_target_hp(ch9)) end
+                    local m9 = tonumber(griffin_hp_max_from_component(hc9 or griffin_target_hit_controller(ch9)))
+                    if h9 then hp9 = h9 end
+                    if m9 and m9 > 0 then hpmax9 = m9 end
+                end)
+            end
+            out[#out + 1] = {
+                id = r.id, name = r.name, gender = r.gender, label = label,
+                species = r.species, kind = r.kind, variant = r.variant,
+                iv = r.iv, wyrm = r.wyrm and true or nil, hatch = r.hatch and true or nil,
+                hp = hp9, hp_max = hpmax9,
+                active = (st.active == r.id) or nil,
+                live = (live_id == r.id and S.griffin ~= nil) or nil,
+            }
+        end
+        return out
+    end,
+    stable_select = function(id) return iris_stable_select(id) end,
+    stable_summon = function(id)
+        -- switch to this record and put its body in the world: dismiss whoever is out,
+        -- select, then spawn (spawn_griffin queues itself if the game is paused)
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        if S.mounted == true then return false, "dismount first" end
+        if st.active == id and S.griffin and char_go(S.griffin) then
+            return true, "already out"
+        end
+        if S.griffin and char_go(S.griffin) then
+            pcall(function() griffin_dismiss() end)
+        end
+        local ok, why = iris_stable_select(id)
+        if not ok then return false, why end
+        pcall(function() spawn_griffin() end)
+        return true, "summoning"
+    end,
+    stable_dismiss = function()
+        if not (S.griffin and char_go(S.griffin)) then return false, "no companion out" end
+        if S.mounted == true then return false, "dismount first" end
+        pcall(function() griffin_dismiss() end)
+        return true, "dismissed"
+    end,
+    stable_release = function(id)
+        -- ⛔⛔ delete_griffin ERASES THE SOUL -- the UI double-confirms before calling this.
+        -- Release operates on the ACTIVE record, so select first when needed.
+        if S.mounted == true then return false, "dismount first" end
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        if st.active ~= id then
+            local ok, why = iris_stable_select(id)
+            if not ok then return false, why end
+        end
+        pcall(function() delete_griffin() end)
+        return true, "released"
+    end,
     allow_actions = function(secs) S.nt_allow_actions_until = os.clock() + (tonumber(secs) or 2.0) end,
     carried = function() return S.route3_grab and S.route3_grab.carried or nil end,
     griffin = function() return reacquire_griffin() end,
@@ -29182,7 +29327,8 @@ _G.IrisGriffinBridge = {
             local t9 = math.min(1.0, math.max(0.0, (igh9 - (tonumber(h9.igh0) or igh9)) / 24.0 / gd9))
             local baby9 = tonumber(h9.baby_scale) or 0.12
             local full9 = tonumber(h9.full) or 0.45
-            pcall(function() griffin_apply_body_scale(baby9 + (full9 - baby9) * t9, true) end)
+            -- the SIZE gene rides the application only -- h9.full stays base
+            pcall(function() griffin_apply_body_scale((baby9 + (full9 - baby9) * t9) * iris_iv_size_mult(), true) end)
             if t9 >= 1.0 then
                 rec.hatch = nil   -- grown: a full companion from here on
                 pcall(function() griffin_stable_write() end)
@@ -29214,7 +29360,9 @@ _G.IrisGriffinBridge = {
             local t9 = math.min(1.0, math.max(0.0, (igh9 - (tonumber(w9.igh0) or igh9)) / 24.0 / gd9))
             local from9 = tonumber(w9.from) or 1.0
             local to9 = tonumber(w9.to) or 1.0
-            pcall(function() griffin_apply_body_scale(from9 + (to9 - from9) * t9, true) end)
+            -- the SIZE gene rides the application only -- w9.to/from stay base, so the mount
+            -- line/gates keep meaning "grown", while a big-gened wolf grows visibly bigger
+            pcall(function() griffin_apply_body_scale((from9 + (to9 - from9) * t9) * iris_iv_size_mult(), true) end)
         end
     end,
     wyrmfeed = function(to_mount)

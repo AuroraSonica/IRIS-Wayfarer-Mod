@@ -57,7 +57,7 @@
         "route3_allow_flight": true,
         "route3_allow_sprint": true,
         "route3_flap_blend_frames": 44.0,
-        "route3_ground_jump_windup": 3.0,
+        "route3_ground_jump_windup": 2.0,
         "route3_jump_clip_fall": -1,
         "route3_jump_clip_land": 401,
         "route3_jump_clip_mid": -1,
