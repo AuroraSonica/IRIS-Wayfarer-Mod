@@ -1,0 +1,255 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  30,
+  50
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_220_com_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch99_220_com_walk_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 106,
+   "name": "ch99_220_com_walk_start"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 112,
+   "name": "ch99_220_com_walk_end"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch99_220_com_run_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 201,
+   "name": "ch99_220_com_run_loop_02"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 206,
+   "name": "ch99_220_com_run_start"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 208,
+   "name": "ch99_220_com_run_start_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 209,
+   "name": "ch99_220_com_run_start_B_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 212,
+   "name": "ch99_220_com_run_end"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch99_220_com_lading_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch99_220_com_lading_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 415,
+   "name": "ch99_220_com_fall_loop_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 416,
+   "name": "ch99_220_com_fall_loop_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 450,
+   "name": "ch99_220_com_turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 451,
+   "name": "ch99_220_com_turn_180R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 452,
+   "name": "ch99_220_com_turn_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 453,
+   "name": "ch99_220_com_turn_90R"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 500,
+   "name": "ch99_220_dmg_blown_start_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 600,
+   "name": "ch99_220_dmg_blown_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 650,
+   "name": "ch99_220_dmg_blown_bound_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch99_220_dmg_hitdown_N_01"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch99_220_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch99_220_dmg_standup_faceD"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 700,
+   "name": "ch99_220_pin_lift_idle_loop"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 701,
+   "name": "ch99_220_pin_lift_idle_loop_shake"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 710,
+   "name": "ch99_220_pin_lift_start"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 715,
+   "name": "ch99_220_pin_lift_start_down_faceD"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 720,
+   "name": "ch99_220_pin_lift_release"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 721,
+   "name": "ch99_220_pin_lift_drop"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 722,
+   "name": "ch99_220_pin_lift_release_down_faceU"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 730,
+   "name": "ch99_220_pin_lift_escape"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 740,
+   "name": "ch99_220_pin_lift_throw"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_220_atk_jump_kick"
+  }
+ ],
+ "target": "ch299221_A_00",
+ "creature": "Chicken",
+ "creature_source": "EnemySpawner/charRef.lua"
+}

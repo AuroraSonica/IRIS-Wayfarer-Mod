@@ -1,0 +1,183 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  50,
+  60
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_400_com_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch99_400_com_idle_flapping"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5000,
+   "name": "ch99_400_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5140,
+   "name": "ch99_400_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5141,
+   "name": "ch99_400_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5142,
+   "name": "ch99_400_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5143,
+   "name": "ch99_400_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5210,
+   "name": "ch99_400_com_takeoff_normal"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5230,
+   "name": "ch99_400_com_turn_hover_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5231,
+   "name": "ch99_400_com_turn_hover_180R"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 500,
+   "name": "ch99_400_dmg_blown_start_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 600,
+   "name": "ch99_400_dmg_blown_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 660,
+   "name": "ch99_400_dmg_blown_boud_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch99_400_dmg_blown_start_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch99_400_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1301,
+   "name": "ch99_400_dmg_down_loop_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch99_400_dmg_standup_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1501,
+   "name": "ch99_400_dmg_standup_faceU"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_400_atk_bite"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_400_liv_eat_start"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch99_400_liv_eat_loop"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch99_400_liv_eat_end"
+  }
+ ],
+ "target": "ch299400_A_00",
+ "creature": "Bat",
+ "creature_source": "EnemySpawner/charRef.lua"
+}

@@ -1,0 +1,1242 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  20,
+  30,
+  50,
+  60,
+  100
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch54_000_comBM_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch54_000_comBM_idle_change_NM_to_BM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 47,
+   "name": "ch54_000_comBM_idle_change_GM_to_BM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch54_000_comBM_walk_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 106,
+   "name": "ch54_000_comBM_walk_start_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 108,
+   "name": "ch54_000_comBM_walk_start_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 109,
+   "name": "ch54_000_comBM_walk_start_B_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 110,
+   "name": "ch54_000_comBM_walk_start_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 111,
+   "name": "ch54_000_comBM_walk_start_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 112,
+   "name": "ch54_000_comBM_walk_end_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 114,
+   "name": "ch54_000_comBM_walk_bank_loop_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 115,
+   "name": "ch54_000_comBM_walk_bank_loop_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch54_000_com_play_with"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 2,
+   "name": "ch54_000_com_idle_stretch"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch54_000_com_idle_add_loop_breath"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 33,
+   "name": "ch54_000_com_idle_change_BM_to_NM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 36,
+   "name": "ch54_000_com_idle_change_WA_to_NM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 142,
+   "name": "ch54_000_com_walk_strafe_loop_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 143,
+   "name": "ch54_000_com_walk_strafe_loop_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 152,
+   "name": "ch54_000_com_walk_strafe_start_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 153,
+   "name": "ch54_000_com_walk_strafe_start_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 162,
+   "name": "ch54_000_com_walk_strafe_end_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 163,
+   "name": "ch54_000_com_walk_strafe_end_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch54_000_com_run_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 206,
+   "name": "ch54_000_com_run_start_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 208,
+   "name": "ch54_000_com_run_start_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 209,
+   "name": "ch54_000_com_run_start_B_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 210,
+   "name": "ch54_000_com_run_start_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 211,
+   "name": "ch54_000_com_run_start_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 212,
+   "name": "ch54_000_com_run_end_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 214,
+   "name": "ch54_000_com_run_bank_loop_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 215,
+   "name": "ch54_000_com_run_bank_loop_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 216,
+   "name": "ch54_000_com_run_turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 217,
+   "name": "ch54_000_com_run_turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 300,
+   "name": "ch54_000_com_dash_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 306,
+   "name": "ch54_000_com_dash_start_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 312,
+   "name": "ch54_000_com_dash_end_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 390,
+   "name": "ch54_000_com_move_change_walk_to_run"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 391,
+   "name": "ch54_000_com_move_change_run_to_walk"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch54_000_com_landing_front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 405,
+   "name": "ch54_000_com_landing_to_run"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 416,
+   "name": "ch54_000_com_fall_loop_front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 422,
+   "name": "ch54_000_com_jump_start_front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 423,
+   "name": "ch54_000_com_jump_front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 430,
+   "name": "ch54_000_com_jump_start_dash"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 450,
+   "name": "ch54_000_com_turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 451,
+   "name": "ch54_000_com_turn_180R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 452,
+   "name": "ch54_000_com_turn_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 453,
+   "name": "ch54_000_com_turn_90R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 456,
+   "name": "ch54_000_com_turn_quick_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 457,
+   "name": "ch54_000_com_turn_quick_180R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 461,
+   "name": "ch54_000_com_dodge_B"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 462,
+   "name": "ch54_000_com_dodge_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 463,
+   "name": "ch54_000_com_dodge_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 550,
+   "name": "ch54_000_com_step_fall_normal"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 551,
+   "name": "ch54_000_com_step_fall_walk"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 560,
+   "name": "ch54_000_com_step_low_climb_walk"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 561,
+   "name": "ch54_000_com_step_low_climb_run"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch54_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch54_000_dmg_hitback_S_G_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch54_000_dmg_hitback_S_G_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch54_000_dmg_hitback_S_G_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 40,
+   "name": "ch54_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 50,
+   "name": "ch54_000_dmg_hitback_S_G_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 60,
+   "name": "ch54_000_dmg_hitback_S_G_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 70,
+   "name": "ch54_000_dmg_hitback_S_G_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 80,
+   "name": "ch54_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 90,
+   "name": "ch54_000_dmg_hitback_L_G_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch54_000_dmg_hitback_L_G_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 110,
+   "name": "ch54_000_dmg_hitback_L_G_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch54_000_dmg_hitback_S_J_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 210,
+   "name": "ch54_000_dmg_hitback_S_J_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 220,
+   "name": "ch54_000_dmg_hitback_S_J_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 230,
+   "name": "ch54_000_dmg_hitback_S_J_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 280,
+   "name": "ch54_000_dmg_hitback_S_landing_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 700,
+   "name": "ch54_000_dmg_fall_action_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 701,
+   "name": "ch54_000_dmg_fall_action_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 760,
+   "name": "ch54_000_dmg_fall_action_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 761,
+   "name": "ch54_000_dmg_fall_action_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 762,
+   "name": "ch54_000_dmg_fall_action_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 763,
+   "name": "ch54_000_dmg_fall_action_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 790,
+   "name": "ch54_000_dmg_hitback_S_landing_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 791,
+   "name": "ch54_000_dmg_hitback_S_landing_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 792,
+   "name": "ch54_000_dmg_hitback_S_landing_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 793,
+   "name": "ch54_000_dmg_hitback_S_landing_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 860,
+   "name": "ch54_000_dmg_hitback_S_J_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 861,
+   "name": "ch54_000_dmg_hitback_S_J_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 862,
+   "name": "ch54_000_dmg_hitback_S_J_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 863,
+   "name": "ch54_000_dmg_hitback_S_J_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch54_000_dmg_hitdown_N"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 920,
+   "name": "ch54_000_dmg_hitdown_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 930,
+   "name": "ch54_000_dmg_hitdown_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 940,
+   "name": "ch54_000_dmg_hitdown_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 964,
+   "name": "ch54_000_dmg_hitdown_balance_S_start_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 965,
+   "name": "ch54_000_dmg_hitdown_balance_S_start_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 966,
+   "name": "ch54_000_dmg_hitdown_balance_S_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 967,
+   "name": "ch54_000_dmg_hitdown_balance_S_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 968,
+   "name": "ch54_000_dmg_hitdown_balance_down_loop_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 969,
+   "name": "ch54_000_dmg_hitdown_balance_down_end_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 970,
+   "name": "ch54_000_dmg_hitdown_balance_down_to_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 971,
+   "name": "ch54_000_dmg_hitdown_balance_S_start_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 972,
+   "name": "ch54_000_dmg_hitdown_balance_S_start_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 973,
+   "name": "ch54_000_dmg_hitdown_balance_S_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 974,
+   "name": "ch54_000_dmg_hitdown_balance_S_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 975,
+   "name": "ch54_000_dmg_hitdown_balance_down_loop_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 976,
+   "name": "ch54_000_dmg_hitdown_balance_down_end_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 977,
+   "name": "ch54_000_dmg_hitdown_balance_down_to_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1000,
+   "name": "ch54_000_dmg_down_S_start_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1001,
+   "name": "ch54_000_dmg_down_S_end_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1002,
+   "name": "ch54_000_dmg_down_S_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1005,
+   "name": "ch54_000_dmg_down_S_start_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1006,
+   "name": "ch54_000_dmg_down_S_end_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1007,
+   "name": "ch54_000_dmg_down_S_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1010,
+   "name": "ch54_000_dmg_down_S_start_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1011,
+   "name": "ch54_000_dmg_down_S_end_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1012,
+   "name": "ch54_000_dmg_down_S_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1015,
+   "name": "ch54_000_dmg_down_S_start_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1016,
+   "name": "ch54_000_dmg_down_S_end_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1017,
+   "name": "ch54_000_dmg_down_S_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1100,
+   "name": "ch54_000_dmg_downbound_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1101,
+   "name": "ch54_000_dmg_downbound_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch54_000_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1301,
+   "name": "ch54_000_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1310,
+   "name": "ch54_000_dmg_down_hitback_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1311,
+   "name": "ch54_000_dmg_down_hitback_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1320,
+   "name": "ch54_000_dmg_down_die_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1321,
+   "name": "ch54_000_dmg_down_die_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch54_000_dmg_standup_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1501,
+   "name": "ch54_000_dmg_standup_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1600,
+   "name": "ch54_000_dmg_fusible_die"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1850,
+   "name": "ch54_000_dmg_stun_start"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1851,
+   "name": "ch54_000_dmg_stun_loop"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1852,
+   "name": "ch54_000_dmg_stun_end"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2101,
+   "name": "ch54_000_dmg_weakpoint_lion_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2102,
+   "name": "ch54_000_dmg_weakpoint_goat_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2103,
+   "name": "ch54_000_dmg_weakpoint_snake_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2201,
+   "name": "ch54_000_dmg_weakpoint_lion_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2202,
+   "name": "ch54_000_dmg_weakpoint_goat_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2203,
+   "name": "ch54_000_dmg_weakpoint_snake_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2301,
+   "name": "ch54_000_dmg_weakpoint_lion_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2302,
+   "name": "ch54_000_dmg_weakpoint_goat_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2303,
+   "name": "ch54_000_dmg_weakpoint_snake_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2701,
+   "name": "ch54_000_dmg_weakpoint_break_lion_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2702,
+   "name": "ch54_000_dmg_weakpoint_break_goat_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2703,
+   "name": "ch54_000_dmg_weakpoint_break_snake_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2801,
+   "name": "ch54_000_dmg_weakpoint_break_lion_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2802,
+   "name": "ch54_000_dmg_weakpoint_break_goat_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2803,
+   "name": "ch54_000_dmg_weakpoint_break_snake_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2901,
+   "name": "ch54_000_dmg_weakpoint_break_lion_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2902,
+   "name": "ch54_000_dmg_weakpoint_break_goat_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2903,
+   "name": "ch54_000_dmg_weakpoint_break_snake_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3301,
+   "name": "ch54_000_dmg_weakpoint_revival_lion_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3303,
+   "name": "ch54_000_dmg_weakpoint_revival_snake_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5000,
+   "name": "ch54_000_dmg_slip_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5005,
+   "name": "ch54_000_dmg_slip_down_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5010,
+   "name": "ch54_000_dmg_weakpoint_revival_lion_G"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5011,
+   "name": "ch54_000_dmg_weakpoint_revival_snake_G"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4000,
+   "name": "ch54_000_grb_hold_bite_attack_loop"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4010,
+   "name": "ch54_000_grb_hold_bite_attack_start"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4012,
+   "name": "ch54_000_grb_hold_bite_attack_hit"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4020,
+   "name": "ch54_000_grb_hold_bite_attack_end"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4100,
+   "name": "ch54_000_grb_hold_bite_attack_loop"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4110,
+   "name": "ch54_000_grb_hold_bite_attack_start"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4112,
+   "name": "ch54_000_grb_hold_bite_attack_hit"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 4120,
+   "name": "ch54_000_grb_hold_bite_attack_end"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch54_000_pin_cling_shake_body"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 300,
+   "name": "ch54_000_pin_touch_shake_body"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch54_000_atk_claw_attack_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch54_000_atk_claw_attack_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch54_000_atk_bite"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch54_000_atk_backkick"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 40,
+   "name": "ch54_000_atk_step_claw_attack_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 50,
+   "name": "ch54_000_atk_step_claw_attack_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 60,
+   "name": "ch54_000_atk_short_tackle"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch54_000_atk_claw_attack_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 110,
+   "name": "ch54_000_atk_claw_attack_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 120,
+   "name": "ch54_000_atk_bite"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 140,
+   "name": "ch54_000_atk_step_claw_attack_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 150,
+   "name": "ch54_000_atk_step_claw_attack_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch54_000_atk_lion_jump_slam_start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch54_000_atk_lion_jump_slam"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 402,
+   "name": "ch54_000_atk_lion_jump_slam_loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 403,
+   "name": "ch54_000_atk_lion_jump_slam_end"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 950,
+   "name": "ch54_000_atk_turn_180L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 955,
+   "name": "ch54_000_atk_turn_180R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 960,
+   "name": "ch54_000_atk_turn_90L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 965,
+   "name": "ch54_000_atk_turn_90R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 1000,
+   "name": "ch54_000_atk_high_spell_start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 1001,
+   "name": "ch54_000_atk_high_spell_loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 1002,
+   "name": "ch54_000_atk_high_spell_end"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 2000,
+   "name": "ch54_000_atk_down_S_claw_attack_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 2100,
+   "name": "ch54_000_atk_down_S_claw_attack_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 2200,
+   "name": "ch54_000_atk_lion_roar"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 2300,
+   "name": "ch54_000_atkGM_goat_roar"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 2520,
+   "name": "ch54_000_liv_sit_end_change_to_BM"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch54_000_fac_basic_neutral_idle_loop"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 3,
+   "name": "ch54_000_fac_basic_angry_idle_loop"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 12,
+   "name": "ch54_000_fac_basic_sleep_idle_loop"
+  }
+ ],
+ "target": "ch254_S",
+ "creature": "Chimera / Chimera_Gore",
+ "creature_source": "EnemySpawner/charRef.lua"
+}

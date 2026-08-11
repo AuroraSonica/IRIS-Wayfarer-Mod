@@ -1,0 +1,675 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  50,
+  100
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch58_000_com_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 3,
+   "name": "ch58_000_com_Event_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch58_000_com_Walk_Loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 106,
+   "name": "ch58_000_com_Walk_Start_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 107,
+   "name": "ch58_000_com_Walk_Start_F_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 108,
+   "name": "ch58_000_com_Walk_Start_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 109,
+   "name": "ch58_000_com_Walk_Start_B_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 110,
+   "name": "ch58_000_com_Walk_Start_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 111,
+   "name": "ch58_000_com_Walk_Start_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 112,
+   "name": "ch58_000_com_Walk_End_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 113,
+   "name": "ch58_000_com_Walk_End_F_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch58_000_com_Walk_Loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 206,
+   "name": "ch58_000_com_Walk_Start_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 212,
+   "name": "ch58_000_com_Walk_End_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch58_000_com_Landing_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch58_000_com_Landing_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 405,
+   "name": "ch58_000_com_Landing_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 415,
+   "name": "ch58_000_com_Landing_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 416,
+   "name": "ch58_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 550,
+   "name": "ch58_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5000,
+   "name": "ch58_000_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5100,
+   "name": "ch58_000_com_flight_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5101,
+   "name": "ch58_000_com_flight_loop_Flapping"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5140,
+   "name": "ch58_000_com_hover_add_pose_F"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5141,
+   "name": "ch58_000_com_hover_add_pose_B"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5142,
+   "name": "ch58_000_com_hover_add_pose_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5143,
+   "name": "ch58_000_com_hover_add_pose_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5200,
+   "name": "ch58_000_com_move_change_hover_to_flight"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5201,
+   "name": "ch58_000_com_move_change_hover_to_flight_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5202,
+   "name": "ch58_000_com_move_change_hover_to_flight_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5203,
+   "name": "ch58_000_com_move_change_hover_to_flight_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5204,
+   "name": "ch58_000_com_move_change_hover_to_flight_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5205,
+   "name": "ch58_000_com_move_change_flight_to_hover"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5210,
+   "name": "ch58_000_com_Takeoff_normal"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5211,
+   "name": "ch58_000_com_Takeoff_walk"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5212,
+   "name": "ch58_000_com_flight_add_pose_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5213,
+   "name": "ch58_000_com_flight_add_pose_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5220,
+   "name": "ch58_000_com_takeoff_Turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5221,
+   "name": "ch58_000_com_takeoff_Turn_180R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5230,
+   "name": "ch58_000_com_Turn_hover_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5231,
+   "name": "ch58_000_com_Turn_hover_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5232,
+   "name": "ch58_000_com_Turn_hover_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5233,
+   "name": "ch58_000_com_Turn_hover_90L"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch58_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 40,
+   "name": "ch58_000_dmg_hitback_M_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 80,
+   "name": "ch58_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 190,
+   "name": "ch58_000_dmg_hitback_L_G_F_Tow"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 280,
+   "name": "ch58_000_dmg_hitback_M_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 300,
+   "name": "ch58_000_dmg_hitback_M_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 340,
+   "name": "ch58_000_dmg_hitback_M_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 380,
+   "name": "ch58_000_dmg_hitback_M_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 701,
+   "name": "ch58_000_dmg_Fall_Action_Loop_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 750,
+   "name": "ch58_000_dmg_Fall_Action_Loop_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 821,
+   "name": "ch58_000_dmg_Fall_Action_Start_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch58_000_dmg_Hitdown_N"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 910,
+   "name": "ch58_000_dmg_Hitdown_N"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 920,
+   "name": "ch58_000_dmg_Hitdown_N_Tow"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 930,
+   "name": "ch58_000_dmg_Hitdown_N_Tow"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1100,
+   "name": "ch58_000_dmg_downbound_FaceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1101,
+   "name": "ch58_000_dmg_downbound_FaceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch58_000_dmg_Down_Loop_FaceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1301,
+   "name": "ch58_000_dmg_Down_Loop_FaceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1320,
+   "name": "ch58_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch58_000_dmg_Standup_FaceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1501,
+   "name": "ch58_000_dmg_Standup_FaceR"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5000,
+   "name": "ch58_000_dmg_DragonExposure_Start"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5001,
+   "name": "ch58_000_dmg_DragonExposure_Loop"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5002,
+   "name": "ch58_000_dmg_DragonExposure_End"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 3,
+   "name": "ch58_000_atk_Breath_2ren"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 8,
+   "name": "ch58_000_atk_Foot-crush_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch58_000_atk_Foot-crush_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch58_000_atk_Foot-crush_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 11,
+   "name": "ch58_000_atk_Foot-crush_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 13,
+   "name": "ch58_000_atk_Dragon-Tail_Cleave"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 17,
+   "name": "ch58_000_atk_Breath_Cleave_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 18,
+   "name": "ch58_000_atk_Breath_Cleave_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 19,
+   "name": "ch58_000_atk_Body-squash"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch58_000_atk_Breath_BackJump"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 31,
+   "name": "ch58_000_atk_Breath_hover_F_Start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 32,
+   "name": "ch58_000_atk_Breath_hover_F_Loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 33,
+   "name": "ch58_000_atk_Breath_hover_F_End"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 90,
+   "name": "ch58_000_atk_Breath_F"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 91,
+   "name": "ch58_000_atk_Breath_F"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch58_000_atk_Breath_Below"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 101,
+   "name": "ch58_000_atk_Roar"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 102,
+   "name": "ch58_000_atk_Roar"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 111,
+   "name": "ch58_000_atk_Magic_small_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 120,
+   "name": "ch58_000_atk_Breath_hover_F_Cleave_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 121,
+   "name": "ch58_000_atk_Breath_hover_F_Cleave_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 122,
+   "name": "ch58_000_atk_Magic_small_start_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 123,
+   "name": "ch58_000_atk_Magic_small_loop_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 124,
+   "name": "ch58_000_atk_Magic_small_end_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 130,
+   "name": "ch58_000_atk_Breath_Flight_F_Ground"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch58_000_atk_Shake-Loose_Tail"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 210,
+   "name": "ch58_000_atk_Shake-Loose_Back"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 220,
+   "name": "ch58_000_atk_Shake-Loose_L-Hand"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 230,
+   "name": "ch58_000_atk_Shake-Loose_R-Hand"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 300,
+   "name": "ch58_000_atk_Magic_Rapid-fire"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 950,
+   "name": "ch58_000_atk_Turn_Cleave_180L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 955,
+   "name": "ch58_000_atk_Turn_Cleave_180R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 960,
+   "name": "ch58_000_atk_Turn_Cleave_90L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 965,
+   "name": "ch58_000_atk_Turn_Cleave_90R"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch58_000_fac_basic_neutral_idle_loop"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch58_000_fac_basic_painful_idle_loop"
+  }
+ ],
+ "target": "ch258000_10",
+ "creature": "Dragon",
+ "creature_source": "EnemySpawner/charRef.lua"
+}

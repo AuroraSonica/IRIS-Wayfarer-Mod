@@ -1,0 +1,15 @@
+# OS / tooling junk
+Thumbs.db
+Desktop.ini
+*.stackdump
+__pycache__/
+*.pyc
+
+# never commit editor backups or instrumented copies
+*.bak
+*.pre-instrument
+*.backup.zip
+
+# logs are live-folder artifacts, not repo content
+*.log
+*_log.txt

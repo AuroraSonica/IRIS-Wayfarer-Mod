@@ -1,0 +1,1344 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  20,
+  30,
+  50,
+  60,
+  100
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch57_000_com_idle_active_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch57_000_com_idle_menace_small"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 2,
+   "name": "ch57_000_com_idle_menace_mid"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 3,
+   "name": "ch57_000_com_detection"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 4,
+   "name": "ch57_000_com_idle_loop_watch"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 33,
+   "name": "ch57_000_com_idle_change_Haizuri_to_BM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch57_000_com_Walk_Loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 106,
+   "name": "ch57_000_com_Walk_Start_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 107,
+   "name": "ch57_000_com_Walk_Start_F_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 108,
+   "name": "ch57_000_com_Walk_Start_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 109,
+   "name": "ch57_000_com_Walk_Start_B_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 110,
+   "name": "ch57_000_com_Walk_Start_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 111,
+   "name": "ch57_000_com_Walk_Start_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 112,
+   "name": "ch57_000_com_Walk_End_F_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 113,
+   "name": "ch57_000_com_Walk_End_F_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch57_000_com_Landing_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch57_000_com_Landing_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 416,
+   "name": "ch57_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 450,
+   "name": "ch57_000_com_turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 451,
+   "name": "ch57_000_com_turn_180R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 452,
+   "name": "ch57_000_com_turn_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 453,
+   "name": "ch57_000_com_turn_90R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 454,
+   "name": "ch57_000_com_turn_minimum_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 455,
+   "name": "ch57_000_com_turn_minimum_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 460,
+   "name": "ch57_000_com_dodge_F"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 550,
+   "name": "ch57_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 4000,
+   "name": "ch57_000_com_flight_loop_Flapping"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5000,
+   "name": "ch57_000_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5100,
+   "name": "ch57_000_com_flight_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5101,
+   "name": "ch57_000_com_flight_loop_Flapping"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5140,
+   "name": "ch57_000_com_hover_add_pose_F"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5141,
+   "name": "ch57_000_com_hover_add_pose_B"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5142,
+   "name": "ch57_000_com_hover_add_pose_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5143,
+   "name": "ch57_000_com_hover_add_pose_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5144,
+   "name": "ch57_000_com_hover_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5200,
+   "name": "ch57_000_com_move_change_hover_to_flight"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5205,
+   "name": "ch57_000_com_move_change_flight_to_hover"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5210,
+   "name": "ch57_000_com_Takeoff_normal"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5220,
+   "name": "ch57_000_com_takeoff_Turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5221,
+   "name": "ch57_000_com_takeoff_Turn_180R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5230,
+   "name": "ch57_000_com_turn_hover_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5231,
+   "name": "ch57_000_com_turn_hover_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5232,
+   "name": "ch57_000_com_turn_hover_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5233,
+   "name": "ch57_000_com_turn_hover_90L"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 40,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 50,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 60,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 70,
+   "name": "ch57_000_dmg_hitback_S_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 80,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 90,
+   "name": "ch57_000_dmg_hitback_L_G_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch57_000_dmg_hitback_L_G_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 110,
+   "name": "ch57_000_dmg_hitback_L_G_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 170,
+   "name": "ch57_000_dmg_hitback_M_G_Tow"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 300,
+   "name": "ch57_000_dmg_hitback_S_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 380,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 390,
+   "name": "ch57_000_dmg_hitback_L_A_B"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch57_000_dmg_hitback_L_A_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 410,
+   "name": "ch57_000_dmg_hitback_L_A_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 701,
+   "name": "ch57_000_dmg_Fall_Action_Loop_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 760,
+   "name": "ch57_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 761,
+   "name": "ch57_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 762,
+   "name": "ch57_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 763,
+   "name": "ch57_000_com_Fall_Loop_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 790,
+   "name": "ch57_000_com_Landing_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 791,
+   "name": "ch57_000_com_Landing_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 792,
+   "name": "ch57_000_com_Landing_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 793,
+   "name": "ch57_000_com_Landing_Front"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 821,
+   "name": "ch57_000_dmg_Fall_Action_Start_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 860,
+   "name": "ch57_000_dmg_hitback_S_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 861,
+   "name": "ch57_000_dmg_hitback_S_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 862,
+   "name": "ch57_000_dmg_hitback_S_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 863,
+   "name": "ch57_000_dmg_hitback_S_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch57_000_dmg_Hitdown_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 930,
+   "name": "ch57_000_dmg_Hitdown_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 940,
+   "name": "ch57_000_dmg_Hitdown_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1100,
+   "name": "ch57_000_dmg_downbound_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1101,
+   "name": "ch57_000_dmg_downbound_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch57_000_dmg_Down_Loop_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1301,
+   "name": "ch57_000_dmg_Down_Loop_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1310,
+   "name": "ch57_000_dmg_hitback_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1311,
+   "name": "ch57_000_dmg_hitback_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1320,
+   "name": "ch57_000_dmg_Down_Die_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1321,
+   "name": "ch57_000_dmg_Down_Die_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1354,
+   "name": "ch57_000_dmg_Down_Loop_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1355,
+   "name": "ch57_000_dmg_konsin_Hit_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1356,
+   "name": "ch57_000_dmg_Down_Loop_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1357,
+   "name": "ch57_000_dmg_konsin_Hit_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch57_000_dmg_Standup_FaceL"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1501,
+   "name": "ch57_000_dmg_Standup_FaceR"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2122,
+   "name": "ch57_000_dmg_weakpoint_Breath"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2123,
+   "name": "ch57_000_dmg_Hitdown_Tow_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2124,
+   "name": "ch57_000_dmg_hitback_M_G_Tow"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2423,
+   "name": "ch57_000_dmg_Hitdown_Tow_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2523,
+   "name": "ch57_000_dmg_Hitdown_Tow_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2711,
+   "name": "ch57_000_dmg_hitback_L_G_R"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2712,
+   "name": "ch57_000_dmg_hitback_L_G_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2713,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2714,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2715,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2716,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2717,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2718,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2719,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2720,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 2721,
+   "name": "ch57_000_dmg_hitback_L_G_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3211,
+   "name": "ch57_000_dmg_Fall_Action_Start_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3212,
+   "name": "ch57_000_dmg_Fall_Action_Start_FaceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3213,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3214,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3215,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3216,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3217,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3218,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3219,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3220,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 3221,
+   "name": "ch57_000_dmg_hitback_L_A_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5000,
+   "name": "ch57_000_dmg_DragonExposure"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5001,
+   "name": "ch57_000_dmg_DragonExposure_haizuri"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5310,
+   "name": "ch57_000_dmg_Hitdown_Tow_L"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 5311,
+   "name": "ch57_000_dmg_Hitdown_Tow_L"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6010,
+   "name": "ch57_000_grb_hold_attack_R"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6020,
+   "name": "ch57_000_grb_hold_attack_L"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6030,
+   "name": "ch57_000_grb_hold_attack_End_R"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6040,
+   "name": "ch57_000_grb_hold_attack_End_L"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6050,
+   "name": "ch57_000_grb_hold_attack_MC_Loop_R"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6060,
+   "name": "ch57_000_grb_hold_attack_MC_Loop_L"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6070,
+   "name": "ch57_000_grb_hold_attack_MC_R_End"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6080,
+   "name": "ch57_000_grb_hold_attack_MC_L_End"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6090,
+   "name": "ch57_000_grb_ground-throw_R"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6091,
+   "name": "ch57_000_grb_ground-throw_interruption_R_start"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6092,
+   "name": "ch57_000_grb_ground-throw_interruption_R_end"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6093,
+   "name": "ch57_000_grb_ground-throw_interruption_L_start"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6094,
+   "name": "ch57_000_grb_ground-throw_interruption_L_end"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6100,
+   "name": "ch57_000_grb_ground-throw_L"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6110,
+   "name": "ch57_000_grb_hold_attack_Hit_R"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6111,
+   "name": "ch57_000_grb_hold_attack_Hit_L"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6120,
+   "name": "ch57_000_grb_hover_hold_attack"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6130,
+   "name": "ch57_000_grb_hover_hold_attack_End"
+  },
+  {
+   "bank": 20,
+   "endframe": 0,
+   "id": 6140,
+   "name": "ch57_000_grb_hover_ground-throw"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch57_000_pin_Shake-Loose_ground"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 250,
+   "name": "ch57_000_pin_Shake-Loose_Hover"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch57_000_atk_Furious-Charge_Start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch57_000_atk_Furious-Charge _Loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 2,
+   "name": "ch57_000_atk_Furious-Charge _End"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 3,
+   "name": "ch57_000_atk_Bite_F_3ren"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 5,
+   "name": "ch57_000_atk_Bite_F_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 6,
+   "name": "ch57_000_atk_Bite_F"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 8,
+   "name": "ch57_000_atk_Foot-crush_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch57_000_atk_Foot-crush_R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch57_000_atk_Dragon-Tail_Cleave_Haizuri"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 11,
+   "name": "ch57_000_atk_Foot_Cleave_L_Haizuri"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 12,
+   "name": "ch57_000_atk_Foot_Cleave_R_Haizuri"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 13,
+   "name": "ch57_000_atk_Dragon-Tail_Cleave"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 17,
+   "name": "ch57_000_atk_Breath_Cleave_L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 18,
+   "name": "ch57_000_atk_Breath_Cleave"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 19,
+   "name": "ch57_000_atk_Body-squash"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch57_000_atk_Breath_SenRyu01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 21,
+   "name": "ch57_000_atk_Breath_Forward_Start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 22,
+   "name": "ch57_000_atk_Breath_Forward_Loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 23,
+   "name": "ch57_000_atk_Breath_Forward_End"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 24,
+   "name": "ch57_000_atk_Breath_Haizuri_Start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 25,
+   "name": "ch57_000_atk_Breath_Haizuri_Loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 26,
+   "name": "ch57_000_atk_Breath_HAizuri_End"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 27,
+   "name": "ch57_000_atk_Breath_Back_Start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 28,
+   "name": "ch57_000_atk_Breath_Back_loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 29,
+   "name": "ch57_000_atk_Breath_Back_End"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch57_000_atk_Breath_BackJump"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 31,
+   "name": "ch57_000_atk_Breath_hover_F_Start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 32,
+   "name": "ch57_000_atk_Breath_hover_F_Loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 33,
+   "name": "ch57_000_atk_Breath_hover_F_End"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 34,
+   "name": "ch57_000_atk_Body-squash_combo"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch57_000_atk_Breath_Below"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 101,
+   "name": "ch57_000_atk_Roar"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 102,
+   "name": "ch57_000_atk_Breath_hover"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 122,
+   "name": "ch57_000_atk_Magic_small_start_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 123,
+   "name": "ch57_000_atk_Magic_small_loop_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 124,
+   "name": "ch57_000_atk_Magic_small_end_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 125,
+   "name": "ch57_000_atk_Magic_small_start_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 126,
+   "name": "ch57_000_atk_Magic_small_loop_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 127,
+   "name": "ch57_000_atk_Magic_small_end_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 128,
+   "name": "ch57_000_atk_Magic_small_start_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 129,
+   "name": "ch57_000_atk_Magic_small_loop_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 130,
+   "name": "ch57_000_atk_Magic_small_end_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 131,
+   "name": "ch57_000_atk_Magic_small_start_haizuri_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 132,
+   "name": "ch57_000_atk_Magic_small_loop_haizuri_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 133,
+   "name": "ch57_000_atk_Magic_small_end_haizuri_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 134,
+   "name": "ch57_000_atk_Magic_small_start_haizuri_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 135,
+   "name": "ch57_000_atk_Magic_small_loop_haizuri_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 136,
+   "name": "ch57_000_atk_Magic_small_end_haizuri_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 137,
+   "name": "ch57_000_atk_hover_Magic_small_start_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 138,
+   "name": "ch57_000_atk_hover_Magic_small_loop_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 139,
+   "name": "ch57_000_atk_hover_Magic_small_end_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 140,
+   "name": "ch57_000_atk_hover_Magic_small_start_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 141,
+   "name": "ch57_000_atk_hover_Magic_small_loop_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 142,
+   "name": "ch57_000_atk_hover_Magic_small_end_01"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 143,
+   "name": "ch57_000_atk_Magic_big_start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 144,
+   "name": "ch57_000_atk_Magic_big_loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 145,
+   "name": "ch57_000_atk_Magic_big_end"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 146,
+   "name": "ch57_000_atk_hover_Magic_big_start"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 147,
+   "name": "ch57_000_atk_hover_Magic_big_loop"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 148,
+   "name": "ch57_000_atk_hover_Magic_big_end"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 950,
+   "name": "ch57_000_atk_Turn_Cleave_180L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 955,
+   "name": "ch57_000_atk_Turn_Cleave_180R"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 960,
+   "name": "ch57_000_atk_Turn_Cleave_90L"
+  },
+  {
+   "bank": 50,
+   "endframe": 0,
+   "id": 965,
+   "name": "ch57_000_atk_Turn_Cleave_90R"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch57_000_liv_idle_change_NM_to_Sleep"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch57_000_liv_idle_Sleep_loop"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch57_000_liv_idle_change_sleep_to_BM"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch57_000_fac_basic_neutral_idle_loop"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch57_000_fac_basic_painful_idle_loop"
+  },
+  {
+   "bank": 100,
+   "endframe": 0,
+   "id": 12,
+   "name": "ch57_000_fac_basic_sleep_idle_loop"
+  }
+ ],
+ "target": "ch257000_00",
+ "creature": "Drake",
+ "creature_source": "EnemySpawner/charRef.lua"
+}

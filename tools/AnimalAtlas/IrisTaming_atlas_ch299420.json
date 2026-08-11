@@ -1,0 +1,224 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  60
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_420_com_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch99_420_com_idle_grooming"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 2,
+   "name": "ch99_420_com_idle_flapping"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch99_420_com_walk_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 106,
+   "name": "ch99_420_com_walk_start"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 112,
+   "name": "ch99_420_com_walk_end"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch99_420_com_lading_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch99_420_com_lading_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 415,
+   "name": "ch99_420_com_fall_loop_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 416,
+   "name": "ch99_420_com_fall_loop_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 452,
+   "name": "ch99_420_com_turn_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 453,
+   "name": "ch99_420_com_turn_90R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5100,
+   "name": "ch99_420_com_flight_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5101,
+   "name": "ch99_420_com_flight_loop_glide"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5210,
+   "name": "ch99_420_com_takeoff_normal"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5220,
+   "name": "ch99_420_com_takeoff_turn_180L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5221,
+   "name": "ch99_420_com_takeoff_turn_180R"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 500,
+   "name": "ch99_420_dmg_blown_start_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 600,
+   "name": "ch99_420_dmg_blown_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 650,
+   "name": "ch99_420_dmg_blown_boud_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch99_420_dmg_hitdown_N_01"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch99_420_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1301,
+   "name": "ch99_420_dmg_down_loop_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch99_420_dmg_standup_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1501,
+   "name": "ch99_420_dmg_standup_faceU"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_420_liv_idle_bathe_01"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch99_420_liv_idle_water_surface_loop"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch99_420_liv_idle_grooming"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch99_420_liv_takeoff_water_surface"
+  }
+ ],
+ "target": "ch299420_A_00",
+ "creature": "Seabird",
+ "creature_source": "EnemySpawner/charRef.lua"
+}

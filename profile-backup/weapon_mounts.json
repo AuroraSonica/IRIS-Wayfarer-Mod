@@ -1,0 +1,20 @@
+{
+    "136.2_16.6_-1134.2": {
+        "item": 1200,
+        "mesh": "Character/wp/wp02/000/wp02_000.mesh",
+        "name": "Two-Hander",
+        "num": 0,
+        "t0": 0,
+        "t1": 0,
+        "t2": 0
+    },
+    "144.0_16.3_-1135.6": {
+        "item": 1200,
+        "mesh": "Character/wp/wp02/000/wp02_000.mesh",
+        "name": "Two-Hander",
+        "num": 0,
+        "t0": 0,
+        "t1": 0,
+        "t2": 0
+    }
+}

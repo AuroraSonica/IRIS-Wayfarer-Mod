@@ -1,0 +1,387 @@
+{
+ "banks": [
+  0,
+  1,
+  10,
+  11,
+  30,
+  60
+ ],
+ "clips": [
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_200_com_idle_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch99_200_com_idle_shakebody_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 2,
+   "name": "ch99_200_com_idle_yawn"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 3,
+   "name": "ch99_200_com_idle_grooming_01"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 4,
+   "name": "ch99_200_com_idle_grooming_02"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 5,
+   "name": "ch99_200_com_idle_grooming_03"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 30,
+   "name": "ch99_200_com_idle_change_WA_to_NM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 33,
+   "name": "ch99_200_com_idle_change_WA_to_NM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 36,
+   "name": "ch99_200_com_idle_change_WA_to_NM"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 100,
+   "name": "ch99_200_com_walk_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 106,
+   "name": "ch99_200_com_walk_start"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 112,
+   "name": "ch99_200_com_walk_end"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 200,
+   "name": "ch99_200_com_run_loop"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 206,
+   "name": "ch99_200_com_run_start"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 208,
+   "name": "ch99_200_com_run_start_B_L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 209,
+   "name": "ch99_200_com_run_start_B_R"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 212,
+   "name": "ch99_200_com_run_end"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 280,
+   "name": "ch99_200_com_walk_loop_uphill"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 281,
+   "name": "ch99_200_com_walk_loop_downhill"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 400,
+   "name": "ch99_200_com_lading_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 401,
+   "name": "ch99_200_com_lading_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 415,
+   "name": "ch99_200_com_fall_loop_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 416,
+   "name": "ch99_200_com_fall_loop_vertical"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 452,
+   "name": "ch99_200_com_turn_90L"
+  },
+  {
+   "bank": 0,
+   "endframe": 0,
+   "id": 453,
+   "name": "ch99_200_com_turn_90R"
+  },
+  {
+   "bank": 1,
+   "endframe": 0,
+   "id": 999,
+   "name": "LowerLayer"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 500,
+   "name": "ch99_200_dmg_blown_start_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 600,
+   "name": "ch99_200_dmg_blown_loop_F"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 650,
+   "name": "ch99_200_dmg_blown_bound_loop_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 660,
+   "name": "ch99_200_dmg_blown_bound_loop_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 670,
+   "name": "ch99_200_dmg_blown_bound_loop_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 680,
+   "name": "ch99_200_dmg_blown_bound_loop_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 900,
+   "name": "ch99_200_dmg_hitdown_N_02"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1200,
+   "name": "ch99_200_dmg_downbound_high"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1201,
+   "name": "ch99_200_dmg_downbound_high"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1300,
+   "name": "ch99_200_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1301,
+   "name": "ch99_200_dmg_down_loop_faceD"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1500,
+   "name": "ch99_200_dmg_standup_faceU"
+  },
+  {
+   "bank": 10,
+   "endframe": 0,
+   "id": 1501,
+   "name": "ch99_200_dmg_standup_faceD"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 0,
+   "name": "CrawlStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 1,
+   "name": "CrawlLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 2,
+   "name": "CrawlDashStart"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 3,
+   "name": "CrawlDashLoop"
+  },
+  {
+   "bank": 11,
+   "endframe": 0,
+   "id": 100,
+   "name": "BlownBound"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 700,
+   "name": "ch99_200_pin_lift_idle_loop"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 701,
+   "name": "ch99_200_pin_lift_idle_loop_shake"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 710,
+   "name": "ch99_200_pin_lift_start"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 715,
+   "name": "ch99_200_pin_lift_start_down_faceD"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 720,
+   "name": "ch99_200_pin_lift_release"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 721,
+   "name": "ch99_200_pin_lift_drop"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 722,
+   "name": "ch99_200_pin_lift_release_down_faceU"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 730,
+   "name": "ch99_200_pin_lift_escape"
+  },
+  {
+   "bank": 30,
+   "endframe": 0,
+   "id": 740,
+   "name": "ch99_200_pin_lift_throw"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 0,
+   "name": "ch99_200_liv_eat_start"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 1,
+   "name": "ch99_200_liv_eat_loop"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 9,
+   "name": "ch99_200_liv_eat_end"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 10,
+   "name": "ch99_200_liv_idle_drink_start"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 11,
+   "name": "ch99_200_liv_idle_drink_loop"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 19,
+   "name": "ch99_200_liv_idle_drink_end"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 20,
+   "name": "ch99_200_liv_sleep_start"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 21,
+   "name": "ch99_200_liv_sleep_loop"
+  },
+  {
+   "bank": 60,
+   "endframe": 0,
+   "id": 29,
+   "name": "ch99_200_liv_sleep_end"
+  }
+ ],
+ "target": "ch299200_A_00",
+ "creature": "Rabbit",
+ "creature_source": "EnemySpawner/charRef.lua"
+}
