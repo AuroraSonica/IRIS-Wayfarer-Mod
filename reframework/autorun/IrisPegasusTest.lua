@@ -1,17 +1,14 @@
 --[[--------------------------------------------------------------------------
-IRIS - Pegasus mesh test harness                                    2026-08-11
+IRIS / LYRA - Pegasus mesh test harness                             2026-08-11
 
 Loads `character/ch/ch53_000/pegasus.mesh` (shipped by IRIS_09_pegasus.pak) and
 swaps it onto ONE live griffin, per-instance. Wild griffins are untouched unless
 you press the button. Nothing here is automatic.
 
-FIRST-TEST SCOPE: mesh only, paired with the STOCK ch53_000.mdf2. The exported
-mesh reproduces the vanilla 25-material table in the vanilla ORDER, so the live
-material resource still resolves and no set_Material call is needed - which is
-the safest possible swap (see notes below). Colours will therefore be the
-GRIFFIN'S textures sampled through the pegasus UVs, i.e. scrambled. That is
-EXPECTED for this build; it proves load + skin + animate. The white coat needs a
-custom mdf2 + .tex, which is the next step.
+v0.3 is a mesh-only diagnostic paired with the STOCK ch53_000.mdf2. Colours are
+therefore expected to be scrambled; it isolates the corrected submesh/material
+order from every other change. v0.4 adds a custom 25-slot MDF and white coat.
+Enable the material checkbox only when the v0.4 package is installed.
 
 ⛔ SAFETY: `sdk.create_resource` on a path the engine cannot serve is an INSTANT
 CTD (c000001d), so this script does NOTHING until you tick "Arm". Only arm it
@@ -25,13 +22,15 @@ do not change the material count, because a mesh swap alone still re-registers
 the render surface.
 ----------------------------------------------------------------------------]]
 
-local MESH_PATH  = "character/ch/ch53_000/pegasus.mesh"
-local WARM_GATE  = 15.0      -- seconds of streaming before a holder may be built
-local LOGTAG     = "[IrisPegasus] "
+local MESH_PATH      = "character/ch/ch53_000/pegasus.mesh"
+local MATERIAL_PATH  = "riftspeak/pegasus/pegasus.mdf2"
+local WARM_GATE      = 15.0  -- seconds of streaming before holders may be built
+local LOGTAG         = "[IrisPegasus] "
 
-local C = { armed = false }
+local C = { armed = false, use_custom_material = false }
 local R = {
     res = nil, holder = nil, warm_at = nil, failed = false,
+    mdf_res = nil, mdf_holder = nil,
     status = "disarmed", last = "", swapped = {},
 }
 
@@ -52,10 +51,15 @@ local function get_component(go, tname)
     return nil
 end
 
+local function resources_ready()
+    return valid(R.holder)
+        and (not C.use_custom_material or valid(R.mdf_holder))
+end
+
 -- ---------------------------------------------------------------- resources
 local function warm()
     if R.failed or not C.armed then return false end
-    if valid(R.holder) then return true end
+    if resources_ready() then return true end
     if not R.res then
         local ok = pcall(function()
             local res = sdk.create_resource("via.render.MeshResource", MESH_PATH)
@@ -68,18 +72,46 @@ local function warm()
         end
         log("pegasus mesh pinned; streaming (" .. WARM_GATE .. "s gate)")
     end
+    if C.use_custom_material and not R.mdf_res then
+        local ok = pcall(function()
+            local res = sdk.create_resource(
+                "via.render.MeshMaterialResource", MATERIAL_PATH)
+            if res then res:add_ref(); R.mdf_res = res; R.warm_at = os.clock() end
+        end)
+        if not ok or not R.mdf_res then
+            R.failed = true
+            R.status = "material resource NIL - install the v0.4 package"
+            log(R.status); return false
+        end
+        log("Pegasus material pinned; streaming (" .. WARM_GATE .. "s gate)")
+    end
     local age = os.clock() - (R.warm_at or 0)
     if age < WARM_GATE then
         R.status = string.format("streaming %.0fs / %.0fs", age, WARM_GATE)
         return false
     end
     pcall(function()
-        local h = R.res:create_holder("via.render.MeshResourceHolder")
-        if h then h:add_ref(); R.holder = h end
+        if not valid(R.holder) then
+            local h = R.res:create_holder("via.render.MeshResourceHolder")
+            if h then h:add_ref(); R.holder = h end
+        end
     end)
-    if valid(R.holder) then R.status = "pegasus mesh READY" else R.status = "holder build failed" end
+    if C.use_custom_material then
+        pcall(function()
+            if not valid(R.mdf_holder) then
+                local h = R.mdf_res:create_holder("via.render.MeshMaterialResourceHolder")
+                if h then h:add_ref(); R.mdf_holder = h end
+            end
+        end)
+    end
+    if resources_ready() then
+        R.status = C.use_custom_material and "mesh + white coat READY"
+            or "pegasus mesh READY (stock material)"
+    else
+        R.status = "holder build failed"
+    end
     log(R.status)
-    return valid(R.holder)
+    return resources_ready()
 end
 
 -- ------------------------------------------------------------------ griffins
@@ -195,7 +227,7 @@ local function probe(go)
 end
 
 local function swap(go)
-    if not valid(R.holder) then return false, "holder not ready" end
+    if not resources_ready() then return false, "resource holders not ready" end
     local mesh = find_mesh(go)
     if not mesh then return false, "no via.render.Mesh on this griffin" end
 
@@ -213,25 +245,46 @@ local function swap(go)
         note = "EyeGlowController reset + latched"
     end)
 
-    local old = nil
-    pcall(function() old = mesh:call("getMesh") or mesh:call("get_Mesh") end)
+    local old, old_mat = nil, nil
+    pcall(function() old = mesh:call("getMesh") end)
+    if not old then pcall(function() old = mesh:call("get_Mesh") end) end
+    if C.use_custom_material then
+        pcall(function() old_mat = mesh:call("get_Material") end)
+        if not old_mat then pcall(function() old_mat = mesh:call("getMaterial") end) end
+    end
     pcall(function() mesh:call("set_Enabled", false) end)
     local ok, err = pcall(function() mesh:call("setMesh", R.holder) end)
+    if ok and C.use_custom_material then
+        local mat_ok, mat_err = pcall(function()
+            mesh:call("set_Material", R.mdf_holder)
+        end)
+        if not mat_ok then
+            mat_ok, mat_err = pcall(function()
+                mesh:call("setMaterial", R.mdf_holder)
+            end)
+        end
+        if not mat_ok then ok = false; err = mat_err end
+    end
     pcall(function() mesh:call("set_Enabled", true) end)
 
     if not ok then
-        if old then
-            pcall(function() mesh:call("set_Enabled", false) end)
-            pcall(function() mesh:call("setMesh", old) end)
-            pcall(function() mesh:call("set_Enabled", true) end)
+        pcall(function() mesh:call("set_Enabled", false) end)
+        if old then pcall(function() mesh:call("setMesh", old) end) end
+        if old_mat then
+            local restored = pcall(function() mesh:call("set_Material", old_mat) end)
+            if not restored then pcall(function() mesh:call("setMaterial", old_mat) end) end
         end
+        pcall(function() mesh:call("set_Enabled", true) end)
         -- a holder built from a warmed pinned resource that still throws is stale:
         -- drop the HOLDER only, never the pinned resource (dropping it restarts the
         -- ~12 s stream from zero and you can never win the race)
         R.holder = nil
         return false, "setMesh threw: " .. tostring(err) .. " | " .. note
     end
-    R.swapped[#R.swapped+1] = { go = go, old = old, mesh = mesh }
+    R.swapped[#R.swapped+1] = {
+        go = go, old = old, old_mat = old_mat, mesh = mesh,
+        used_custom_material = C.use_custom_material,
+    }
     return true, "swapped (" .. note .. ")"
 end
 
@@ -241,6 +294,14 @@ local function revert_all()
         pcall(function()
             s.mesh:call("set_Enabled", false)
             if s.old then s.mesh:call("setMesh", s.old) end
+            if s.used_custom_material and s.old_mat then
+                local restored = pcall(function()
+                    s.mesh:call("set_Material", s.old_mat)
+                end)
+                if not restored then
+                    pcall(function() s.mesh:call("setMaterial", s.old_mat) end)
+                end
+            end
             s.mesh:call("set_Enabled", true)
         end)
         n = n + 1
@@ -251,12 +312,22 @@ end
 
 -- ----------------------------------------------------------------------- UI
 re.on_frame(function()
-    if C.armed and not R.failed and not valid(R.holder) then warm() end
+    if C.armed and not R.failed and not resources_ready() then warm() end
 end)
 
 re.on_draw_ui(function()
     if not imgui.tree_node("IRIS - Pegasus mesh test") then return end
     local ch
+    if not C.armed then
+        _, C.use_custom_material = imgui.checkbox(
+            "Use v0.4 white coat material", C.use_custom_material)
+        if C.use_custom_material then
+            imgui.text_colored("Requires the v0.4 package; a missing resource can CTD.",
+                0xFF66AAFF)
+        end
+    else
+        imgui.text("material: " .. (C.use_custom_material and "v0.4 white coat" or "stock Griffin"))
+    end
     ch, C.armed = imgui.checkbox("Arm (only after the pak is installed)", C.armed)
     if ch and C.armed then R.failed = false; R.status = "arming"; warm() end
     imgui.text("status: " .. tostring(R.status))

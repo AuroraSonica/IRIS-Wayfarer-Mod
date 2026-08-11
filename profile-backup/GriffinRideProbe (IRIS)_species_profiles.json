@@ -67,6 +67,7 @@
         "route3_landing_descent_clip": 5210,
         "route3_landing_height_offset": 0.0,
         "route3_mountable": true,
+        "route3_pawn_ride_back": 3.0,
         "route3_rise_ascend_clip": -1,
         "route3_rise_ascend_start_clip": -1,
         "route3_rise_clip_bank": 0,

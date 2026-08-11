@@ -482,6 +482,13 @@ function griffin_tamed_tick()
                     S.route3_scale_snap_at = 0.0
                 end
                 tf:call("set_LocalScale", make_vec3(nx, nx, nx))
+                -- diag (Shadow-not-growing hunt, 08-11): what the one true applier applied
+                if (tonumber(S.scale_easer_dbg_at) or 0.0) < now then
+                    S.scale_easer_dbg_at = now + 2.0
+                    pcall(function() log.info(string.format(
+                        "[GriffinScout] scale easer: base=%.2f gene=%.2f want=%.2f wrote=%.2f (was %.2f)",
+                        scale_target, want / math.max(0.01, scale_target), want, nx, cx)) end)
+                end
             end)
         else
             S.route3_scale_target = nil

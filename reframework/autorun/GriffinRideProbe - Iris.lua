@@ -9251,7 +9251,7 @@ griffin_profile_keys = {
     "flap_glide_bank", "route3_rise_node_up", "route3_rise_node_down",
     "route3_rise_ascend_clip", "route3_rise_ascend_start_clip",
     "route3_rise_descend_clip", "route3_rise_descend_start_clip", "route3_rise_clip_bank",
-    "route3_ground_jump_windup", "route3_rise_secs",
+    "route3_ground_jump_windup", "route3_rise_secs", "route3_pawn_ride_back",
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
@@ -9363,6 +9363,13 @@ function griffin_species_profile_apply(key)
             p.route3_ground_jump_windup = tonumber(C.route3_ground_jump_windup) or 0.5
             p.route3_rise_secs = tonumber(C.route3_rise_secs) or 1.75
         end
+        migrated = true
+    end
+    -- v6 2026-08-11: pawn seat goes per-species. Aurora's knock theory: player + pawn colliding
+    -- on the back when nodes pitch the body. The drake's back is long -- seat the pawn well aft.
+    if p.route3_pawn_ride_back == nil then
+        p.route3_pawn_ride_back = key:find("ch257", 1, true) and 3.0
+            or (tonumber(C.route3_pawn_ride_back) or 0.0)
         migrated = true
     end
     -- v5 2026-08-11: v4 shipped windup 3.0; Aurora field-timed it "about a second off" -> 2.0.
@@ -13802,7 +13809,9 @@ function route3_ground_jump_tick(now, ch, go)
         -- The wing-flap + fall-loop switches fire in the airborne arc below -- our old jump held 422
         -- the whole way = the "missing half" (Aurora found the middle clips). All species-tunable.
         play_griffin_motion(math.floor(tonumber(C.route3_jump_clip_start) or 422), 0, true)
-        S.audition_until_clock = now + 2.2
+        -- protect the launch clip through wind-up + arc: a fixed 2.2s expired mid-arc on the
+        -- drake (2.0s wind-up) and the ground gait painter walked her through the air
+        S.audition_until_clock = now + 2.2 + math.max(0.0, tonumber(C.route3_ground_jump_windup) or 0.3)
         return true
     end
 
@@ -14421,6 +14430,19 @@ if rel_method then
             end
             local other = a_mount and b or a
             S.relation_hits = S.relation_hits + 1
+            -- ⛔⛔ 08-11 (Aurora: "Lyra just took out my wolf xD and is still trying to
+            -- kill it"): the party-friend answer used to sit at the BOTTOM of this hook,
+            -- gated on C.friendly_to_party / friendly_to_world -- config drift across
+            -- eras could leave both false, and then the hook deferred to the NATIVE
+            -- answer, where pawn-vs-ch223-monster is ENEMY. Lyra was doing exactly what
+            -- the engine told her. The taming arc settled this: relationship
+            -- classification is THE lever that holds a pawn -- so for the PLAYER and
+            -- PARTY vs a stable companion it is now UNCONDITIONAL, above every
+            -- world/attackable carve-out (those already exclude the party anyway).
+            if is_player_or_party(other) then
+                S.friend_hits = S.friend_hits + 1
+                return REL_FRIEND
+            end
             -- UNLEASHED: her native monster AI must see real enemies to fight.
             -- Keep ONLY the player + party forced-friendly (the safety shield);
             -- for everyone else defer to the game (native = hostile to enemies)
@@ -21118,7 +21140,7 @@ function griffin_node_exit_pump(now)
         .. " (try " .. tostring(S.route3_node_exit_tries) .. ", now " .. live .. ")"
 end
 
-function griffin_node_lockout_begin(leaf, now, src)
+function griffin_node_lockout_begin(leaf, now, src, keep_cam)
     if C.route3_node_lockout == false then return end
     -- ⛔ a NEW node fire invalidates any pending pounce-landing order: a stale flag here landed
     -- the loop-the-loop mid-air (2026-08-06) -- the deferred grounding belongs to ONE retire only
@@ -21136,10 +21158,14 @@ function griffin_node_lockout_begin(leaf, now, src)
     -- worked once but then it wouldn't work again". Its timer was only cleared when the lock fully
     -- released, so a second loop fired while the first 8s lock was still held saw a stale timer,
     -- decided the shot was already over, and never filmed. Firing a node always starts a new shot.
-    S.route3_loopcam_t0 = nil
-    S.route3_loopcam_yaw = nil
-    S.route3_loopcam_anchor = nil
-    S.route3_loopcam_travel_max = 0.0   -- fresh shot = fresh peak-travel reading
+    -- keep_cam: a HOLD re-fire of the same node mid-window must NOT restart the shot (Aurora:
+    -- "it does the camera thing twice") -- same press, same shot.
+    if keep_cam ~= true then
+        S.route3_loopcam_t0 = nil
+        S.route3_loopcam_yaw = nil
+        S.route3_loopcam_anchor = nil
+        S.route3_loopcam_travel_max = 0.0   -- fresh shot = fresh peak-travel reading
+    end
 end
 
 function griffin_node_lockout_active(now)
@@ -21268,8 +21294,12 @@ function route3_rise_start_clip(dir, dur, now)
             pcall(function() request_griffin_action(leaf, 4) end)
             pcall(function() request_griffin_action(leaf, 0) end)
             pcall(function() griffin_rise_crash_mark("node request SURVIVED (did not AV on the call itself)") end)
-            S.base_owner = { name = "rise", until_clock = now + 0.6 }
-            S.audition_until_clock = now + 0.3
+            -- ⭐ protect the node's ANIMATION for the whole rise window (2026-08-11): the old
+            -- 0.3/0.6s leases let the flap repaint stomp L0 ~1s in -- which HIDES a node's
+            -- animation (tape law) even while the FSM stays in the node. On short bursts this
+            -- is why "the animation doesn't last". The exit pump still retires at window end.
+            S.base_owner = { name = "rise", until_clock = now + math.max(0.6, tonumber(dur) or 0.6) }
+            S.audition_until_clock = now + math.max(0.3, tonumber(dur) or 0.3)
             -- the node WAKES her combat state (same as the WingThunder gust) -> re-calm when its window
             -- ends, or she floats above ground on landing/dismount (checked in griffin_efx_reaper_tick).
             S.route3_rise_recalm_at = now + math.max(0.5, tonumber(dur) or 1.0) + 0.6
@@ -21471,7 +21501,11 @@ function route3_rise_tick()
             S.route3_rise_hold_fires = (tonumber(S.route3_rise_hold_fires) or 0) + 1
             pcall(function() request_griffin_action(hold_node, 4) end)
             pcall(function() request_griffin_action(hold_node, 0) end)
-            pcall(function() griffin_node_lockout_begin(hold_node, now) end)
+            pcall(function() griffin_node_lockout_begin(hold_node, now, "rise", true) end)
+            -- refresh the paint protection to the window edge so the flap repaint can't stomp
+            -- the re-fired node either
+            S.base_owner = { name = "rise", until_clock = math.max(hold_until, now + 0.6) }
+            S.audition_until_clock = math.max(hold_until, now + 0.3)
             S.route3_node_exit_status = string.format("hold re-fire #%d: %s",
                 tonumber(S.route3_rise_hold_fires) or 0, hold_node)
         else
@@ -29086,6 +29120,17 @@ _G.IrisGriffinBridge = {
                     if m9 and m9 > 0 then hpmax9 = m9 end
                 end)
             end
+            -- parked + away: PROJECT the stable-rest regen read-only (Aurora: "the HP
+            -- slowly rises when dismissed but that's not showing"). ⛔ NEVER call
+            -- griffin_stable_apply_elapsed_rest from a read path -- it clears away_since,
+            -- and the summon HP-handover keys off that field; the projection is the same
+            -- formula with no writes.
+            if not (live_id == r.id and S.griffin ~= nil)
+                and tonumber(r.away_since) and hp9 and hpmax9 and hpmax9 > 0 then
+                local since9 = tonumber(r.hp_rest_at) or tonumber(r.away_since)
+                local rate9 = math.max(0.0, tonumber(C.route3_stable_regen_hp_per_sec) or 1.0)
+                hp9 = math.min(hpmax9, math.max(0.0, hp9) + math.max(0, os.time() - since9) * rate9)
+            end
             out[#out + 1] = {
                 id = r.id, name = r.name, gender = r.gender, label = label,
                 species = r.species, kind = r.kind, variant = r.variant,
@@ -29318,7 +29363,15 @@ _G.IrisGriffinBridge = {
     -- along its in-game-day growth curve; at full size the hatch record retires for good
     growth_refresh = function()
         local rec = griffin_stable_live_rec()
-        if not rec then return end
+        if not rec then
+            -- diag (Shadow-not-growing hunt, 08-11): a NIL live-rec here means the growth
+            -- never applies -- say so instead of dying silently
+            if (tonumber(S.wyrm_growth_dbg_at) or 0.0) < os.clock() then
+                S.wyrm_growth_dbg_at = os.clock() + 5.0
+                pcall(function() log.info("[GriffinScout] growth: live_rec NIL (no application)") end)
+            end
+            return
+        end
         if rec.hatch then
             local h9 = rec.hatch
             local igh9 = iris_bridge_igh()
@@ -29327,8 +29380,10 @@ _G.IrisGriffinBridge = {
             local t9 = math.min(1.0, math.max(0.0, (igh9 - (tonumber(h9.igh0) or igh9)) / 24.0 / gd9))
             local baby9 = tonumber(h9.baby_scale) or 0.12
             local full9 = tonumber(h9.full) or 0.45
-            -- the SIZE gene rides the application only -- h9.full stays base
-            pcall(function() griffin_apply_body_scale((baby9 + (full9 - baby9) * t9) * iris_iv_size_mult(), true) end)
+            -- ⛔ 08-11 round 2: NO gene multiply here -- apply_body_scale only SETS the
+            -- target and the stable.lua EASER multiplies the gene at application; doing
+            -- it here too COMPOUNDED it (0.86 x 0.86 shrank grown Shadow to ~1.37)
+            pcall(function() griffin_apply_body_scale(baby9 + (full9 - baby9) * t9, true) end)
             if t9 >= 1.0 then
                 rec.hatch = nil   -- grown: a full companion from here on
                 pcall(function() griffin_stable_write() end)
@@ -29355,14 +29410,29 @@ _G.IrisGriffinBridge = {
             elseif (tonumber(w9.to) or 1.0) > line9 then w9.to = line9 end
             if (tonumber(w9.from) or 1.0) > line9 then w9.from = line9 end
             local igh9 = iris_bridge_igh()
-            if not igh9 then return end
+            if not igh9 then
+                if (tonumber(S.wyrm_growth_dbg_at) or 0.0) < os.clock() then
+                    S.wyrm_growth_dbg_at = os.clock() + 5.0
+                    pcall(function() log.info("[GriffinScout] growth: in-game clock UNREADABLE (no application)") end)
+                end
+                return
+            end
             local gd9 = math.max(0.05, tonumber(w9.days) or 1.0)
             local t9 = math.min(1.0, math.max(0.0, (igh9 - (tonumber(w9.igh0) or igh9)) / 24.0 / gd9))
             local from9 = tonumber(w9.from) or 1.0
             local to9 = tonumber(w9.to) or 1.0
-            -- the SIZE gene rides the application only -- w9.to/from stay base, so the mount
-            -- line/gates keep meaning "grown", while a big-gened wolf grows visibly bigger
-            pcall(function() griffin_apply_body_scale((from9 + (to9 - from9) * t9) * iris_iv_size_mult(), true) end)
+            if (tonumber(S.wyrm_growth_dbg_at) or 0.0) < os.clock() then
+                S.wyrm_growth_dbg_at = os.clock() + 5.0
+                pcall(function() log.info(string.format(
+                    "[GriffinScout] wyrm growth: rec=%s igh=%.1f igh0=%.1f days=%.2f t=%.2f from=%.2f to=%.2f -> apply %.2f",
+                    tostring(rec.name), igh9, tonumber(w9.igh0) or -1.0, gd9, t9, from9, to9,
+                    from9 + (to9 - from9) * t9)) end)
+            end
+            -- ⛔ 08-11 round 2: NO gene multiply here -- the EASER (the one true applier
+            -- behind apply_body_scale's target) multiplies the gene once at application.
+            -- Doing it in both places COMPOUNDED the shrink on low-size genes (Aurora:
+            -- "marked as wyrm ritual but is not sized up" -- Shadow, SIZE gene 1).
+            pcall(function() griffin_apply_body_scale(from9 + (to9 - from9) * t9, true) end)
         end
     end,
     wyrmfeed = function(to_mount)
@@ -29376,7 +29446,12 @@ _G.IrisGriffinBridge = {
         if rec.hatch then return -1 end   -- a hatchling grows on its OWN clock first
         rec.wyrm = rec.wyrm or { fed = 0 }
         local w9 = rec.wyrm
-        w9.from = tonumber(S.route3_scale_target) or tonumber(w9.to) or 1.0
+        -- ⛔ 08-11 (the Shadow receipts: igh0 re-stamped by every rite RE-RUN, from=1.0):
+        -- re-blessing an ALREADY-GROWN companion used to stamp from = the base scale
+        -- target and shrink it back to a puppy for the whole regrowth window. from = the
+        -- larger of the current target and the existing growth -- a grown beast never
+        -- shrinks from being blessed again.
+        w9.from = math.max(tonumber(S.route3_scale_target) or 1.0, tonumber(w9.to) or 1.0)
         local line9 = tonumber(C.wyrm_mount_scale) or 1.85   -- the mount line (08-11: 2.4 was TOO big)
         if to_mount then
             w9.fed = math.max(4, (tonumber(w9.fed) or 0) + 3)   -- >= the cap's crystal count
@@ -29818,7 +29893,7 @@ _G.IrisGriffinBridge = {
             walk = false, t0 = os.clock(), last = os.clock(),
             fc_off = true, ferry = true, ferry_spd = 45.0, ferry_clear = 55.0 }
         pcall(function() log.info(string.format(
-            "[OxTame] SAFE RELAY dispatched: distant corridor -> native dive line-up at 250m -> committed-stoop puppet finish (%.1f, %.1f, %.1f)",
+            "[OxTame] SAFE RELAY dispatched: distant corridor -> native prey approach and touchdown at 250m (%.1f, %.1f, %.1f)",
             gx0, gy0, gz0)) end)
         return true
     end,
@@ -29827,8 +29902,8 @@ _G.IrisGriffinBridge = {
         -- transform writes once a wild Griffin becomes fully simulated near the player. Do not
         -- keep climbing a body we no longer own. This is a real relay: dismantle every part of the
         -- puppet drive first, restore flight/AI authority, establish the supplied live prey, then
-        -- enter the Griffin's verified PreSwoop entry node. The bounded hold prevents her restored
-        -- decision maker from replacing the dive on its very next think.
+        -- enter the requested native close-approach node. IrisTaming asks for PreSwoop once the body
+        -- is inside that action's real envelope; there is no transform-puppet hand-off after this.
         local D = S.oxtame_fly
         if not (wch and D and D.ch and D.ferry == true and not D.sendoff) then return false end
         local same_body = D.ch == wch

@@ -1376,8 +1376,10 @@ local function iris_griffin_posture(wch)
     -- She is right, and the cause is this test being too wide. The whole `Catch.` tree was banned
     -- after the hanging-in-the-clouds run -- but that tree has TWO halves, and only one of them is
     -- the hazard:
-    --   `...CatchToEatStart` / `...CatchToEatLoopAccel`  = the SWOOP. She is descending, fast, and
-    --      committed -- tonight's log has her at 90m in LoopAccel and 31m in the next phase. This is
+    --   `...CatchToEatStart` = the vocal/wings-set WIND-UP. It looks committed, but the root can
+    --      still be stationary; it is not evidence of a dive.
+    --   `...CatchToEatLoopAccel` = the SWOOP. This only counts as a dive when the root is also
+    --      physically travelling down (the caller checks vertical velocity).
     --      exactly the dive the rite is waiting for, and we were refusing it all the way to the floor
     --      (`DESCENT dispatched (grounded pacify)` only fired once she had ALREADY landed, which is
     --      the `Locomotion.FrontFall` crash Aurora keeps seeing).
@@ -1388,7 +1390,11 @@ local function iris_griffin_posture(wch)
     -- her dive is "catch and eat the player". The seize clears PredationTarget as it takes her, so
     -- catching her mid-swoop is also what STOPS her completing the catch.
     if nm:find("Catch.", 1, true) then
-        if nm:find("Accel", 1, true) or nm:find("Start", 1, true) then return "stoop", nm end
+        -- CatchToEatStart is the howl/crouch/wings-set WIND-UP, not translation. Treating the pose as
+        -- a dive caused the 19:27 hand-off: puppet started at 136m while the body was not descending,
+        -- FlightControl retained authority, and the two writers drove her into the receding/circle CTD.
+        if nm:find("Accel", 1, true) then return "stoop", nm end
+        if nm:find("Start", 1, true) then return "lineup", nm end
         return "catch", nm
     end
     -- PreSwoop is only the high circling/line-up. Calling it a stoop lets the puppet seize before
@@ -1703,6 +1709,23 @@ local function oxtame_acquire_decoy(st)
             end)
             pcall(function() set_nav_stop(born, true) end)
             pcall(function() set_immunity_soft(born, true) end)
+            -- This body exists only as an AI target. Silence both audio component families rather
+            -- than guessing individual rat squeak trigger IDs.
+            pcall(function()
+                local wc = comp(go, "app.WwiseContainerApp")
+                if wc then
+                    -- Stop anything emitted during the spawn frame, then prevent later triggers.
+                    pcall(function() wc:call("stopAll()") end)
+                    wc:call("set_Enabled", false)
+                end
+            end)
+            pcall(function()
+                local sc = comp(go, "soundlib.SoundContainer")
+                if sc then
+                    pcall(function() sc:call("stopAll()") end)
+                    sc:call("set_Enabled", false)
+                end
+            end)
             pcall(function() log.info("[OxTame] live-bait decoy born and planted under the offering") end)
             return born
         end
@@ -2447,7 +2470,9 @@ pcall(function()
         :get_method("requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)")
     if not m then pcall(function() log.info("[IrisTaming] wyrm jump block: requestActionCore not found") end); return end
     sdk.hook(m, function(args)
-        if not S.wyrm_jump_gate then return end
+        -- 08-11: also holds Jump down while the Stable Screen is open -- pad A is both
+        -- "summon" there and Jump here, and the Arisen should not hop on every summon
+        if not (S.wyrm_jump_gate or _G.IrisStableUIOpen == true) then return end
         local block = false
         pcall(function()
             local cm = sdk.get_managed_singleton("app.CharacterManager")
@@ -6914,6 +6939,13 @@ re.on_application_entry("UpdateBehavior", function()
         local wu0 = upos(wgo0)
         if not wu0 then return end
         st0.lx = wu0.x; st0.ly = wu0.y; st0.lz = wu0.z   -- last-known, for the far-afield marker
+        -- Physical descent truth. An authored node name or dive pose is not motion; takeover gates
+        -- may only call a Griffin "stooping" after its root is genuinely travelling down.
+        local vydt0 = nowO - (tonumber(st0.vy_at) or nowO)
+        if st0.vy_y ~= nil and vydt0 > 0.15 then
+            st0.native_vy = (wu0.y - (tonumber(st0.vy_y) or wu0.y)) / vydt0
+        end
+        st0.vy_y = wu0.y; st0.vy_at = nowO
         local dc0 = corpse0 and dist(wu0, corpse0) or 99.0
         -- CONSENT departing timer (Aurora 07-20): in BAIT, if she's lured but drifts far (>600m), count
         -- her as leaving; coming back within 600m resets it. Past the give-up window she's stood down
@@ -7227,7 +7259,7 @@ re.on_application_entry("UpdateBehavior", function()
             end
         end
         if C.oxtame_guaranteed_approach ~= false and st0.stage == "bait" and st0.lured
-            and not st0.descend and not st0.native_dive_pending and corpse0 and dc0 > 25.0
+            and not st0.descend and not st0.native_dive_pending and not low0 and corpse0 and dc0 > 25.0
             and nowO >= (tonumber(st0.lure_t) or nowO) + math.max(0.0,
                 tonumber(C.oxtame_guaranteed_delay) or 0.8)
             and nowO >= (tonumber(st0.guaranteed_try_at) or 0.0) then
@@ -7550,7 +7582,17 @@ re.on_application_entry("UpdateBehavior", function()
         -- them -- see iris_griffin_posture), `LoopBrake` and the rest are the HOLD (seizing there is
         -- the hang-in-the-clouds loop).
         local post_now0 = iris_griffin_posture(wch0)
-        local stooping0 = (post_now0 == "stoop")
+        local stooping0 = (post_now0 == "stoop") and (tonumber(st0.native_vy) or 0.0) < -2.0
+        if st0.native_dive_pending then
+            local trace_key0 = tostring(busy_now0 or "?") .. "|" .. tostring(post_now0)
+            if st0.native_trace_key ~= trace_key0 then
+                st0.native_trace_key = trace_key0
+                pcall(function() log.info(string.format(
+                    "[OxTame] NATIVE PREY state=%s posture=%s vy=%.1f h=%.0f 3D=%.0f low=%s",
+                    tostring(busy_now0 or "?"), tostring(post_now0),
+                    tonumber(st0.native_vy) or 0.0, handoff_h0, dc0, tostring(low0))) end)
+            end
+        end
         -- TWO-STAGE NATIVE HAND-OFF (14:12 field trace). PreSwoop was rejected at h=246m;
         -- FlightPathTraceTarget then made an unnecessary low pass to 59m, climbed, and only accepted
         -- PreSwoop around 150m. Do not ask an attack set-up outside its own envelope. Let native
@@ -7581,7 +7623,9 @@ re.on_application_entry("UpdateBehavior", function()
                     if asked0 then
                         st0.native_dive_phase = "lineup_requested"
                         st0.native_dive_tries = tries0 + 1
-                        st0.native_dive_retry_at = nowO + 2.0
+                        -- Direct action changes propagate slowly through the wild body's AI/FSM pair.
+                        -- Retrying after two seconds restarted the wind-up before it could become a dive.
+                        st0.native_dive_retry_at = nowO + 8.0
                         pcall(function() log.info(string.format(
                             "[OxTame] PRE-SWOOP REQUEST at h=%.0fm / 3D=%.0fm try=%d (live was %s)",
                             handoff_h0, dc0, st0.native_dive_tries, tostring(busy_now0))) end)
@@ -7589,15 +7633,15 @@ re.on_application_entry("UpdateBehavior", function()
                 end
             end
         end
-        -- ⭐⭐ SHE HAS CAUGHT YOU (07-26). Her predation grab has CLOSED -- the prey we handed her is
-        -- the PLAYER and she is now hovering while holding it. Never seize into this (she is pinned at
-        -- hover height and the drive cannot win); cut the instruction that caused it so she lets go
-        -- and drops back to a normal approach. The offering is the meal; you are not.
+        -- Legacy PLAYER-target safety only. When the target is the scene-owned rat beneath the ox,
+        -- a Catch state is the native predation transaction we explicitly asked for: do not erase
+        -- its target or reset its action. Native flight must remain the sole owner through touchdown.
         -- ⚠ NARROWED 07-26: this now fires ONLY on the hold phase. While she is still SWOOPING
-        -- (`Start`/`LoopAccel`) posture returns "stoop", so the seize takes her mid-dive instead --
+        -- (`LoopAccel`) posture returns "stoop", so the legacy seize takes her mid-dive instead --
         -- which is the point, because this branch's `resetActionAndAI` would otherwise CANCEL the very
         -- dive we spend the whole approach asking for, and drop her the rest of the way unpuppeted.
-        if post_now0 == "catch" and st0.stage == "bait" and not st0.descend then
+        if post_now0 == "catch" and st0.stage == "bait" and not st0.descend
+            and C.oxtame_live_bait == false then
             if nowO >= (tonumber(st0.catch_cut_at) or 0.0) then
                 st0.catch_cut_at = nowO + 1.5
                 st0.decoy_reseat_at = os.clock() + 2.0 -- allow the native catch controller to release fully
@@ -7676,6 +7720,7 @@ re.on_application_entry("UpdateBehavior", function()
         local seize_ok0 = stooping0
         if st0.stage == "bait" and st0.lured and not st0.descend
             and C.oxtame_puppet_dive ~= false                    -- A/B: off = pure native, no seize
+            and C.oxtame_live_bait == false                      -- live prey can complete its own native dive; never add a second writer
             and not low0 and dc0 < seize_r0 and dc0 > 3.0
             and post_now0 ~= "catch"   -- ⛔ never into the predation hold: she is pinned at hover height
             -- ⛔ THE `oxtame_seize_needs_dive == false` BYPASS IS GONE (07-26). It was an A/B escape
@@ -8227,7 +8272,9 @@ re.on_application_entry("UpdateBehavior", function()
             -- local that turns out to be out of scope resolves to a nil GLOBAL, which would silently
             -- evaluate this branch to false forever instead of erroring. Cheap call, fires rarely.
             local air_ok0 = (C.oxtame_air_descend ~= false)
+                and C.oxtame_live_bait == false
                 and (iris_griffin_posture(wch0) == "stoop")
+                and (tonumber(st0.native_vy) or 0.0) < -2.0
             if wgrounded0 or air_ok0 then
                 st0.descend = true
                 st0.seize_cd = nowO + 10.0
@@ -8329,8 +8376,8 @@ re.on_application_entry("UpdateBehavior", function()
             pcall(function() local b0 = _G.IrisGriffinBridge; if b0 and b0.oxtame_fly_stop then b0.oxtame_fly_stop() end end)
             pcall(function() set_ground_glue(wgo0, true) end)   -- physics back: colliders for the eat-hold pin + the mount-grab
             -- ⛔⛔ TEAR DOWN THE APPROACH MACHINERY (07-25). The travel node needs a destination, so
-            -- the poke seats the PLAYER into her EnemyActionTargetList / _AIPositionTargetDict every
-            -- tick -- but that is an ENEMY-approach target, and nothing used to clear it. Left in
+            -- the lure seats a prey body into her EnemyActionTargetList / _AIPositionTargetDict every
+            -- tick. That is an approach target, and nothing used to clear it. Left in
             -- place it follows her through feed -> palm -> mount -> rodeo, where her AI keeps trying
             -- to approach a target that is RIDING ON HER BACK (Aurora: "she turned up but is now
             -- stuck in the sky"). The approach is over the moment she takes the bait: wipe it.
@@ -8340,7 +8387,7 @@ re.on_application_entry("UpdateBehavior", function()
                 pcall(function() bb9:call("clearEnemyTargetList") end)
                 pcall(function() bb9:call("updateEnemyTargetList") end)
             end)
-            pcall(function() local c9 = comp(wgo0, "app.Ch253000"); if c9 then c9:call("set_PredationTarget", nil) end end)
+            oxtame_decoy_disarm(st0, wch0, wgo0)
             st0.eat = { t0 = nowO, phase = "start" }
             st0.pacify_at = nowO + (tonumber(C.oxtame_meal_secs) or 16.0)
             iris_oxtame_seat(wch0, wgo0, corpse0, wu0)

@@ -85,6 +85,30 @@ local function ensure_fonts()
             fonts.std = imgui.load_font(file, math.floor(17 * sc + 0.5))
         end)
     end
+    -- ♀/♂: Sovngarde carries neither (the imgui atlas has NO fallback, unlike d2d's
+    -- DirectWrite substitution on the nameplates -- Aurora caught the difference).
+    -- Bake JUST the two gender glyphs from a Unicode-rich bundled face; with a
+    -- restricted range even the 9MB Noto costs a couple of atlas cells.
+    fonts.sym = nil
+    for _, cand in ipairs({ "LinLibertine_R.ttf", "NotoSansJP-Regular.ttf" }) do
+        if not fonts.sym then
+            pcall(function()
+                fonts.sym = imgui.load_font(cand, math.floor(17 * sc + 0.5), { 0x2640, 0x2642, 0 })
+            end)
+        end
+    end
+end
+
+local function text_w(s)
+    -- measured width of s in the std face (for stitching mixed-font segments)
+    local w = nil
+    if fonts.std then imgui.push_font(fonts.std) end
+    pcall(function()
+        local sz = imgui.calc_text_size(tostring(s))
+        w = sz and tonumber(sz.x) or nil
+    end)
+    if fonts.std then imgui.pop_font() end
+    return w
 end
 
 -- one layer for everything: pushed-font draw.text sits in the SAME drawlist as the rects
@@ -103,20 +127,109 @@ local function kb(vk)
     return dn
 end
 
-local function edge(vk, repeat_after, repeat_every)
+-- ── PAD (IrisFurnish's proven kit, ported verbatim): bits resolved BY ENUM NAME from
+-- via.hid.GamePadButton -- never hardcode masks, and never guess names ("B"/"Circle" are
+-- not fields; a bad name slides the lookup to the wrong button, the IrisFarming trap).
+local PAD = { names = {}, dpad = {}, face = {} }
+pcall(function()
+    local t = sdk.find_type_definition("via.hid.GamePadButton")
+    for _, f in ipairs(t:get_fields()) do
+        pcall(function() PAD.names[f:get_name()] = f:get_data() end)
+    end
+    local function pick(...)
+        for _, n in ipairs({ ... }) do if PAD.names[n] then return PAD.names[n] end end
+        return 0
+    end
+    PAD.dpad.up = pick("LUp", "Up", "DUp", "PadUp")
+    PAD.dpad.down = pick("LDown", "Down", "DDown", "PadDown")
+    PAD.face.a = pick("Decide", "A", "RDown")
+    PAD.face.b = pick("Cancel", "B", "RRight")
+    PAD.face.x = pick("Action", "X", "RLeft")
+    PAD.face.y = pick("Special", "Y", "RUp", "Triangle")
+    -- ⛔ 08-11 (furnish_log's name inventory): this enum has NO "Select"/"Back" -- the
+    -- centre cluster is CCenter/CLeft/CRight. CLeft = the View/Back/Select button; the
+    -- old ladder resolved 0 and the hold-to-open could never fire (Aurora caught it).
+    PAD.sel = pick("CLeft", "Select", "Back", "Share", "Minus")
+end)
+local function pad_button()
+    local v = 0
+    pcall(function()
+        local s = sdk.get_native_singleton("via.hid.GamePad")
+        local t = sdk.find_type_definition("via.hid.GamePad")
+        local d = sdk.call_native_func(s, t, "get_MergedDevice")
+        if d then v = d:call("get_Button") or 0 end
+    end)
+    return math.floor(v)
+end
+local function pdown(bit)
+    if not bit or bit == 0 then return false end
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then return false end
+    return (pad_button() & bit) ~= 0
+end
+
+-- ── WORLD PAUSE (Aurora: "all the buttons do something in game -- pause like a menu").
+-- IrisFurnish's requestPause kit + RiftSpeak's anti-underflow laws (the infini-freeze
+-- post-mortem): (1) only mark paused when the TRUE call confirmably fired; (2) NEVER fire
+-- a FALSE without holding a confirmed pause -- an unbalanced false underflows the engine
+-- pause stack = frozen-frame-with-audio, task-kill; (3) never pause during a transition
+-- (no player character = the call gets swallowed and the bookkeeping lies).
+-- ⚠ Reset Scripts while the screen is open would orphan our pause (Lua state wiped, native
+-- stack keeps the TRUE) -- the panel has an emergency release button for exactly that.
+local PAUSE_SIG = "requestPause(System.Boolean, app.PauseManager.PauseType, System.String, System.Action)"
+local function pause_value()
+    if U.pause_val then return U.pause_val end
+    local list, sel = {}, 1
+    pcall(function()
+        local td = sdk.find_type_definition("app.PauseManager.PauseType")
+        for _, f in ipairs(td:get_fields()) do
+            if f:is_static() then
+                local v; pcall(function() v = f:get_data() end)
+                if v == nil then pcall(function() v = f:get_data(nil) end) end
+                if v ~= nil then list[#list + 1] = { name = f:get_name(), value = v } end
+            end
+        end
+    end)
+    local function pp(pred) for i, e in ipairs(list) do if pred(e) then sel = i; return true end end return false end
+    local _ = pp(function(e) local l = e.name:lower(); return l:find("debug") and l:find("cam") end)
+        or pp(function(e) return e.name:lower():find("debug") end)
+        or pp(function(e) return e.value == 1 end)
+    U.pause_val = (list[sel] and list[sel].value) or 1
+    return U.pause_val
+end
+local function world_pause(on)
+    pcall(function()
+        local pm = sdk.get_managed_singleton("app.PauseManager")
+        if not pm then if not on then U.paused = false end return end
+        if on and not U.paused then
+            local pl = nil
+            pcall(function() pl = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer") end)
+            if not pl then return end   -- transition gate: the call would be swallowed
+            local ok = pcall(function() pm:call(PAUSE_SIG, true, pause_value(), "IrisStableUI", nil) end)
+            if ok then U.paused = true end
+        elseif (not on) and U.paused then
+            pcall(function() pm:call(PAUSE_SIG, false, U.pause_val or pause_value(), "IrisStableUI", nil) end)
+            U.paused = false
+        end
+    end)
+end
+
+-- edge/repeat keyed by ACTION name so keyboard and pad merge into one logical press
+local function edge2(name, dn, repeat_after, repeat_every)
     local now = os.clock()
-    local dn = kb(vk)
-    local h = held[vk]
+    local h = held[name]
     if dn and not h then
-        held[vk] = { at = now, rep = now + (repeat_after or 1e9) }
+        held[name] = { rep = now + (repeat_after or 1e9) }
         return true
     elseif dn and h and repeat_after and now >= h.rep then
         h.rep = now + (repeat_every or 0.12)
         return true
     elseif not dn then
-        held[vk] = nil
+        held[name] = nil
     end
     return false
+end
+local function edge(vk, repeat_after, repeat_every)
+    return edge2(vk, kb(vk), repeat_after, repeat_every)
 end
 
 local function say(s) U.msg = tostring(s); U.msg_until = os.clock() + 3.0 end
@@ -129,45 +242,95 @@ local function stable_rows()
 end
 
 -- ── input tick ──────────────────────────────────────────────────────────────────────────
+local function set_open(v)
+    U.open = v == true
+    _G.IrisStableUIOpen = U.open
+    U.confirm_id = nil
+    if U.open then U.cursor = 1 end
+    world_pause(U.open)
+end
+local function toggle_open() set_open(not U.open) end
+local function queue_action(kind, id, name)
+    -- ⛔ never touch bodies on a paused frame (the pause-spawn crash class): the action
+    -- queues, the menu closes and unpauses, and the work runs on the first LIVE frame
+    U.pending = { kind = kind, id = id, name = name }
+    set_open(false)
+end
 local function input_tick()
-    if edge(C.key_toggle) then
-        U.open = not U.open
-        U.confirm_id = nil
-        if U.open then U.cursor = 1 end
+    if edge2("toggle", kb(C.key_toggle)) then toggle_open() end
+    -- pad opener: HOLD Select/Back ~0.7s (a bare press stays free for whatever the game
+    -- binds it to; the hold is deliberate enough not to collide)
+    if pdown(PAD.sel) then
+        U.sel_t0 = U.sel_t0 or os.clock()
+        if os.clock() - U.sel_t0 > 0.7 then U.sel_t0 = 1e12; toggle_open() end
+    else
+        U.sel_t0 = nil
     end
+    -- keep the flag published even across reloads (the jump-block reads it)
+    _G.IrisStableUIOpen = U.open == true
     if not U.open then return end
+    if edge2("close", pdown(PAD.face.b)) then set_open(false); return end
     local rows = stable_rows()
     if #rows == 0 then return end
     if U.cursor > #rows then U.cursor = #rows end
     if U.cursor < 1 then U.cursor = 1 end
-    if edge(C.key_up, 0.35, 0.12) then U.cursor = math.max(1, U.cursor - 1); U.confirm_id = nil end
-    if edge(C.key_down, 0.35, 0.12) then U.cursor = math.min(#rows, U.cursor + 1); U.confirm_id = nil end
+    -- wraparound (Aurora): up from the top lands on the bottom, down from the bottom on the top
+    if edge2("up", kb(C.key_up) or pdown(PAD.dpad.up), 0.35, 0.12) then
+        U.cursor = (U.cursor <= 1) and #rows or (U.cursor - 1); U.confirm_id = nil
+    end
+    if edge2("down", kb(C.key_down) or pdown(PAD.dpad.down), 0.35, 0.12) then
+        U.cursor = (U.cursor >= #rows) and 1 or (U.cursor + 1); U.confirm_id = nil
+    end
     local row = rows[U.cursor]
     if not row then return end
     local b = bridge()
-    if edge(C.key_summon) and b then
-        local ok, why = nil, nil
-        pcall(function() ok, why = b.stable_summon(row.id) end)
-        say((ok and "" or "cannot summon: ") .. tostring(why or (ok and "summoning" or "?")))
+    -- CONTEXTUAL primary (Aurora): the row that is OUT dismisses; any other row summons
+    -- (stable_summon already dismisses the current companion as part of the switch).
+    -- All body-touching actions QUEUE and run after the unpause (queue_action).
+    if edge2("primary", kb(C.key_summon) or pdown(PAD.face.a)) and b then
+        queue_action(row.live and "dismiss" or "summon", row.id, row.name)
     end
-    if edge(C.key_dismiss) and b then
-        local ok, why = nil, nil
-        pcall(function() ok, why = b.stable_dismiss() end)
-        say(tostring(why or (ok and "dismissed" or "nothing to dismiss")))
-    end
-    if edge(C.key_release) and b then
+    if edge2("release", kb(C.key_release) or pdown(PAD.face.y)) and b then
         local now = os.clock()
         if U.confirm_id == row.id and now < (tonumber(U.confirm_until) or 0.0) then
             U.confirm_id = nil
-            local ok, why = nil, nil
-            pcall(function() ok, why = b.stable_release(row.id) end)
-            say(ok and (tostring(row.name) .. " released. Farewell.") or ("cannot release: " .. tostring(why)))
+            queue_action("release", row.id, row.name)
         else
             U.confirm_id = row.id
             U.confirm_until = now + 3.0
-            say("RELEASE " .. tostring(row.name) .. " FOREVER? Press Delete again to confirm.")
+            say("RELEASE " .. tostring(row.name) .. " FOREVER? Press again to confirm.")
         end
     end
+end
+
+-- ── deferred actions: run on the first LIVE frame after the menu closed ─────────────────
+local function pending_tick()
+    local p = U.pending
+    if not p or U.open then return end
+    local engine_paused = false
+    pcall(function()
+        engine_paused = type(griffin_world_paused) == "function" and griffin_world_paused() == true
+    end)
+    if engine_paused or U.paused then return end
+    U.pending = nil
+    local b = bridge()
+    if not b then return end
+    local ok, why = nil, nil
+    if p.kind == "summon" then
+        pcall(function() ok, why = b.stable_summon(p.id) end)
+    elseif p.kind == "dismiss" then
+        pcall(function() ok, why = b.stable_dismiss() end)
+    elseif p.kind == "release" then
+        pcall(function() ok, why = b.stable_release(p.id) end)
+    end
+    pcall(function()
+        local T = rawget(_G, "IrisTaming")
+        if T and T.prompt then
+            local msg = (p.kind == "release" and ok) and (tostring(p.name) .. " released. Farewell.")
+                or tostring(why or (ok and "done" or "failed"))
+            T.prompt("THE STABLE", msg, 3.0, ok and 0xFF80FFB0 or 0xFF8080FF)
+        end
+    end)
 end
 
 -- ── draw (colours authored ARGB; rc() converts at the call) ─────────────────────────────
@@ -223,12 +386,28 @@ local function draw_ui()
             if i == U.cursor then
                 draw.filled_rect(X + pad, yy - 2.0 * sc, list_w, rh - 2.0 * sc, rc(0x60C8A050))
             end
-            -- ⛔ no ♀/♂ glyphs: Sovngarde has none (they rendered "?") -- gender lives in
-            -- the detail pane as a word instead
             local col = (i == U.cursor) and 0xFFFFF0C8 or (r.live and COL.alive or COL.body)
-            txt(string.format("%s  (%s)%s", tostring(r.name or "?"),
-                tostring(r.label or "?"), r.live and "  [Out]" or ""),
-                X + pad + 6.0 * sc, yy, col)
+            -- mixed-font stitch: name in Sovngarde, ♀/♂ from the symbol face (measured
+            -- placement), rest in Sovngarde again. No symbol font loaded = clean skip.
+            local nm = tostring(r.name or "?")
+            local rest = string.format("  (%s)%s", tostring(r.label or "?"), r.live and "  [Out]" or "")
+            local x0 = X + pad + 6.0 * sc
+            txt(nm, x0, yy, col)
+            local xoff = x0 + (text_w(nm) or (#nm * 8.0 * sc))
+            local gs = (r.gender == "female" and "\u{2640}") or (r.gender == "male" and "\u{2642}") or nil
+            if gs and fonts.sym then
+                local gcol = (r.gender == "female" and 0xFFE8A8C8) or 0xFFA8C8E8
+                imgui.push_font(fonts.sym)
+                pcall(function() draw.text(gs, xoff + 5.0 * sc, yy, rc(gcol)) end)
+                local sw = nil
+                pcall(function()
+                    local sz = imgui.calc_text_size(gs)
+                    sw = sz and tonumber(sz.x) or nil
+                end)
+                imgui.pop_font()
+                xoff = xoff + 5.0 * sc + (sw or 12.0 * sc)
+            end
+            txt(rest, xoff, yy, col)
         end
         -- detail pane
         local r = rows[U.cursor]
@@ -240,11 +419,18 @@ local function draw_ui()
             if r.hatch then status = status .. "  (Hatchling)" end
             if r.wyrm then status = status .. "  (Wyrm-Grown)" end
             txt(status, rx + 10.0 * sc, ly + 36.0 * sc, r.live and 0xFF9AE89A or COL.dimtxt)
-            local by = ly + 66.0 * sc
+            local by = ly + 62.0 * sc
             local bar_x = rx + 70.0 * sc
             local bar_w = rw - 200.0 * sc   -- room for "99990 / 100000" beside the bar
-            -- current health (Aurora's ask): live body reads live; parked souls read the
-            -- stable-rest fields; nothing readable = an honest dash
+            -- section header: small gold title + a thin rule (Aurora: separate live
+            -- stats from the genes, and give the genes their own name)
+            local function section(title)
+                txt(title, rx + 10.0 * sc, by, 0xFFB8A070)
+                draw.filled_rect(rx + 10.0 * sc, by + 21.0 * sc, rw - 20.0 * sc, 1.0, rc(0x50C8A050))
+                by = by + 30.0 * sc
+            end
+            -- ── CONDITION: the living, changing stats ──
+            section("CONDITION")
             local hp, hpmax = tonumber(r.hp), tonumber(r.hp_max)
             txt("Health", rx + 10.0 * sc, by, COL.body)
             draw.filled_rect(bar_x, by + 5.0 * sc, bar_w, 10.0 * sc, rc(COL.trough))
@@ -257,7 +443,9 @@ local function draw_ui()
             else
                 txt("-", bar_x + bar_w + 8.0 * sc, by, COL.dimtxt)
             end
-            by = by + 34.0 * sc
+            by = by + 40.0 * sc
+            -- ── BLOODLINE: the born genes -- rolled once at the bond, bred forward ──
+            section("BLOODLINE")
             local iv = r.iv or {}
             for _, k in ipairs(IV_KEYS) do
                 local v = tonumber(iv[k]) or 0
@@ -281,7 +469,7 @@ local function draw_ui()
     end
     -- title LAST among strings, still same layer (rects never cover it)
     txt("THE  STABLE", X + pad, Y + pad * 0.6, COL.cream, true)
-    txt("[O] Close   [Enter] Summon   [Backspace] Dismiss   [Delete x2] Release",
+    txt("[O / B] Close    [Enter / A] Summon / Dismiss    [Delete / Y  x2] Release    (Pad: Hold Select To Open)",
         X + pad, Y + H - 26.0 * sc, COL.dimtxt)
     if U.msg and os.clock() < (tonumber(U.msg_until) or 0.0) then
         local warn = U.confirm_id ~= nil and os.clock() < (tonumber(U.confirm_until) or 0.0)
@@ -299,8 +487,48 @@ local function draw_ui()
     end
 end
 
+-- ── PAWN-COMMAND LOCK (Aurora: "dpad nav keeps making the pawn Go!/To Me!").
+-- Nick's PlayerInputProcessor skip-hook pattern, but the method names are DISCOVERED at
+-- install: anything order/command-shaped gets a pre-hook that eats the input ONLY while
+-- the screen is open (fast bail otherwise -- the mass-tracer law). If nothing matches,
+-- the full method list is dumped so the real name can be wired next session.
+local function install_order_lock()
+    if _G.IrisStableUIOrderLock then return end
+    pcall(function()
+        local td = sdk.find_type_definition("app.PlayerInputProcessor")
+        if not td then return end
+        local hooked = {}
+        for _, m in ipairs(td:get_methods() or {}) do
+            local nm = tostring(m:get_name() or "")
+            local ln = nm:lower()
+            if ln:find("order", 1, true) or ln:find("command", 1, true) then
+                pcall(function()
+                    sdk.hook(m, function(args)
+                        if _G.IrisStableUIOpen == true then return sdk.PreHookResult.SKIP_ORIGINAL end
+                    end, function(r) return r end)
+                    hooked[#hooked + 1] = nm
+                end)
+            end
+        end
+        _G.IrisStableUIOrderLock = true
+        pcall(function()
+            if #hooked > 0 then
+                log.info("[IrisStableUI] pawn-order lock hooked: " .. table.concat(hooked, ", "))
+            else
+                local all = {}
+                for _, m in ipairs(td:get_methods() or {}) do all[#all + 1] = tostring(m:get_name()) end
+                table.sort(all)
+                json.dump_file("IRIS/stableui_inputproc_methods.json", all)
+                log.info("[IrisStableUI] pawn-order lock: no order/command methods found -- list dumped to IRIS/stableui_inputproc_methods.json")
+            end
+        end)
+    end)
+end
+install_order_lock()
+
 re.on_frame(function()
     pcall(input_tick)
+    pcall(pending_tick)
     pcall(draw_ui)
 end)
 
@@ -312,7 +540,17 @@ re.on_draw_ui(function()
         if ch then C.show_pad_mask = v; save_cfg() end
         ch, v = imgui.slider_float("UI scale", tonumber(C.scale) or 1.0, 0.6, 1.6)
         if ch then C.scale = v; save_cfg() end
-        if imgui.button("Open/close now") then U.open = not U.open end
+        if imgui.button("Open/close now") then toggle_open() end
+        -- ⚠ emergency: Reset Scripts while the screen was open orphans our engine pause
+        -- (Lua bookkeeping wiped, native TRUE still standing). This fires ONE balanced
+        -- release. Only press it if the world is stuck paused after a reset.
+        if imgui.button("EMERGENCY: release a stuck stable-screen pause") then
+            pcall(function()
+                local pm = sdk.get_managed_singleton("app.PauseManager")
+                if pm then pm:call(PAUSE_SIG, false, pause_value(), "IrisStableUI", nil) end
+                U.paused = false
+            end)
+        end
         imgui.tree_pop()
     end
 end)
