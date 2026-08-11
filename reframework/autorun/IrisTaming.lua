@@ -11388,6 +11388,21 @@ _G.IrisTaming.has_pet = function(addr)
     end
     return false
 end
+-- 08-11 (the released-rabbit fallout): a stable RELEASE must also free the TAMING-side
+-- pet -- critters live in BOTH rosters, and this one kept the plate, the petting and the
+-- shoulder-perch alive after the bond was severed ("just called Rabbit", still droning).
+-- Takes the CHARACTER address (same as has_pet -- the address-class law).
+_G.IrisTaming.forget_pet = function(addr)
+    if not addr then return false end
+    for kch in pairs(S.tamed or {}) do
+        local ok, a = pcall(function() return kch:get_address() end)
+        if ok and a == addr then
+            S.tamed[kch] = nil
+            return true
+        end
+    end
+    return false
+end
 -- ONE switch for every plate, taming-side checkbox: the probe asks before drawing its own
 _G.IrisTaming.nameplates_on = function() return C.companion_nameplate ~= false end
 -- GRIP AID: the probe's climb-stamina hold extends to WILD GRIFFINS while this is on

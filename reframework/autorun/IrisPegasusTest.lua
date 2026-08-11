@@ -5,10 +5,9 @@ Loads `character/ch/ch53_000/pegasus.mesh` (shipped by IRIS_09_pegasus.pak) and
 swaps it onto ONE live griffin, per-instance. Wild griffins are untouched unless
 you press the button. Nothing here is automatic.
 
-v0.3 is a mesh-only diagnostic paired with the STOCK ch53_000.mdf2. Colours are
-therefore expected to be scrambled; it isolates the corrected submesh/material
-order from every other change. v0.4 adds a custom 25-slot MDF and white coat.
-Enable the material checkbox only when the v0.4 package is installed.
+Mesh-only diagnostics are paired with the STOCK ch53_000.mdf2, so scrambled
+colour is expected. White-coat releases add a custom 25-slot MDF and texture.
+Enable the material checkbox only when one of those packages is installed.
 
 ⛔ SAFETY: `sdk.create_resource` on a path the engine cannot serve is an INSTANT
 CTD (c000001d), so this script does NOTHING until you tick "Arm". Only arm it
@@ -80,7 +79,7 @@ local function warm()
         end)
         if not ok or not R.mdf_res then
             R.failed = true
-            R.status = "material resource NIL - install the v0.4 package"
+            R.status = "material resource NIL - install a white-coat package"
             log(R.status); return false
         end
         log("Pegasus material pinned; streaming (" .. WARM_GATE .. "s gate)")
@@ -320,13 +319,13 @@ re.on_draw_ui(function()
     local ch
     if not C.armed then
         _, C.use_custom_material = imgui.checkbox(
-            "Use v0.4 white coat material", C.use_custom_material)
+            "Use custom white coat material", C.use_custom_material)
         if C.use_custom_material then
-            imgui.text_colored("Requires the v0.4 package; a missing resource can CTD.",
+            imgui.text_colored("Requires a white-coat package; a missing resource can CTD.",
                 0xFF66AAFF)
         end
     else
-        imgui.text("material: " .. (C.use_custom_material and "v0.4 white coat" or "stock Griffin"))
+        imgui.text("material: " .. (C.use_custom_material and "custom white coat" or "stock Griffin"))
     end
     ch, C.armed = imgui.checkbox("Arm (only after the pak is installed)", C.armed)
     if ch and C.armed then R.failed = false; R.status = "arming"; warm() end

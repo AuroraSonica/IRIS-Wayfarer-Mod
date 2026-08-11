@@ -25,6 +25,8 @@ local C = {
     key_summon = 0x0D,     -- Enter
     key_dismiss = 0x08,    -- Backspace
     key_release = 0x2E,    -- Delete (double-press)
+    key_rename = 0x52,     -- R (safe: the world is paused while the screen is open)
+    key_home = 0x48,       -- H: send to / call back from the homestead
     scale = 1.0,
     font_file = "Sovngarde Light.ttf",       -- the IRIS face (reframework/fonts/)
     show_pad_mask = false, -- dev: show the live gamepad button mask (for wiring pad nav)
@@ -42,6 +44,12 @@ U.open = U.open or false
 U.cursor = U.cursor or 1
 U.msg, U.msg_until = U.msg or nil, U.msg_until or 0.0
 U.confirm_id, U.confirm_until = nil, 0.0
+-- ⛔ 08-11 (Aurora: a "Tails" rename box popped up after CHRISTENING a new bird, and a
+-- phantom release dialog after naming Bordy): U survives reloads by design, but queued
+-- ACTIONS and dialogs must NOT -- a stale pending waits patiently for a quiet frame and
+-- then fires into a completely different moment. Fresh load = empty hands.
+U.pending = nil
+U.dlg = nil
 local held = {}   -- per-load key edge/repeat state
 
 -- ── ARGB (authored) -> ABGR (what the imgui drawlist actually eats) ─────────────────────
@@ -142,6 +150,7 @@ pcall(function()
     end
     PAD.dpad.up = pick("LUp", "Up", "DUp", "PadUp")
     PAD.dpad.down = pick("LDown", "Down", "DDown", "PadDown")
+    PAD.dpad.right = pick("LRight", "Right", "DRight", "PadRight")
     PAD.face.a = pick("Decide", "A", "RDown")
     PAD.face.b = pick("Cancel", "B", "RRight")
     PAD.face.x = pick("Action", "X", "RLeft")
@@ -234,6 +243,81 @@ end
 
 local function say(s) U.msg = tostring(s); U.msg_until = os.clock() + 3.0 end
 local function bridge() return rawget(_G, "IrisGriffinBridge") end
+
+-- ── NATIVE Yes/No dialog (the wyrm rite's proven ui010101 recipe, replicated with OUR
+-- OWN state -- ⛔ never call iris_wyrm_dialog_open: it arms IrisTaming's poll and a YES
+-- would read as the RITE confirmation and eat 3 crystals). RetVal: None=0 Cancel=1
+-- Sel0/YES=2 Sel1/NO=3; act on CHANGE from the open baseline; 0.25s debounce; 30s stuck
+-- guard; blind reqClose at load = the softlock guard (same law as the homestead dialogs).
+local DLG_TYPE = 14   -- app.GuiDefine.GuiType.Dialog
+local function dlg_pick()
+    local p
+    pcall(function()
+        local gm = sdk.get_managed_singleton("app.GuiManager")
+        local rv = gm and gm:call("getDialogState")
+        if type(rv) == "number" then p = rv
+        elseif rv ~= nil then p = sdk.to_int64(rv) & 0xFFFFFFFF end
+    end)
+    return p
+end
+local function dlg_close()
+    pcall(function()
+        local gm = sdk.get_managed_singleton("app.GuiManager")
+        local dialog = gm and gm:get_field("Dialog")
+        if dialog then dialog:call("reqClose") end
+        gm:call("requestHideGuiType", DLG_TYPE)
+    end)
+    U.dlg = nil
+end
+local function dlg_open(prompt, yes_label, no_label, payload)
+    pcall(function()
+        local gm = sdk.get_managed_singleton("app.GuiManager")
+        local dialog = gm and gm:get_field("Dialog")
+        if not dialog then return end
+        -- ⛔ 08-11 (Aurora: YES did nothing twice, NO released): getDialogState is STICKY
+        -- across dialogs -- a stale 2 from any past YES makes a fresh YES invisible to
+        -- change-detection. Reset the stored answer before opening -- but ⛔ NEVER guess
+        -- field names ("<RetVal>k__BackingField" red-bannered even inside pcall, Aurora's
+        -- screenshot). DISCOVER the field from the Dialog's own type once; if nothing
+        -- matches, dump the field list to the log so the real name can be wired.
+        if U.dlg_field == nil then
+            U.dlg_field = false
+            pcall(function()
+                local td = dialog:get_type_definition()
+                local names = {}
+                for _, f in ipairs(td:get_fields() or {}) do
+                    local n = tostring(f:get_name() or "")
+                    names[#names + 1] = n
+                    if U.dlg_field == false then
+                        local ln = n:lower()
+                        if ln:find("retval", 1, true) or ln:find("result", 1, true) or ln:find("selectno", 1, true) then
+                            local v = nil
+                            pcall(function() v = tonumber(dialog:get_field(n)) end)
+                            if v ~= nil then U.dlg_field = n end
+                        end
+                    end
+                end
+                if U.dlg_field == false then
+                    log.info("[IrisStableUI] no dialog result field matched; fields: " .. table.concat(names, " "))
+                else
+                    log.info("[IrisStableUI] dialog result field = " .. tostring(U.dlg_field))
+                end
+            end)
+        end
+        if U.dlg_field and U.dlg_field ~= false then
+            pcall(function() dialog:set_field(U.dlg_field, 0) end)
+        end
+        gm:call("requestGuiType", DLG_TYPE)
+        dialog:call("reqDisp",
+            prompt, yes_label, no_label, "", "",
+            true, 0, true, 58, 0, -1, nil,
+            false, false, false, false, false, false,
+            true, 0.0)
+        U.dlg = { open = true, opened_at = os.clock(), baseline = dlg_pick(), payload = payload }
+        pcall(function() log.info("[IrisStableUI] dialog opened, baseline=" .. tostring(U.dlg.baseline)) end)
+    end)
+end
+pcall(dlg_close)   -- softlock guard: a reload orphaning our dialog must not strand it
 local function stable_rows()
     local b = bridge()
     local rows = nil
@@ -252,11 +336,17 @@ end
 local function toggle_open() set_open(not U.open) end
 local function queue_action(kind, id, name)
     -- ⛔ never touch bodies on a paused frame (the pause-spawn crash class): the action
-    -- queues, the menu closes and unpauses, and the work runs on the first LIVE frame
-    U.pending = { kind = kind, id = id, name = name }
+    -- queues, the menu closes and unpauses, and the work runs on the first LIVE frame.
+    -- Stamped so it EXPIRES: a pending that can't run within 10s is forgotten, never
+    -- fired into some later unrelated moment (the phantom-rename lesson).
+    if U.dlg and U.dlg.open then return end   -- one conversation at a time
+    U.pending = { kind = kind, id = id, name = name, at = os.clock() }
     set_open(false)
 end
 local function input_tick()
+    -- while our native dialog is up, IT owns the player's attention -- no screen toggles,
+    -- no new queues (the answer comes through dlg_tick alone)
+    if U.dlg and U.dlg.open then return end
     if edge2("toggle", kb(C.key_toggle)) then toggle_open() end
     -- pad opener: HOLD Select/Back ~0.7s (a bare press stays free for whatever the game
     -- binds it to; the hold is deliberate enough not to collide)
@@ -290,16 +380,16 @@ local function input_tick()
     if edge2("primary", kb(C.key_summon) or pdown(PAD.face.a)) and b then
         queue_action(row.live and "dismiss" or "summon", row.id, row.name)
     end
+    if edge2("rename", kb(C.key_rename) or pdown(PAD.face.x)) then
+        queue_action("rename", row.id, row.name)
+    end
+    if edge2("home", kb(C.key_home) or pdown(PAD.dpad.right)) then
+        queue_action(row.home and "callback" or "home", row.id, row.name)
+    end
+    -- ONE press (Aurora): the NATIVE dialog carries the forever-warning, not a
+    -- double-tap. The ask queues like everything else and opens after the unpause.
     if edge2("release", kb(C.key_release) or pdown(PAD.face.y)) and b then
-        local now = os.clock()
-        if U.confirm_id == row.id and now < (tonumber(U.confirm_until) or 0.0) then
-            U.confirm_id = nil
-            queue_action("release", row.id, row.name)
-        else
-            U.confirm_id = row.id
-            U.confirm_until = now + 3.0
-            say("RELEASE " .. tostring(row.name) .. " FOREVER? Press again to confirm.")
-        end
+        queue_action("release_ask", row.id, row.name)
     end
 end
 
@@ -307,6 +397,12 @@ end
 local function pending_tick()
     local p = U.pending
     if not p or U.open then return end
+    -- expiry: an action that couldn't run promptly is dropped, loudly
+    if os.clock() - (tonumber(p.at) or 0.0) > 10.0 then
+        U.pending = nil
+        pcall(function() log.info("[IrisStableUI] pending '" .. tostring(p.kind) .. "' EXPIRED unconsumed (dropped)") end)
+        return
+    end
     local engine_paused = false
     pcall(function()
         engine_paused = type(griffin_world_paused) == "function" and griffin_world_paused() == true
@@ -320,8 +416,29 @@ local function pending_tick()
         pcall(function() ok, why = b.stable_summon(p.id) end)
     elseif p.kind == "dismiss" then
         pcall(function() ok, why = b.stable_dismiss() end)
-    elseif p.kind == "release" then
-        pcall(function() ok, why = b.stable_release(p.id) end)
+    elseif p.kind == "release_ask" then
+        dlg_open("Release " .. tostring(p.name or "this creature") .. " forever?\n"
+            .. "The bond will be gone for good.",
+            "Release them", "Keep them", { id = p.id, name = p.name })
+        return
+    elseif p.kind == "home" then
+        pcall(function() ok, why = b.stable_send_home(p.id) end)
+    elseif p.kind == "callback" then
+        pcall(function() ok, why = b.stable_call_back(p.id) end)
+    elseif p.kind == "rename" then
+        -- hand off to IrisTaming's rename card (the panel's own flow)
+        local ok9 = false
+        pcall(function()
+            local T = rawget(_G, "IrisTaming")
+            if T and T.open_rename then T.open_rename(p.id, p.name); ok9 = true end
+        end)
+        if not ok9 then
+            pcall(function()
+                local T = rawget(_G, "IrisTaming")
+                if T and T.prompt then T.prompt("THE STABLE", "Rename is unavailable (IrisTaming not loaded)", 3.0, 0xFF8080FF) end
+            end)
+        end
+        return
     end
     pcall(function()
         local T = rawget(_G, "IrisTaming")
@@ -390,7 +507,8 @@ local function draw_ui()
             -- mixed-font stitch: name in Sovngarde, ♀/♂ from the symbol face (measured
             -- placement), rest in Sovngarde again. No symbol font loaded = clean skip.
             local nm = tostring(r.name or "?")
-            local rest = string.format("  (%s)%s", tostring(r.label or "?"), r.live and "  [Out]" or "")
+            local rest = string.format("  (%s)%s", tostring(r.label or "?"),
+                r.live and "  [Out]" or (r.home and "  [Home]" or ""))
             local x0 = X + pad + 6.0 * sc
             txt(nm, x0, yy, col)
             local xoff = x0 + (text_w(nm) or (#nm * 8.0 * sc))
@@ -415,7 +533,9 @@ local function draw_ui()
             local gword = (r.gender == "female" and "Female") or (r.gender == "male" and "Male") or "?"
             txt(string.format("%s  -  %s %s", tostring(r.name or "?"), gword, tostring(r.label or "?")),
                 rx + 10.0 * sc, ly + 2.0 * sc, COL.cream, true)
-            local status = r.live and "With You Now" or (r.active and "Selected - Not Summoned" or "Resting In The Stable")
+            local status = r.live and "With You Now"
+                or (r.home and "Living At The Homestead")
+                or (r.active and "Selected - Not Summoned" or "Resting In The Stable")
             if r.hatch then status = status .. "  (Hatchling)" end
             if r.wyrm then status = status .. "  (Wyrm-Grown)" end
             txt(status, rx + 10.0 * sc, ly + 36.0 * sc, r.live and 0xFF9AE89A or COL.dimtxt)
@@ -469,7 +589,7 @@ local function draw_ui()
     end
     -- title LAST among strings, still same layer (rects never cover it)
     txt("THE  STABLE", X + pad, Y + pad * 0.6, COL.cream, true)
-    txt("[O / B] Close    [Enter / A] Summon / Dismiss    [Delete / Y  x2] Release    (Pad: Hold Select To Open)",
+    txt("[O / B] Close   [Enter / A] Summon / Dismiss   [R / X] Rename   [H / DpadRight] Home   [Delete / Y] Release",
         X + pad, Y + H - 26.0 * sc, COL.dimtxt)
     if U.msg and os.clock() < (tonumber(U.msg_until) or 0.0) then
         local warn = U.confirm_id ~= nil and os.clock() < (tonumber(U.confirm_until) or 0.0)
@@ -526,9 +646,42 @@ local function install_order_lock()
 end
 install_order_lock()
 
+-- ── the dialog's answer ─────────────────────────────────────────────────────────────────
+local function dlg_tick()
+    local d = U.dlg
+    if not (d and d.open) then return end
+    local now = os.clock()
+    local pick = dlg_pick()
+    local settled = now > (tonumber(d.opened_at) or 0.0) + 0.25
+    if not settled then d.baseline = pick; return end
+    if pick ~= nil and pick ~= d.baseline then
+        local payload = d.payload
+        pcall(function() log.info("[IrisStableUI] dialog answered: baseline=" .. tostring(d.baseline) .. " pick=" .. tostring(pick)) end)
+        dlg_close()
+        -- ⛔ FIELD-VERIFIED MAPPING (log 22:23-22:25): on THIS dialog Sel0/"Release them"
+        -- answers 1 and Sel1/"Keep them" answers 2 -- the wyrm rite's enum (Sel0=2/Sel1=3)
+        -- does NOT transfer. Trust the receipts, not the enum.
+        if pick == 1 and payload then
+            local b = bridge()
+            local ok, why = nil, nil
+            pcall(function() ok, why = b and b.stable_release_wild and b.stable_release_wild(payload.id) end)
+            pcall(function()
+                local T = rawget(_G, "IrisTaming")
+                if T and T.prompt then
+                    T.prompt("RELEASED", ok and (tostring(payload.name) .. " belongs to the world again. Farewell.")
+                        or ("Could not release: " .. tostring(why)), 4.0, ok and 0xFF80FFB0 or 0xFF8080FF)
+                end
+            end)
+        end
+        return
+    end
+    if now > (tonumber(d.opened_at) or 0.0) + 30.0 then dlg_close() end
+end
+
 re.on_frame(function()
     pcall(input_tick)
     pcall(pending_tick)
+    pcall(dlg_tick)
     pcall(draw_ui)
 end)
 
@@ -541,6 +694,28 @@ re.on_draw_ui(function()
         ch, v = imgui.slider_float("UI scale", tonumber(C.scale) or 1.0, 0.6, 1.6)
         if ch then C.scale = v; save_cfg() end
         if imgui.button("Open/close now") then toggle_open() end
+        imgui.text("DEV size preview (live companion):")
+        imgui.same_line()
+        if imgui.button("MIN (gene 1)") then
+            pcall(function() local _, m = bridge().size_preview(1); U.preview_msg = m end)
+        end
+        imgui.same_line()
+        if imgui.button("MAX (gene 30)") then
+            pcall(function() local _, m = bridge().size_preview(30); U.preview_msg = m end)
+        end
+        imgui.same_line()
+        if imgui.button("real size") then
+            pcall(function() local _, m = bridge().size_preview(nil); U.preview_msg = m end)
+        end
+        if U.preview_msg then imgui.text(tostring(U.preview_msg)) end
+        if imgui.button("DEV: complete active companion's wyrm growth now") then
+            local ok = false
+            pcall(function()
+                local b = bridge()
+                ok = b and b.complete_active_wyrm and b.complete_active_wyrm() == true
+            end)
+            imgui.same_line(); imgui.text(ok and "done - next pulse applies" or "no growth to complete")
+        end
         -- ⚠ emergency: Reset Scripts while the screen was open orphans our engine pause
         -- (Lua bookkeeping wiped, native TRUE still standing). This fires ONE balanced
         -- release. Only press it if the world is stuck paused after a reset.

@@ -8969,8 +8969,15 @@ reacquire_griffin = function()
             local ch = nil
             pcall(function() ch = inst.instance and inst.instance:get_Chara() end)
             if ch and not is_dead(ch) then
-                local ok_species = true
-                if want then
+                -- a RELEASED body is the world's now -- never re-adopt it (08-11)
+                local freed = false
+                pcall(function()
+                    local go9 = char_go(ch)
+                    local a9 = go9 and go9:get_address()
+                    freed = a9 ~= nil and (S.iris_released or {})[a9] ~= nil
+                end)
+                local ok_species = not freed
+                if ok_species and want then
                     local nm = ""
                     pcall(function() nm = tostring(go_name(char_go(ch)) or "") end)
                     ok_species = nm:find(want, 1, true) == 1
@@ -9252,6 +9259,7 @@ griffin_profile_keys = {
     "route3_rise_ascend_clip", "route3_rise_ascend_start_clip",
     "route3_rise_descend_clip", "route3_rise_descend_start_clip", "route3_rise_clip_bank",
     "route3_ground_jump_windup", "route3_rise_secs", "route3_pawn_ride_back",
+    "route3_rise_retire_at_window",
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
@@ -9363,6 +9371,12 @@ function griffin_species_profile_apply(key)
             p.route3_ground_jump_windup = tonumber(C.route3_ground_jump_windup) or 0.5
             p.route3_rise_secs = tonumber(C.route3_rise_secs) or 1.75
         end
+        migrated = true
+    end
+    -- v7 2026-08-11: window-end retire per-species (drake ON -- her travel nodes sustain
+    -- forever; griffin OFF -- LoopTheLoop must outlive its window).
+    if p.route3_rise_retire_at_window == nil then
+        p.route3_rise_retire_at_window = (key:find("ch257", 1, true) ~= nil)
         migrated = true
     end
     -- v6 2026-08-11: pawn seat goes per-species. Aurora's knock theory: player + pawn colliding
@@ -21469,6 +21483,23 @@ function route3_rise_tick()
         if type(S.base_owner) == "table" and S.base_owner.name == "rise" then S.base_owner = nil end
         pcall(function() route3_restore_flight_base() end)
     end
+    -- ⭐ WINDOW-END RETIRE (2026-08-11, per-species): with the full-window paint protection the
+    -- travel node no longer gets stomped -- so nothing ends it, and it keeps natively flying her
+    -- past the burst until the 8s lockout ceiling = a SECOND un-commanded ascend (Aurora: "it
+    -- does one ascend, camera back to normal, then again"). Release the lock the moment the
+    -- burst window closes; the restore-consume below then arms the normal exit pump.
+    -- ⛔ Per-species OFF by default: the griffin's LoopTheLoop MUST outlive its 1.75s window
+    -- (the loop takes ~4s) -- only species with sustained travel nodes (drake) turn this on.
+    if C.route3_rise_retire_at_window == true and S.route3_node_lock_at ~= nil
+        and tostring(S.route3_node_lock_src or "") == "rise" then
+        local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+            tonumber(S.route3_simple_dive_until) or 0.0)
+        if w > 0.0 and now >= w then
+            S.route3_node_lock_at = nil
+            S.route3_node_lock_status = "released (rise window ended)"
+            S.route3_node_lock_restore = true
+        end
+    end
     -- ⭐ Consume the lockout's release flag: give the base layer back exactly once, a tick after
     -- the node ended, so she can't hold the node's final pose if a restore was swallowed by the lock.
     if S.route3_node_lock_restore == true then
@@ -25299,7 +25330,16 @@ function griffin_loopcam_active()
     if S.route3_hud_panel_drawn == false then return false end
     local locked = false
     pcall(function() locked = griffin_node_lockout_active() == true end)
-    if not locked then S.route3_loopcam_t0 = nil; return false end
+    if not locked then
+        -- ⭐ hold-refire grace (2026-08-11): a one-frame lock gap between a travel node bailing
+        -- and the rise-hold re-firing it cleared t0 here, so the re-fire started a SECOND shot
+        -- (Aurora: "the camera thing twice"). Keep the shot timer alive while the rise window
+        -- is still open; clear it only once the window has genuinely closed.
+        local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+            tonumber(S.route3_simple_dive_until) or 0.0)
+        if w <= os.clock() then S.route3_loopcam_t0 = nil end
+        return false
+    end
     -- ⭐ film ONLY the loop (lockout source "rise"); the gale/thunder attacks share the lockout
     -- machinery but must NOT hijack the camera (Aurora, 2026-08-05)
     if tostring(S.route3_node_lock_src or "rise") ~= "rise" then return false end
@@ -25309,7 +25349,19 @@ function griffin_loopcam_active()
     -- seconds; film that and give control straight back. Two independent windows on purpose.
     local now = os.clock()
     if S.route3_loopcam_t0 == nil then S.route3_loopcam_t0 = now end
-    if now - S.route3_loopcam_t0 > math.max(0.5, tonumber(C.route3_loopcam_max) or 3.5) then
+    local cap = math.max(0.5, tonumber(C.route3_loopcam_max) or 3.5)
+    -- ⭐ 2026-08-11 (drake): while a held travel node keeps her FSM genuinely in Fly.*, the
+    -- NATIVE cling-flight camera owns the view (Aurora identified it: "the camera they use
+    -- when you're holding onto a griffin while it's flying" -- an ugly close-up). Species
+    -- that retire at window end hold the cinematic across the WHOLE window instead, so the
+    -- native close-up never shows; the retire lands ~0.6s after the window and the standard
+    -- camera returns with the Wait state.
+    if C.route3_rise_retire_at_window == true then
+        local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+            tonumber(S.route3_simple_dive_until) or 0.0)
+        if w > now then cap = math.max(cap, (w - S.route3_loopcam_t0) + 0.6) end
+    end
+    if now - S.route3_loopcam_t0 > cap then
         S.route3_loopcam_status = "released (shot over, lock still held)"
         return false
     end
@@ -25356,7 +25408,95 @@ function griffin_loopcam_write_lookat(tx, ty, tz, ax, ay, az)
         local p = xf:call("get_Position"); p.x = tx; p.y = ty; p.z = tz; xf:call("set_Position", p)
         local q = xf:call("get_Rotation"); q.x = qx; q.y = qy; q.z = qz; q.w = qw; xf:call("set_Rotation", q)
     end)
+    -- camera-writer trace: stamp what we wrote and when, so the present-time reader can tell
+    -- whether a later writer re-posed the camera after this (the cling-cam hunt)
+    S.route3_camtrace_write = { t = os.clock(), x = tx, y = ty, z = tz }
     return true
+end
+
+-- ⭐ CAMERA WRITER TRACE (2026-08-11, the cling close-up hunt). Runs at PRESENT time
+-- (re.on_frame = the last stage): compares the camera's actual position against what the
+-- loopcam wrote at lateUpdate this frame. A nonzero "stolen_m" = someone re-posed the camera
+-- AFTER our write -- that someone is the native cling-flight camera. Also censuses, once per
+-- window, every MainCameraController + every component on the camera's GameObject, to NAME it.
+-- Auto-dumps to data/<MOD>_camtrace.json ~1s after the rise window closes.
+function griffin_camtrace_tick()
+    if C.route3_camtrace ~= true then return end
+    local now = os.clock()
+    local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+        tonumber(S.route3_simple_dive_until) or 0.0)
+    local active = (w + 1.0) > now and w > 0.0
+    local st = S.route3_camtrace
+    if not active then
+        if st and #(st.samples or {}) > 0 then
+            pcall(function() json.dump_file(MOD .. "_camtrace.json", st) end)
+            S.route3_camtrace_status = string.format("camtrace DUMPED: %d samples", #st.samples)
+            S.route3_camtrace = nil
+        end
+        return
+    end
+    if not st then
+        st = { when = os.date("%H:%M:%S"), samples = {} }
+        S.route3_camtrace = st
+        -- one-shot census: controllers + camera-GameObject components (best-effort, all pcall'd)
+        pcall(function()
+            st.controllers = {}
+            local cm = sdk.get_managed_singleton("app.CameraManager")
+            local arr = cm and cm._MainCameraControllers
+            for i = 0, 7 do
+                local ctrl = nil
+                pcall(function() ctrl = arr and arr[i] end)
+                if ctrl then
+                    local rec = { i = i }
+                    pcall(function() rec.type = ctrl:get_type_definition():get_full_name() end)
+                    pcall(function()
+                        local cur = ctrl:call("get_CurrentCamera")
+                        if cur then rec.current = cur:get_type_definition():get_full_name() end
+                    end)
+                    st.controllers[#st.controllers + 1] = rec
+                end
+            end
+        end)
+        pcall(function()
+            st.cam_components = {}
+            local cam = sdk.get_primary_camera()
+            local cgo = cam and cam:call("get_GameObject")
+            local comps = cgo and cgo:call("get_Components")
+            for _, c in ipairs(system_array_to_table(comps) or {}) do
+                local tn = nil
+                pcall(function() tn = c:get_type_definition():get_full_name() end)
+                if tn then st.cam_components[#st.cam_components + 1] = tn end
+            end
+        end)
+    end
+    if now - (tonumber(st.last) or 0.0) < 0.2 then return end
+    st.last = now
+    local campos = nil
+    pcall(function()
+        local cam = sdk.get_primary_camera()
+        local tf = cam and cam:call("get_GameObject"):call("get_Transform")
+        local p = tf and tf:call("get_Position")
+        if p then campos = { x = tonumber(p.x), y = tonumber(p.y), z = tonumber(p.z) } end
+    end)
+    local wr = S.route3_camtrace_write
+    local fresh = wr and (now - (tonumber(wr.t) or -9.0)) < 0.2
+    local stolen = nil
+    if fresh and campos then
+        local dx, dy, dz = campos.x - wr.x, campos.y - wr.y, campos.z - wr.z
+        stolen = math.sqrt(dx * dx + dy * dy + dz * dz)
+    end
+    local fsm = "?"
+    pcall(function() fsm = tostring(read_griffin_fsm_node() or "?") end)
+    st.samples[#st.samples + 1] = {
+        t = string.format("%.2f", now),
+        wrote = fresh and string.format("%.1f %.1f %.1f", wr.x, wr.y, wr.z) or "(no loopcam write)",
+        present = campos and string.format("%.1f %.1f %.1f", campos.x, campos.y, campos.z) or "?",
+        stolen_m = stolen and string.format("%.2f", stolen) or "n/a",
+        fsm = fsm,
+        lock_held = S.route3_node_lock_at ~= nil,
+        cam_ct = tostring(S.route3_loopcam_cam_ct),
+    }
+    if #st.samples > 60 then table.remove(st.samples, 1) end
 end
 
 function griffin_loopcam_apply()
@@ -25470,6 +25610,15 @@ function griffin_loopcam_apply()
         pcall(function() griffin_loopcam_cam_switch(math.floor(tonumber(C.route3_loopcam_cam_type) or 2)) end)
         -- pan mode's horizontal-follow baseline: her BODY position at shot start
         S.route3_loopcam_body0 = go and transform_render_pos(go) or nil
+    end
+    -- ⭐ RE-ASSERT the park during the shot (2026-08-11, drake): when the held node puts her FSM
+    -- genuinely into Fly.*, the game re-switches the camera to its cling-flight CLOSE-UP through
+    -- a path our passive hook never observes (that hook's own comment: it has never fired once).
+    -- A single park at shot start loses the view mid-shot -- re-park on a throttle instead;
+    -- idempotent when nothing stole it.
+    if (os.clock() - (tonumber(S.route3_loopcam_repark_at) or 0.0)) >= 0.5 then
+        S.route3_loopcam_repark_at = os.clock()
+        pcall(function() griffin_loopcam_cam_switch(math.floor(tonumber(C.route3_loopcam_cam_type) or 2)) end)
     end
     local anc = S.route3_loopcam_anchor
     local ax, ay, az, tx, ty, tz
@@ -28990,7 +29139,20 @@ function iris_iv_size_mult()
     pcall(function()
         local rec = griffin_stable_live_rec()
         local iv = rec and rec.iv
-        if iv then m = 0.85 + (tonumber(iv.size) or 15) / 30.0 * 0.30 end
+        if not iv then return end
+        -- 08-11 round 2 (Aurora: a "towering" rabbit at +11% of a tiny base = invisible):
+        -- spread DOUBLED for everyone (0.70..1.30), and SMALL critters get a full-width
+        -- spread (0.50..1.50) -- size prominence scales inversely with the beast, so a
+        -- chonky rabbit reads as chonky and a giant is genuinely findable. Gene 15 = true.
+        local sp = tostring(rec.species or "")
+        local small = sp:find("ch299", 1, true) == 1
+            and not (sp:find("ch299003", 1, true) == 1    -- ox
+                or sp:find("ch299011", 1, true) == 1      -- horse/doe chassis
+                or sp:find("ch299010", 1, true) == 1)     -- stag
+        local spread = small and 1.0 or 0.6
+        -- DEV PREVIEW (Aurora: "see max and min side by side"): _G override wins
+        local gene = tonumber(rawget(_G, "IrisSizePreviewGene")) or tonumber(iv.size) or 15
+        m = 1.0 + (gene - 15.0) / 30.0 * spread
     end)
     return tonumber(m) or 1.0
 end
@@ -29136,6 +29298,7 @@ _G.IrisGriffinBridge = {
                 species = r.species, kind = r.kind, variant = r.variant,
                 iv = r.iv, wyrm = r.wyrm and true or nil, hatch = r.hatch and true or nil,
                 hp = hp9, hp_max = hpmax9,
+                home = r.home and true or nil,
                 active = (st.active == r.id) or nil,
                 live = (live_id == r.id and S.griffin ~= nil) or nil,
             }
@@ -29152,6 +29315,10 @@ _G.IrisGriffinBridge = {
         if st.active == id and S.griffin and char_go(S.griffin) then
             return true, "already out"
         end
+        -- summoning a homestead resident inherently calls it back to your side
+        for _, r in ipairs(st.companions) do
+            if r.id == id and r.home then r.home = nil break end
+        end
         if S.griffin and char_go(S.griffin) then
             pcall(function() griffin_dismiss() end)
         end
@@ -29165,6 +29332,128 @@ _G.IrisGriffinBridge = {
         if S.mounted == true then return false, "dismount first" end
         pcall(function() griffin_dismiss() end)
         return true, "dismissed"
+    end,
+    -- ── HOMESTEAD BOX data layer (08-11, slice 1: records only -- the resident
+    -- SPAWNER arrives in its own arc; a "home" soul is parked at the plot, not
+    -- summonable-at-your-side until called back). home.hs = homestead index, so a
+    -- second estate later just works (Aurora owns one plot today).
+    stable_send_home = function(id)
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        local comp = nil
+        for _, r in ipairs(st.companions) do
+            if r.id == id then comp = r break end
+        end
+        if not comp then return false, "unknown companion" end
+        if comp.home then return false, "already at the homestead" end
+        if S.live_rec_id == id and S.griffin and char_go(S.griffin) then
+            if S.mounted == true then return false, "dismount first" end
+            pcall(function() griffin_dismiss() end)
+        end
+        comp.home = { hs = 1, at = os.time() }
+        pcall(function() griffin_stable_write() end)
+        return true, tostring(comp.name or "?") .. " now lives at the homestead"
+    end,
+    -- DEV (08-11, the Shadow regrowth wait): rewind the growth clock so the current
+    -- window reads complete on the next pulse -- for when a test re-run restarted a
+    -- growth Aurora already earned. Not a player surface.
+    -- DEV: preview the size gene at any value on the LIVE companion (nil = its real blood).
+    -- Sets the _G override then re-arms the scale easer at the species base so the change
+    -- shows within a couple of seconds; wyrm/hatch growth pulses preview through the same
+    -- gene path automatically.
+    size_preview = function(gene)
+        _G.IrisSizePreviewGene = tonumber(gene)
+        local _, ggo = reacquire_griffin()
+        if not ggo then
+            pcall(function() log.info("[GriffinScout] size preview: NO LIVE COMPANION (summon one first)") end)
+            return false, "no companion out - summon one first"
+        end
+        local nm = tostring(go_name(ggo) or "?")
+        local base = 1.0
+        pcall(function() base = iris_species_base_scale(nm) or 1.0 end)
+        pcall(function() griffin_apply_body_scale(base, true) end)
+        pcall(function() log.info(string.format(
+            "[GriffinScout] size preview: gene=%s body=%s base=%.2f mult=%.2f -> easer re-armed",
+            tostring(gene or "real"), nm, base, iris_iv_size_mult())) end)
+        return true, string.format("previewing gene %s (mult %.2f)", tostring(gene or "real"), iris_iv_size_mult())
+    end,
+    complete_active_wyrm = function()
+        local rec = griffin_stable_live_rec()
+        local w9 = rec and rec.wyrm
+        if not w9 then return false end
+        local igh9 = iris_bridge_igh()
+        if not igh9 then return false end
+        w9.igh0 = igh9 - (math.max(0.05, tonumber(w9.days) or 1.0) * 24.0) - 1.0
+        pcall(function() griffin_stable_write() end)
+        return true
+    end,
+    stable_call_back = function(id)
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        for _, r in ipairs(st.companions) do
+            if r.id == id then
+                if not r.home then return false, "not at the homestead" end
+                r.home = nil
+                pcall(function() griffin_stable_write() end)
+                return true, tostring(r.name or "?") .. " returns to the stable"
+            end
+        end
+        return false, "unknown companion"
+    end,
+    -- ⭐ 08-11 (Aurora: "so it's like literally releasing"): a SUMMONED creature released
+    -- in person keeps its body -- the bond ends, the protections stand down, and the
+    -- animal simply belongs to the world again (wearing its size gene, at whatever HP it
+    -- had). ⛔ NO group/ally rewrites on the live body -- context writes on a live monster
+    -- are the native-crash class; it stays a friendly wild thing and wanders off, which
+    -- is the fantasy anyway. A PARKED soul has no body to free: record removal only.
+    stable_release_wild = function(id)
+        if S.mounted == true then return false, "dismount first" end
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        if S.live_rec_id == id and S.griffin and char_go(S.griffin) then
+            local ch = S.griffin
+            -- ⛔⛔ 08-11 (Aurora: "the rabbit just became Bugs"): the freed body stayed in
+            -- the spawner's instance list, reacquire re-ADOPTED it (no active record = no
+            -- species filter), and live_rec's species-match fallback then bound it to the
+            -- OTHER rabbit's record -- released, then identity-stolen. A released body
+            -- goes on a permanent no-adopt list; reacquire skips it forever.
+            pcall(function()
+                S.iris_released = S.iris_released or {}
+                local go9 = char_go(ch)
+                local a9 = go9 and go9:get_address()
+                if a9 then S.iris_released[a9] = os.time() end
+            end)
+            pcall(function() mounts[ch] = nil end)
+            -- free the TAMING-side pet too (critters live in both rosters -- without this
+            -- the released body kept its plate, petting and shoulder-perch)
+            pcall(function()
+                local T = rawget(_G, "IrisTaming")
+                local ca = ch:get_address()
+                if T and T.forget_pet and ca then T.forget_pet(ca) end
+            end)
+            -- WAKE the released body (Aurora: it should scamper off / live again, not
+            -- statue): brain on, think free -- critters natively flee humans the moment
+            -- nothing holds them calm, predators go back to prowling. No group/ally
+            -- rewrites (the crash law); native fear does the "scamper" for free.
+            pcall(function() ch:call("set_IsThinkStop(System.Boolean)", false) end)
+            pcall(function()
+                local go9 = char_go(ch)
+                local dm = go9 and go9:call("getComponent(System.Type)", sdk.typeof("app.AIDecisionMaker"))
+                if dm then dm:call("set_Enabled", true) end
+            end)
+            S.griffin = nil
+            S.griffin_go = nil
+            S.live_rec_id = nil
+            for i, r in ipairs(st.companions) do
+                if r.id == id then table.remove(st.companions, i) break end
+            end
+            if st.active == id then st.active = nil end
+            pcall(function() griffin_stable_write() end)
+            return true, "released into the world"
+        end
+        local ok, why = false, nil
+        pcall(function() ok, why = _G.IrisGriffinBridge.stable_release(id) end)
+        return ok, why or (ok and "released" or "failed")
     end,
     stable_release = function(id)
         -- ⛔⛔ delete_griffin ERASES THE SOUL -- the UI double-confirms before calling this.
@@ -33524,6 +33813,7 @@ re.on_frame(function()
     safe_run("griffin_downed_hud", griffin_downed_hud)
     safe_run("iris_companion_hp_tick", iris_companion_hp_tick)
     safe_run("iris_dive_observer_tick", iris_dive_observer_tick)
+    safe_run("griffin_camtrace_tick", griffin_camtrace_tick)
     safe_run("route3_adopt_hotkey_tick", route3_adopt_hotkey_tick)
     safe_run("route3_flight_hotkey_tick", route3_flight_hotkey_tick)
     safe_run("route3_divebomb_hotkey_tick", route3_divebomb_hotkey_tick)
@@ -34661,6 +34951,19 @@ re.on_draw_ui(function()
                 save_config()
                 status("profile: " .. tostring(S.route3_profile_status))
             end
+            -- camera-writer trace: tick, do ONE ascend, wait a second -- the trace dumps
+            -- itself to data/..._camtrace.json (who re-poses the camera after our write).
+            local ctr
+            ctr, C.route3_camtrace = imgui.checkbox("CAMERA TRACE (cling close-up hunt)##c_camtrace",
+                C.route3_camtrace == true)
+            if ctr then save_config() end
+            if S.route3_camtrace_status then imgui.text(tostring(S.route3_camtrace_status)) end
+            -- pawn ride toggle surfaced here (old UI's checkbox is gone): untick = the pawn
+            -- does not board at the next mount -- the solo-flight knocking A/B.
+            local pr
+            pr, C.route3_pawn_ride = imgui.checkbox("pawn rides along##c_pawnride",
+                C.route3_pawn_ride ~= false)
+            if pr then save_config() end
             -- persist the CURRENT tuning (incl. node-picker choices) into the active species'
             -- profile -- without this, a picked rise node lives only in the global config and
             -- the next profile apply overwrites it.

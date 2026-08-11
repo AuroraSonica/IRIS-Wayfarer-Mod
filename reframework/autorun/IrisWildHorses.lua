@@ -900,14 +900,12 @@ function UNI.kill_efx(address)
     local entry = S.unicorns[address]
     if not entry then return end
     if entry.container then
-        -- ⛔ 08-11: finishAll is the SOFT stop -- "stop emitting, let live particles
-        -- decay". A LOOPING element (11) ignores it, so the first container survived
-        -- every "re-fire" forever, frozen at its birth position -- which is why no
-        -- slider ever visibly did anything. killAll is the hard kill.
-        local killed = pcall(function() entry.container:call("killAll") end)
-        if not killed then
-            pcall(function() entry.container:call("finishAll") end)
-        end
+        -- ⛔ 08-11 v2: EVERY stop lever, unconditionally. finishAll alone let a
+        -- looping element live forever; killAll alone still left "sliders do
+        -- nothing" symptoms. All three are pcall'd -- whichever bites, bites.
+        pcall(function() entry.container:call("killAll") end)
+        pcall(function() entry.container:call("finishAll") end)
+        pcall(function() entry.container:call("set_isDisposing", true) end)
     end
     entry.container = nil
 end
@@ -959,50 +957,15 @@ function UNI.spawn_efx(address)
         local off = Vector3f.new(C.unicorn_efx_ox or 0.0, C.unicorn_efx_oy or 0.0,
             C.unicorn_efx_oz or 0.0)
         if C.unicorn_efx_auto then
-            -- ⭐⭐ AUTO-BOLT v2 -- EXACT, from the armature. v1 approximated the horn
-            -- as the extended Neck_3→Head_0 line; wrong, because Head_0 bends
-            -- independently of Neck_3 while the horn is RIGID to Neck_3, and the
-            -- doe joints don't sit where the horse's visible anatomy is.
-            -- Blender ground truth (rest pose, Neck_3's own frame -- the horn runs
-            -- along the joint's local X): base (0.16901, 0.01193, 0),
-            -- tip (0.36662, -0.01930, 0). Reprojection verified to the mm.
-            -- Runtime: point = lerp(base,tip,t) * body_scale rotated by the joint's
-            -- LIVE rotation = a world offset from the joint that is exact in every
-            -- pose. Recomputed each re-fire, so it stays glued through head motion.
-            pcall(function()
-                local jn = transform:call("getJointByName(System.String)", "Neck_3")
-                if jn then
-                    local q = jn:call("get_Rotation")
-                    local t = C.unicorn_efx_tip or 1.0
-                    local s = C.horse_scale or 1.0
-                    local lx = (0.16901 + (0.36662 - 0.16901) * t) * s
-                    local ly = (0.01193 + (-0.01930 - 0.01193) * t) * s
-                    -- 08-11 v3: the trim is applied in WORLD axes. v2 used the horse-
-                    -- body frame, and four spawns proved that wrong: the error swung
-                    -- with each horse's FACING (right of eye / horn base / tip / left
-                    -- of snout, same numbers), because element 11's authored particle
-                    -- cloud is WORLD-fixed -- it ignores the rotation argument -- so a
-                    -- body-rotating compensation points a different compass direction
-                    -- per horse. A world-frame trim cancels a world-fixed offset
-                    -- identically for every horse. (If misplacement now varies with
-                    -- the CAMERA instead, the cloud is billboard/camera-authored and
-                    -- no static trim can pin it -- pick a different element then.)
-                    off = UNI.qrot(q, Vector3f.new(lx, ly, 0.0), false)
-                    off = Vector3f.new(
-                        off.x + (C.unicorn_efx_ox or 0.0),
-                        off.y + (C.unicorn_efx_oy or 0.0),
-                        off.z + (C.unicorn_efx_oz or 0.0))
-                    joint = "Neck_3"
-                    entry.joint = joint
-                    pcall(function()
-                        local jp = jn:call("get_Position")
-                        R.efx_bolt_debug = string.format(
-                            "bolt: Neck_3 world (%.1f, %.1f, %.1f) | anchor+trim"
-                            .. " world off (%.2f, %.2f, %.2f)",
-                            jp.x, jp.y, jp.z, off.x, off.y, off.z)
-                    end)
-                end
-            end)
+            -- 08-11 FINAL v2: attach-to-BONE with a user dropdown -- Aurora
+            -- picks the joint empirically, ZERO offset, no math. The panel's
+            -- bone combo kills + re-fires on change so every pick shows
+            -- immediately.
+            off = Vector3f.new(0.0, 0.0, 0.0)
+            joint = (C.unicorn_efx_joint ~= "" and C.unicorn_efx_joint)
+                or "Head_0"
+            entry.joint = joint
+            R.efx_bolt_debug = "bone-attach mode: " .. joint .. ", zero offset"
         else
             pcall(function()
                 local jj = transform:call("getJointByName(System.String)", joint)
@@ -1482,6 +1445,35 @@ local function load_unicorn_resources()
     R.unicorn_status = "unicorn holder build FAILED after warm gate"
     log(R.unicorn_status)
     return false, "failed"
+end
+
+-- Bone list for the sparkle-attach dropdown: every joint on the first live
+-- unicorn's skeleton, cached until "Refresh bones" is pressed.
+UNI.bone_names = nil
+UNI.list_bones = function()
+    local names = {}
+    pcall(function()
+        for _, rec in pairs(REGISTRY) do
+            if rec.variant == "unicorn" and valid(rec.game_object) then
+                local tf = rec.game_object:call("get_Transform")
+                local joints = tf and tf:call("get_Joints")
+                local count = joints and joints:call("get_Count") or 0
+                for i = 0, count - 1 do
+                    pcall(function()
+                        local jn = joints:call("get_Item", i)
+                        local n = jn and jn:call("get_Name")
+                        if n and #tostring(n) > 0 then
+                            names[#names + 1] = tostring(n)
+                        end
+                    end)
+                end
+                break
+            end
+        end
+    end)
+    table.sort(names)
+    UNI.bone_names = names
+    return names
 end
 
 -- Diagnostic for the 08-11 morning failure: the boot-warmed unicorn holder AV'd in
@@ -3594,7 +3586,10 @@ end
 function RP.native_max_hp(go)
     local hc = get_component(go, "app.HitController")
     if not hc then return nil end
-    for _, name in ipairs({"get_MaxHitPoint", "get_MaxHp", "get_HpMax"}) do
+    -- 08-11 field test: DD2 has NO get_MaxHp family -- the real names (il2cpp
+    -- verified) are ReducedMaxHp (current max AFTER the loss gauge -- the
+    -- correct heal ceiling, same rule potions obey) and OriginalMaxHp.
+    for _, name in ipairs({"get_ReducedMaxHp", "get_OriginalMaxHp"}) do
         local v = nil
         if pcall(function() v = hc:call(name) end) then
             v = tonumber(v)
@@ -4286,11 +4281,10 @@ re.on_frame(function()
                     end
                 end)
             end
-            -- ⭐ glue tick (20 Hz): looping effects keep their FIRST fire position
-            -- forever, so the bolt is enforced by writing the effect's transform,
-            -- not by fire-time offsets. See UNI.glue_efx.
-            if C.unicorn_efx_enabled and C.unicorn_efx_auto and entry.container
-                and now >= (entry.next_glue or 0) then
+            -- Glue tick retired in head-attach mode (auto): zero offset means
+            -- there is nothing to steer. Manual mode keeps it.
+            if C.unicorn_efx_enabled and not C.unicorn_efx_auto
+                and entry.container and now >= (entry.next_glue or 0) then
                 entry.next_glue = now + 0.05
                 UNI.glue_efx(entry, record.game_object)
             end
@@ -4651,8 +4645,34 @@ re.on_draw_ui(function()
         if changed then C.unicorn_efx_interval = value; save_config() end
 
         changed, value = imgui.checkbox(
-            "BOLT to horn tip (auto -- recommended)##uni_efx_auto", C.unicorn_efx_auto)
+            "Attach to BONE (auto -- no tuning)##uni_efx_auto", C.unicorn_efx_auto)
         if changed then C.unicorn_efx_auto = value; save_config() end
+        if C.unicorn_efx_auto then
+            local names = UNI.bone_names or UNI.list_bones()
+            if #names == 0 then
+                imgui.text("  (no live unicorn -- spawn one, then Refresh bones)")
+            else
+                local sel = 1
+                for i, n in ipairs(names) do
+                    if n == C.unicorn_efx_joint then sel = i; break end
+                end
+                changed, value = imgui.combo(
+                    "Attach bone##uni_efx_bone", sel, names)
+                if changed and names[value] then
+                    C.unicorn_efx_joint = names[value]
+                    save_config()
+                    for address, e in pairs(S.unicorns) do
+                        e.next_efx = 0.0
+                        e.joint = nil
+                        UNI.kill_efx(address)
+                    end
+                end
+            end
+            imgui.same_line()
+            if imgui.button("Refresh bones##uni_efx_bones") then
+                UNI.list_bones()
+            end
+        end
         changed, value = imgui.slider_float(
             "Position along horn", C.unicorn_efx_tip, 0.0, 2.0, "%.2f")
         if changed then C.unicorn_efx_tip = value; save_config() end
