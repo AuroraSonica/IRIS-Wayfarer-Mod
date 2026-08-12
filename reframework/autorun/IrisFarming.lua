@@ -1471,11 +1471,19 @@ local function _bed_tint(b, wet)
 end
 
 -- ── ⭐⭐ THE COOKING FIRE (Aurora 08-04: "putting an invisible campfire with the cookpot to let
--- them interact and cook with it"). The earlier cooking probe found all camp gimmicks spawnable
--- (gm51_381/382/383 campfires, gm80_256 the pot) and NO separate cook system to mod - the
--- campfire's own interaction IS the cooking UI. So: spawn a real campfire where her cookpot
--- furniture stands, then hide its MESHES - the gimmick logic (and the cook prompt) survives with
--- the wood invisible under the pot. Streams in/out by range like crops; persists its spots.
+-- them interact and cook with it"). Spawn a real campfire where her cookpot furniture stands, then
+-- hide its MESHES, so the wood is invisible under the pot. Streams in/out by range like crops;
+-- persists its spots to cookfire.json.
+-- ⛔⛔ THIS COMMENT USED TO CLAIM "no separate cook system to mod - the campfire's own interaction IS
+-- the cooking UI", AND THAT WAS FALSE — contradicted twice in this very file (the 08-04 field note
+-- that gm51_381 "spawns a LIT tripod-cauldron visual but carries NO cook interaction", and the
+-- cookpot-menu header's "the camp cook UI proved system-driven, five gimmick candidates, no prompt,
+-- so the pot cooks through OUR dialog instead"). It sat directly above this still-live code that was
+-- written on its premise. Corrected 2026-08-12 — a stale premise in a comment above working code is
+-- how the LB-swing bug survived eight days.
+-- ⇒ WHAT THIS FEATURE ACTUALLY BUYS: a lit fire and NPC/pawn ambience under the pot. It does NOT
+-- supply a cook prompt to anybody — ours does (see `cookpot.gids`). Currently dormant: cookfire.json
+-- holds `{"fires": null}`, so `_tick_cookfires` spawns nothing until the panel button places one.
 local COOKFIRE_FILE = "IRIS/cookfire.json"
 local cookfires = {}
 pcall(function()
@@ -2593,6 +2601,71 @@ function cookpot.live_near()
     local dx, dz = p.x - up.x, p.z - up.z
     return dx * dx + dz * dz <= 6.25 and cookpot.facing_d(dx, dz)
 end
+-- ⭐⭐⭐ WHAT COUNTS AS A COOKING SURFACE (Aurora 08-12: "we have this native B cook prompt on the
+-- cookpot in my homestead but it doesn't go over EVERY cookpot/stove — can we get this prompt added
+-- to every cookpot/stove/campfire gimmick you can spawn in IRIS furnish?").
+-- It was ONE id, hard-coded in three places. Her save has BOTH `gm80_256` "Cooking pot" (the hanging
+-- cauldron indoors, which prompted) AND `gm51_381` "Campfire" (the lit tripod cauldron outdoors,
+-- which did not) — same plot, same session, one of the two recognised.
+--
+-- ⭐ WHY THIS IS A DATA CHANGE AND NOT A FIGHT WITH THE ENGINE: the Cook prompt is OURS end to end.
+-- `data/Interactables/catalog.json` records these gimmicks as pc=0 / v=["Search"] — not
+-- player-interactable at all — and waking a NATIVE Cook is closed research: five readings taken 2s
+-- after a *successful* setHaveMeat(true) still gave isInteractEnable=false / canPlayerInteract=false,
+-- because the gate is CAMP CONTEXT, and InteractManager:register() is a 3/3 CTD wall
+-- (INTERACTABLES_HANDOVER.md; dd2-interact-prompt-hijack). None of that is in our way: `_cookpot_near`
+-- decides, IrisPromptBar draws the label inside the game's real ui020701 frame, and `_show_cook_menu`
+-- is our own dialog. So "where can I cook" is nothing more than this table.
+--
+-- ⚠ THE FURNISH CATALOG'S LABEL LIES ABOUT THREE OF THESE. It calls gm51_381/382/383 "Campfire"
+-- (a label inherited from the base gid), while Nick's own gimmick index names their _00/_01 variants
+-- "Cooking pot" — and Aurora's screenshot settles it: her placed gm51_381 renders as a tripod
+-- cauldron of stew over a fire. Trust the mesh, not the label.
+--
+-- ⛔ NOTE ON SCOPE: these live on the `cookpot` table, NOT as new file-scope locals. IrisFarming is
+-- ~5900 lines and Lua caps a chunk at 200 locals; `cookpot` already carries this feature's helpers
+-- (facing/facing_d/live_near), so it is the right home and it costs zero local slots.
+cookpot.gids = {
+    ["gm80_256"] = "cooking pot",     -- the hanging cauldron; the one that already worked
+    ["gm51_381"] = "campfire pot",    -- Aurora's outdoor tripod cauldron (screenshot, 08-12)
+    ["gm51_382"] = "campfire pot",
+    ["gm51_383"] = "campfire pot",
+    -- The camp stew pots — these five plus gm80_256 are the six prefabs carrying the game's own
+    -- Cook verb (per data/Interactables/catalog.json). Listed whether or not they are in the furnish
+    -- catalog today: recognising an id costs one table lookup, so anything she places later works
+    -- the day she places it instead of needing this table edited again.
+    ["gm80_060"] = "camp stew pot",
+    ["gm80_061"] = "camp stew pot",
+    ["gm80_062"] = "camp stew pot",
+    ["gm80_063"] = "camp stew pot",
+    ["gm80_064"] = "camp stew pot",
+}
+-- variants carry an _NN suffix the base id does not ("gm51_381_00", "gm51_381_01") and the furnish
+-- catalog ships those as their own rows, so fall back to the base id rather than enumerate suffixes.
+function cookpot.gid_ok(gid)
+    if not gid then return nil end
+    local g = tostring(gid)
+    if cookpot.gids[g] then return cookpot.gids[g] end
+    local base = g:match("^(gm%d+_%d+)")
+    return base and cookpot.gids[base] or nil
+end
+-- does a LIVE GameObject's name name a cooking surface? ⚠ a SPAWNED gimmick reports its RIG name,
+-- not its prefab id (a live gm80_257 calls itself "gmSeat"), so this branch reliably catches
+-- WORLD-authored pots and fires; her own placements are caught by the furnish-record branch.
+-- ⚡ ONE match + ONE lookup, deliberately NOT a loop over the set: this is called against every
+-- app.GimmickBase in the scene (500+ in a town, and a 9ms scan there is already on record as a
+-- visible hitch), so it has to stay O(1) per object. The pattern also strips a variant's `_00`/`_01`
+-- tail for free — `gm51_381_00` matches as `gm51_381` because the second `%d+` stops at the suffix.
+function cookpot.name_ok(nm)
+    if not nm or nm == "" then return nil end
+    local base = nm:match("gm%d+_%d+")
+    return base and cookpot.gids[base] or nil
+end
+-- Cook at pots and campfires the GAME placed too, not only at ours. This branch already existed for
+-- gm80_256, so widening the id set widens it as a side effect — made explicit and switchable rather
+-- than left as an accident. Off = only furniture Aurora placed herself offers Cook.
+M.cook_world = true
+
 -- the live pot GameObject nearest the player, so we can jack its OWN cooking animation.
 -- The saved-furniture path only knows coordinates, so this is how we get a real object.
 function cookpot.find_go()
@@ -2606,7 +2679,7 @@ function cookpot.find_go()
         for i = 0, (tonumber(arr and arr:get_size() or 0) or 0) - 1 do
             pcall(function()
                 local go = arr:get_element(i):call("get_GameObject")
-                if tostring(go:call("get_Name") or ""):find("gm80_256") then
+                if cookpot.name_ok(tostring(go:call("get_Name") or "")) then
                     local pp = go:call("get_Transform"):call("get_Position")
                     local dx, dz = pp.x - rp.x, pp.z - rp.z
                     local dd = dx * dx + dz * dz
@@ -2618,7 +2691,8 @@ function cookpot.find_go()
     return best
 end
 local function _cookpot_near()
-    -- placed "Cooking pot" furnishings live in IrisFurnish's save; cheap cached read
+    -- placed cooking furnishings live in IrisFurnish's save; cheap cached read
+    -- ⚠ the 5s cache means a piece placed seconds ago is not cookable until the cache turns over.
     if os.clock() - cookpot.at > 5.0 then
         cookpot.at = os.clock()
         cookpot.recs = nil
@@ -2627,13 +2701,14 @@ local function _cookpot_near()
             if placed then
                 cookpot.recs = {}
                 for _, r in ipairs(placed) do
-                    if r.gid == "gm80_256" then cookpot.recs[#cookpot.recs + 1] = r end
+                    -- was `r.gid == "gm80_256"`: one id, so her placed campfire cauldron was invisible
+                    if cookpot.gid_ok(r.gid) then cookpot.recs[#cookpot.recs + 1] = r end
                 end
             end
         end)
     end
     local up = _pupos(); if not up then return false end
-    cookpot.why = "no placed cookpot within 2.5m"
+    cookpot.why = "no placed cookpot/campfire within 2.5m"
     local best = 1e9
     for _, r in ipairs(cookpot.recs or {}) do
         local dx, dz = (r.ux or 0) - up.x, (r.uz or 0) - up.z
@@ -2644,10 +2719,12 @@ local function _cookpot_near()
             return true
         end
     end
-    -- fallback: ANY gm80_256 gimmick actually standing near the player (catches pots spawned
-    -- through other routes than the furnish save)
+    -- fallback: ANY cooking gimmick actually standing near the player (catches pots spawned through
+    -- other routes than the furnish save, and — with M.cook_world on — the game's own world pots
+    -- and campfires, which have never offered a native Cook outside an active camp).
     local found = false
     pcall(function()
+        if M.cook_world == false then return end
         local rp = _ppos(); if not rp then return end
         local smgr = sdk.get_native_singleton("via.SceneManager")
         local scene = smgr and sdk.call_native_func(smgr, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
@@ -2657,7 +2734,7 @@ local function _cookpot_near()
             if found then break end
             pcall(function()
                 local go = arr:get_element(i):call("get_GameObject")
-                if tostring(go:call("get_Name") or ""):find("gm80_256") then
+                if cookpot.name_ok(tostring(go:call("get_Name") or "")) then
                     local pp = go:call("get_Transform"):call("get_Position")
                     local dx, dz = pp.x - rp.x, pp.z - rp.z
                     if dx * dx + dz * dz <= 6.25 and cookpot.facing_d(dx, dz) then
@@ -2671,8 +2748,10 @@ local function _cookpot_near()
         end
     end)
     if found then return true end
-    cookpot.why = string.format("%d placed rec(s), nearest %.1fm; no live gm80_256 within 2.5m",
-        #(cookpot.recs or {}), best < 1e8 and math.sqrt(best) or -1)
+    cookpot.why = string.format("%d placed cook rec(s), nearest %.1fm; no live cooking gimmick "
+        .. "within 2.5m (world scan %s)",
+        #(cookpot.recs or {}), best < 1e8 and math.sqrt(best) or -1,
+        M.cook_world == false and "OFF" or "on")
     return false
 end
 local function _show_cook_menu()
@@ -4508,6 +4587,22 @@ re.on_frame(function()
                     -- 08-11: dead or wild animals get no label (and thus no jump gate /
                     -- grab shield) -- same gates as the grant, see _ani_eligible.
                     if kind and not _ani_eligible(a) then kind = nil end
+                    -- 08-12 (Aurora: a "Milk" prompt on the BULL that does nothing): the
+                    -- label wears the same gender gate as the grant -- he has none to give
+                    if kind == "Milk" then
+                        local g9 = nil
+                        pcall(function()
+                            local b9 = rawget(_G, "IrisGriffinBridge")
+                            g9 = b9 and b9.body_gender and b9.body_gender(a.go:get_address()) or nil
+                        end)
+                        if g9 == nil then
+                            pcall(function()
+                                local sp9 = rawget(_G, "IrisSpecies")
+                                g9 = sp9 and sp9.gender and sp9.gender(a.go) or nil
+                            end)
+                        end
+                        if g9 == "male" then kind = nil end
+                    end
                     if kind then
                         -- same day-key as the grant, so label and ledger can never disagree
                         local done = false
@@ -5747,6 +5842,8 @@ re.on_draw_ui(function()
     if imgui.tree_node("display / testing") then
         ch, M.ring = imgui.checkbox("ground ring showing where a hoe swing lands (green ok / amber too close)", M.ring)
         ch, M.bed_prompt = imgui.checkbox("native B prompts for beds, cookpots and animal produce", M.bed_prompt ~= false)
+        ch, M.cook_world = imgui.checkbox("...and at the GAME's own cookpots/campfires, not just yours##cw", M.cook_world ~= false)
+        imgui.text("  (" .. tostring(cookpot.why or "-") .. ")")
         ch, M.prompt_height = imgui.slider_float("prompt height above bed (m)##pr", M.prompt_height or 0.9, 0.0, 2.5)
         ch, M.hud = imgui.checkbox("on-screen status line (off = the crops speak for themselves)", M.hud)
         local kc, kv = imgui.input_text("DEBUG strike key (VK hex, 0 = off)##k", string.format("%X", M.debug_key or 0))

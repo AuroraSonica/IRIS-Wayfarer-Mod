@@ -498,6 +498,15 @@ local BAN_NAME = {
     -- "Cook" prompt — two mods offering different verbs on one object is just confusing.
     -- Farming wins; we stand off.
     "gm80_256",
+    -- ⭐⭐ 2026-08-12: farming's cook set GREW (Aurora: "get this prompt on every cookpot/stove/
+    -- campfire you can spawn in IRIS furnish"), so the stand-off has to grow with it or the seat
+    -- planter starts offering Sit on her campfire cauldron while farming offers Cook on the same
+    -- object. This is not hypothetical: the field log caught this filter planting hidden seats in
+    -- gm80_062 — a COOK donor — three times, because it has no rank term.
+    -- ⚠ `_banned` is a SUBSTRING match, so each entry also covers its _00/_01 variants. Keep this
+    -- list in step with `cookpot.gids` in IrisFarming.lua.
+    "gm51_381", "gm51_382", "gm51_383",
+    "gm80_060", "gm80_061", "gm80_062", "gm80_063", "gm80_064",
 }
 local BAN_STATE = { "StartUnlockAction", "DoorboltAction_L", "DoorboltAction_R",
                     "Ride_L", "Ride_R", "DriveStart", "DrawAction", "ShootAction" }

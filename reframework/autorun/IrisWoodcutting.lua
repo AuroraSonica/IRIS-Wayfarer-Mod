@@ -2135,18 +2135,30 @@ pcall(function()
                 _log("ACTION while pickaxe held: " .. s)
             end
             local axe_held = mine.tool and mine.tool.kind == "TREE"
-            -- ⭐ NO MOVING ATTACKS WITH A TOOL IN HAND (Aurora 07-26: "disable all run+attacks for
-            -- all the tools - if you move forward and press attack it does a moving attack which is
-            -- hard to position with"). The LongRange variants are the lunging ones; blocking them
-            -- leaves the stationary short-range swing, which is what you aim a hoe or pickaxe with.
-            -- ⛔ set `block` and RETURN from this inner function - we're inside a pcall, so
-            -- returning SKIP_ORIGINAL here would escape the closure and block nothing.
-            -- The hook's own `if block then return SKIP_ORIGINAL end` (below) does the work.
-            if mine.block_moving ~= false and s:find("LongRange") then
-                M.last = "tool: moving attack blocked (" .. s .. ") - stand still to swing"
-                block = true
-                return
-            end
+            -- ⛔⛔⛔ THE "NO MOVING ATTACKS" BLOCK IS GONE (2026-08-12). It was eating EVERY SWING.
+            -- Aurora 08-12: "now I can't swing the Axe, Pickaxe or Hoe with the regular X/Y". The log
+            -- named it outright — 37 consecutive presses at a farm plot, every one of them
+            -- `Job05_PrepareLongRangeAttack` -> `Job05_LongRangeHeavyAttack`, not a single ShortRange
+            -- in the run, and this filter refused all of them before X_TO_Y or MINE_SWING_ACTIONS
+            -- could see them.
+            -- ⭐ THE FALSE PREMISE (07-26): "the LongRange variants are the lunging ones", i.e.
+            -- LongRange == you were moving. It does not. Short/Long is the variant DD2 picks by
+            -- DISTANCE TO TARGET, so standing perfectly still with no enemy to lock — a farm plot, a
+            -- quiet forest, exactly where tools get used — yields LongRange on every press. The
+            -- filter demanded a state the game will not produce while you are farming.
+            -- ⛔ AND IT BROKE THIS FILE'S OWN LAW: `Job05_PrepareLongRangeAttack` is a WINDUP inside
+            -- the Range family. `_y_family` passes that whole family by PATTERN precisely because
+            -- blocking any single link wedges the action graph (one-swing lock, stuck charge pose —
+            -- three rounds of whack-a-mole taught that). This block was a partial block of the
+            -- family, so even when it "worked" it was wedging the FSM.
+            -- ⭐ WHAT SHE ACTUALLY ASKED FOR IS ALREADY BUILT, AND BETTER: `mine.pin_swing` (08-04)
+            -- snapshots XZ at the swing request and re-asserts it every LateUpdate for the swing's
+            -- duration, so the animation's root motion cannot carry her forward AT ALL. That is
+            -- "stop it moving the character" delivered without touching the FSM — it made this block
+            -- redundant eight days ago and nobody came back to remove it.
+            -- ⇒ the LongRange heavy is a first-class swing now: MINE_SWING_ACTIONS already lists it,
+            -- the strike scheduler already gives it its charged +0.35s, and X_TO_Y already maps its
+            -- X-release twin. All three were dead code behind this `return`.
             if (mine.axe_charging or mine.chop_hold) and not s:find("^Job05_Charge") and not MINE_SWING_ACTIONS[s] then
                 -- the FSM moved on (locomotion/dodge/sheathe): release any freeze/hold
                 mine.axe_charging = false
@@ -2316,14 +2328,55 @@ re.on_application_entry("LateUpdateBehavior", function()
     end)
 end)
 
--- ── ⭐ HUD KEY-GUIDE RELABEL (Aurora 08-04: "change the UI words when holding the pickaxe to say
--- 'Swing' or something - Nick changes the UI for the griffin in his puppeteer mod"). His recipe,
--- learned from Puppeteer/PuppetHandler.lua and re-implemented here (never call into his mod):
--- the key guide is GameObject "ui010201"; its app.GUIBase Root reaches each button's label at
--- PNL_top/PNL_<side><row>/PNL_txt/mtx_00 via via.gui.Control.getObject; set_Message takes a plain
--- string. The game refreshes these labels itself, so ours re-assert on a throttle (the FACE law).
+-- ── ⭐ HUD KEY-GUIDE RELABEL — REVIVED 2026-08-12 THROUGH IrisPromptBar.
+--
+-- Aurora (08-12): "when the hoe, axe and pickaxe are equipped, suppress the LB Switch Weapon Skill
+-- and change it in the UI to ' '. Make X and Y say Chop / Dig / Hoe."
+--
+-- ⭐⭐⭐ THE 08-04 DIAGNOSIS BELOW WAS WRONG, AND THAT COST THIS FEATURE EIGHT DAYS. It blamed a
+-- race against the on-foot panel's own rebuild and concluded "no gate fixes a race". The actual
+-- fault was the HOOK: `re.on_frame` is the RENDER/PRESENT thread, and walking the scene + resolving
+-- ui010201 + writing set_Message there is the prop-spawn lab's THREAD LAW playing out. IrisPromptBar
+-- (08-09) does the byte-identical write EVERY frame from `LateUpdateBehavior` — the game thread —
+-- for farm beds, cookpots and weapon plaques, and has never crashed. So no SkillCreator post-hook
+-- rebuild was ever needed; the write just had to happen on the right thread.
+-- ⇒ we no longer touch the GUI from this file at all. We PUBLISH three labels and the prompt bar
+--   (one owner for that panel, so nothing fights over a slot) writes them at its safe point.
+-- ⭐ The world_live gate is retired with the on_frame hook it was compensating for: it made labels
+--   appear only from the session's FIRST SWING, which is exactly when you least need to be told
+--   what the buttons do. The tool having been IN HAND for a second is the honest liveness proof —
+--   the panel exists and a player is standing in running gameplay holding it.
+local HUD_VERB = { TREE = "Chop", STONE = "Dig", SOIL = "Hoe" }   -- Aurora's words, 08-12
+local hud_pub = false
+re.on_application_entry("UpdateBehavior", function()
+    local live = mine.pick_held and mine.hud_labels ~= false
+        and mine.held_at and os.clock() - mine.held_at > 1.0
+        and _G.IrisPrompt and _G.IrisPrompt.set_slot
+    if not live then
+        -- ⛔ CLEAR ON THE EDGE, don't wait for the TTL. Publications survive a second by design
+        -- (so a throttled publisher can't flicker), which on unequip would leave X reading "Chop"
+        -- for a second after the axe is gone — advertising an action that no longer exists.
+        if hud_pub and _G.IrisPrompt and _G.IrisPrompt.clear_slot then
+            _G.IrisPrompt.clear_slot("iris_tool")
+        end
+        hud_pub = false
+        return
+    end
+    hud_pub = true
+    local verb = HUD_VERB[mine.tool and mine.tool.kind] or "Swing"
+    -- X and Y BOTH carry the tool verb, and that is not cosmetic: X_TO_Y above skips the X release
+    -- and requests the Y heavy at the same graph point, so X literally IS the slam.
+    _G.IrisPrompt.set_slot("iris_tool", "PNL_L03", verb)    -- X
+    _G.IrisPrompt.set_slot("iris_tool", "PNL_L02", verb)    -- Y
+    -- LB: the whole skill row is dead while a tool is held (the requestActionCore catch-all refuses
+    -- every Job05_ skill node), so the button says nothing rather than lying. " " and never "" —
+    -- an empty string into a live via.gui.Text is not a risk worth taking for zero benefit.
+    _G.IrisPrompt.set_slot("iris_tool", "PNL_L01", " ")
+end)
+
+-- the retired on_frame implementation. Left in place, still hard-returning, as the evidence for the
+-- comment above; delete it once the LateUpdate route has a few sessions behind it.
 local hud_lbl = { at = 0 }
-local HUD_VERB = { TREE = "Chop", STONE = "Mine", SOIL = "Till" }
 local gui_get = nil
 pcall(function() gui_get = sdk.find_type_definition("via.gui.Control"):get_method("getObject(System.String)") end)
 re.on_frame(function()
@@ -2661,34 +2714,114 @@ local function _game_day()
     return d
 end
 
--- GROUND SNAP (Aurora's floating rocks): the plot anchor's y is the HOUSE site's height - 9m out
--- the terrain drops. Cast down at each rock spot (render space, layers 0-2) and seat it.
-local function _quarry_ground_y(x_u, y_u, z_u)
-    if not _ensure_ray() then return nil end
-    local ox, oy, oz = 0, 0, 0
+-- ── ⭐⭐⭐ GROUND SNAP v2 — 2026-08-12. Aurora: "are we able to make sure the quarries that spawn by
+-- homestead plots don't let the boulders spawn in midair?" (screenshot: a boulder hanging ~2m up
+-- against a cliff face at her plot's edge).
+--
+-- v1 had FIVE independent defects and ANY ONE of them puts a rock in the air. Worth listing, because
+-- four of them are mistakes this repo has already paid for somewhere else:
+--   1. ⛔⛔ IT FAILED OPEN TO THE ANCHOR. The call site read `y = (gy or uy) + 0.1` — so a MISSED
+--      cast parked the rock at the HOUSE FLOOR's height (`rec.uy`, the build site's ground + lift).
+--      The outcrop sits 9m out where, as v1's own comment said, "the terrain drops". A failed
+--      measurement silently became a placement. That is the floating rock.
+--   2. ⛔ THE CAST WINDOW WAS PINNED TO THE HOUSE FLOOR, not to the ground it was hunting:
+--      start = anchor+4, end = anchor−20. At the foot of a cliff the real ground 9m out can be well
+--      over 20m below (window too short → miss) or ABOVE anchor+4, in which case the ray STARTS
+--      UNDERGROUND and finds nothing at all. Both ends were too tight.
+--   3. ⛔ IT CAST LAYERS {0,1,2} AND KEPT THE HIGHEST HIT (`pos.y > best`). Every other ground ray in
+--      this repo casts LAYER 2 ONLY — this file's own tree/rock finders (:175, :801),
+--      IrisHomestead's `_ground_at` (:154), the griffin's cast — because 2 is terrain/static.
+--      Layers 0/1 are not ground, and "keep the highest" is exactly the rule that lets an invisible
+--      trigger volume hovering above the terrain WIN the vote.
+--   4. ⛔ IT READ CONTACT INDEX 0 AND NOTHING ELSE. `IrisHomestead._ground_at` walks every contact
+--      and takes the one NEAREST the reference height — which is what dodges the "a candidate over a
+--      ledge returns a floor three storeys down" trap the taming ground probe already paid for.
+--   5. ⛔ IT NEVER READ THE SURFACE NORMAL, so a downcast grazing the near-vertical face of that big
+--      rock seats a boulder ON A WALL. IrisHomestead has read `Normal` and rejected `ny < cliff_ny`
+--      since the plot scout shipped; the quarry simply never did.
+M.quarry_ny_min   = 0.55   -- flatter than ~57° off vertical is ground; steeper is a wall
+M.quarry_drop_max = 10.0   -- how far BELOW the plot anchor a rock may legitimately sit
+M.quarry_rise_max = 6.0    -- ...and how far above (a roof or a boulder-top hit reads as a big rise)
+M.quarry_over_max = 2.5    -- geometry standing ON the spot (that cliff): don't bury a rock inside it
+
+-- ONE downcast. Returns universal y, the surface normal's y, and how much geometry stands ABOVE the
+-- chosen floor here. On any failure: nil + a reason string — and a failure is never allowed to
+-- become a Y.
+local function _quarry_ground(x_u, y_u, z_u)
+    if not _ensure_ray() then return nil, "raycast unavailable" end
+    -- ⛔ THE OFFSET READ IS LOAD-BEARING, AND v1 SWALLOWED IT. v1 initialised (0,0,0) and did the
+    -- read inside a pcall, so on any frame where get_ManualPlayer was unreadable the "render-space"
+    -- cast was fired at UNIVERSAL coordinates — two spaces that diverge by up to a session-dependent
+    -- 128m tile offset — which misses everything and dropped straight into defect 1. The woodcut log
+    -- shows the daily renew firing with `get_InGameDay` reading 0 in a day-307 save, i.e. exactly
+    -- such a degenerate moment. A read we cannot do is an ABORT, not a cast into the void.
+    local got, ox, oy, oz = false, 0, 0, 0
     pcall(function()
-        local tf = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer"):call("get_GameObject"):call("get_Transform")
-        local rp = tf:call("get_Position")
-        local up = tf:call("get_UniversalPosition")
+        local tf = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer")
+            :call("get_GameObject"):call("get_Transform")
+        local rp, up = tf:call("get_Position"), tf:call("get_UniversalPosition")
         ox, oy, oz = up.x - rp.x, up.y - rp.y, up.z - rp.z
+        got = true
     end)
+    if not got then return nil, "player offset unreadable" end
     local rx, ry, rz = x_u - ox, y_u - oy, z_u - oz
-    local best
-    for _, layer in ipairs({ 0, 1, 2 }) do
-        pcall(function()
-            ray.filter:set_Group(0); ray.filter:set_Layer(layer); ray.filter:set_MaskBits(0)
-            ray.result:clear()
-            ray.query:call("setRay(via.vec3, via.vec3)", _vec3(rx, ry + 4.0, rz), _vec3(rx, ry - 20.0, rz))
-            ray.method:call(ray.system, ray.query, ray.result)
-            local n = ray.result:get_NumContactPoints() or 0
-            if n > 0 then
-                local cp = ray.result:call("getContactPoint(System.UInt32)", 0)
-                local pos = cp and sdk.get_native_field(cp, ray.contact_td, "Position")
-                if pos and (not best or pos.y > best) then best = pos.y end
+    local gy, gny, topy = nil, 1.0, -1e18
+    pcall(function()
+        ray.filter:set_Group(0); ray.filter:set_Layer(2); ray.filter:set_MaskBits(0)
+        ray.result:clear()
+        -- 40m up / 60m down: IrisHomestead._ground_at's proven window, wide enough that a plot on a
+        -- slope still finds its own ground out at the outcrop.
+        ray.query:call("setRay(via.vec3, via.vec3)", _vec3(rx, ry + 40.0, rz), _vec3(rx, ry - 60.0, rz))
+        ray.method:call(ray.system, ray.query, ray.result)
+        local n = tonumber(ray.result:get_NumContactPoints() or 0) or 0
+        local bestd, ys = 1e18, {}
+        for k = 0, n - 1 do
+            local cp = ray.result:call("getContactPoint(System.UInt32)", k)
+            local pos = cp and sdk.get_native_field(cp, ray.contact_td, "Position")
+            if pos then
+                ys[#ys + 1] = pos.y
+                local d = math.abs(pos.y - ry)        -- NEAREST the reference height, not the highest
+                if d < bestd then
+                    bestd = d; gy = pos.y
+                    local nm = sdk.get_native_field(cp, ray.contact_td, "Normal")
+                    gny = (nm and nm.y) or 1.0
+                end
             end
-        end)
+        end
+        -- ⭐ "IS SOMETHING STANDING IN THIS ROCK'S SPACE" — measured only in the BAND just above the
+        -- chosen floor, NOT as (highest contact − floor). IrisHomestead's plot scout uses the whole
+        -- window for that reading, but it is looking for scenery over a 13m house footprint; here the
+        -- question is whether a boulder fits, and taking the global top would let ANY overhead
+        -- geometry within the 40m up-reach (her own roof, an arch, the cliff overhanging from above)
+        -- veto every candidate — turning "floating rocks" into "no quarry at all", which would be a
+        -- worse regression than the bug.
+        for _, y in ipairs(ys) do
+            if gy and y > gy + 0.05 and y <= gy + 4.0 and y > topy then topy = y end
+        end
+    end)
+    if not gy then return nil, "no layer-2 contact" end
+    return gy + oy, gny, (topy > gy) and (topy - gy) or 0.0
+end
+
+-- ⭐⭐ REJECT AND RELOCATE — NEVER FAIL OPEN. The same policy IrisHomesteadBox landed for this exact
+-- class of bug ("Mootilda in the stream below the cliff edge"): a spot whose ground we cannot trust
+-- is not a spot, so go and find another one. Returns a seatable universal Y, or nil + why.
+local function _quarry_seat(x, uy, z)
+    local gy, ny, over = _quarry_ground(x, uy, z)   -- on failure the 2nd return is the reason
+    if not gy then return nil, tostring(ny) end
+    if ny < (M.quarry_ny_min or 0.55) then
+        return nil, string.format("wall / steep face (ny=%.2f)", ny)
     end
-    return best and (best + oy) or nil
+    if (uy - gy) > (M.quarry_drop_max or 10.0) then
+        return nil, string.format("floor %.1fm BELOW the plot - a ledge, not this ground", uy - gy)
+    end
+    if (gy - uy) > (M.quarry_rise_max or 6.0) then
+        return nil, string.format("floor %.1fm ABOVE the plot - a roof or a boulder top", gy - uy)
+    end
+    if over > (M.quarry_over_max or 2.5) then
+        return nil, string.format("%.1fm of geometry already stands here", over)
+    end
+    return gy
 end
 
 local function _quarry_spawn(ux, uy, uz)
@@ -2700,28 +2833,91 @@ local function _quarry_spawn(ux, uy, uz)
     end)
     if not gid then _log("QUARRY: GimmickID Gm80_009 unresolved"); return end
     local n = math.max(1, math.floor(M.quarry_count))
+    local placed, skipped = 0, 0
+    local cx, cz, lastwhy
+    if M.quarry_cluster then
+        -- ⭐ FIND A BEARING THAT ACTUALLY HAS GROUND — ONCE, FOR THE WHOLE OUTCROP. v1 used a FIXED
+        -- world bearing of 0.6 rad: never rotated by plot yaw and never checked, so at Aurora's plot
+        -- it aimed the outcrop straight into a cliff. Golden-angle retries spread candidates right
+        -- around the plot instead of creeping along one arc.
+        for try = 0, 9 do
+            local ca = 0.6 + 2.399963 * try
+            local tx = ux + math.cos(ca) * M.quarry_radius
+            local tz = uz + math.sin(ca) * M.quarry_radius
+            local gy, why = _quarry_seat(tx, uy, tz)
+            if gy then cx, cz = tx, tz; break end
+            lastwhy = why
+            _log(string.format("QUARRY: bearing %.2f rad rejected - %s", ca, tostring(why)))
+        end
+        if not cx then
+            -- ⛔ AND IF NOWHERE WORKS, SPAWN NOTHING. A quarry that is absent is a cosmetic
+            -- shortfall; a boulder hanging in the air is the bug report. The anchor is still stored
+            -- so the daily renew can try again once the world has streamed in properly.
+            quarry.anchor = { x = ux, y = uy, z = uz }
+            quarry.day = _game_day()
+            _log(string.format("QUARRY: no seatable ground within %.1fm of the plot (last: %s) - "
+                .. "spawned NOTHING rather than floating rocks", M.quarry_radius, tostring(lastwhy)))
+            return
+        end
+    end
     for i = 1, n do
         local x, z
         if M.quarry_cluster then
-            -- the outcrop: all rocks bunched at ONE bearing from the anchor, ~2m apart
-            local ca = 0.6
             local sub = (i - 1) * (2 * math.pi / math.max(n, 3))
-            x = ux + math.cos(ca) * M.quarry_radius + math.cos(sub) * 1.9
-            z = uz + math.sin(ca) * M.quarry_radius + math.sin(sub) * 1.9
+            x, z = cx + math.cos(sub) * 1.9, cz + math.sin(sub) * 1.9
         else
             local ang = (i - 0.5) * (2 * math.pi / n) + 0.6
             x = ux + math.cos(ang) * M.quarry_radius
             z = uz + math.sin(ang) * M.quarry_radius
         end
-        local gy = _quarry_ground_y(x, uy, z)
-        quarry.jobs[#quarry.jobs + 1] = { x = x, y = (gy or uy) + 0.1, z = z, gid = gid, stage = "prefab", f = 0 }
+        local gy, why = _quarry_seat(x, uy, z)
+        if not gy and M.quarry_cluster then
+            -- one nudge back toward the validated centre before giving up on this rock
+            x, z = cx + (x - cx) * 0.45, cz + (z - cz) * 0.45
+            gy, why = _quarry_seat(x, uy, z)
+        end
+        if gy then
+            placed = placed + 1
+            quarry.jobs[#quarry.jobs + 1] = { x = x, y = gy + 0.1, z = z, gid = gid, stage = "prefab", f = 0 }
+        else
+            skipped = skipped + 1
+            _log(string.format("QUARRY: rock %d skipped - %s", i, tostring(why)))
+        end
     end
     quarry.anchor = { x = ux, y = uy, z = uz }
     quarry.day = _game_day()
-    _log("QUARRY: spawning " .. n .. " rocks (" .. (M.quarry_cluster and "outcrop" or "ring") .. ") at (" .. string.format("%.1f,%.1f,%.1f", ux, uy, uz) .. ")")
+    _log(string.format("QUARRY: %d rock(s) seated, %d skipped (%s) at (%.1f,%.1f,%.1f)",
+        placed, skipped, M.quarry_cluster and "outcrop" or "ring", ux, uy, uz))
+end
+
+-- ⛔⛔ PAUSE GUARD (added 08-12 alongside the snap fix). The pump below calls
+-- GenerateManager.requestCreateInstance, and "NOTHING spawns while the world is paused" is a
+-- documented CTD law here — IrisHomestead's pump has guarded on exactly this since the
+-- frame-gen-toggle-while-spawning crash, and IRIS has already eaten one pause-menu spawn crash.
+-- This pump had NO pause check, NO player-presence check and NO distance check, and the daily renew
+-- fires on a frame counter, so it could spawn four rocks while she sits in a menu or in photo mode.
+local function _quarry_paused()
+    local p = false
+    pcall(function()
+        local pm = sdk.get_managed_singleton("app.PauseManager")
+        if pm and pm:call("isPausedAny") == true then p = true end
+    end)
+    if not p then
+        pcall(function()
+            local gm = sdk.get_managed_singleton("app.GuiManager")
+            if gm and (gm:call("get_IsDispPhotoModeAll") == true
+                or gm:call("get_IsDispPhotoMode") == true
+                or gm:call("isPausedGUI") == true) then p = true end
+        end)
+    end
+    return p
 end
 
 re.on_application_entry("UpdateBehavior", function()
+    -- paused = slide everything forward, plus a 3s grace after unpausing (a frame-gen toggle resets
+    -- the device, and streaming needs a moment before a spawn is safe)
+    if _quarry_paused() then quarry.pause_grace = os.clock() + 3.0; return end
+    if os.clock() < (quarry.pause_grace or 0) then return end
     -- THE VEIN RENEWS AT DAWN: once all quarry rocks are smashed, a new in-game day respawns the
     -- outcrop (checked ~5s; "mined a few times before timing out for the day" - Aurora's spec)
     if #quarry.jobs == 0 and quarry.anchor then
@@ -2897,8 +3093,10 @@ re.on_draw_ui(function()
     local mc
     mc, skin.auto = imgui.checkbox("auto-reskin the CE pickaxe##iwc_mine", skin.auto)
     mc, mine.block_skills = imgui.checkbox("tool, not a weapon: only the Y-slam works (other attacks + skills blocked)##iwc_mine", mine.block_skills)
-    if mine.block_moving == nil then mine.block_moving = true end
-    mc, mine.block_moving = imgui.checkbox("no MOVING attacks with a tool (blocks the lunging LongRange swings)##iwc_mine", mine.block_moving)
+    -- ⛔ the "no MOVING attacks" checkbox is RETIRED (08-12) - it blocked the LongRange family,
+    -- which is every stationary swing when there is no enemy to range against, AND partially
+    -- blocked the Range windups (the FSM-wedging law). `swing stays PLANTED` below is the real
+    -- answer to "don't let it carry me forward" and does it without touching the action graph.
     -- ── the MH Wilds swing paint (pickaxe + hoe; the axe keeps its bank-150 chop) ──
     -- ── the NATIVE swing, tuned (the default since 08-04 late) ──
     mc, mine.swing_speed = imgui.slider_float("swing speed (all tools)##iwc_ss", mine.swing_speed or 2.2, 0.5, 2.5)
@@ -2909,8 +3107,9 @@ re.on_draw_ui(function()
         mc, mine.wilds_ground = imgui.slider_float("  hip drop scale##iwc_wg", mine.wilds_ground or 0.7, 0.0, 1.2)
         mc, mine.impact_wilds = imgui.slider_float("  impact timing (s after swing starts)##iwc_wi", mine.impact_wilds or 0.68, 0.3, 1.5)
     end
-    imgui.text("⛔ key-guide relabel DISABLED - crashed 3x (the on-foot panel rebuilds mid-write;")
-    imgui.text("   needs the SkillCreator post-hook route - see the comment in the code)")
+    mc, mine.hud_labels = imgui.checkbox("relabel the button guide (X/Y = Chop/Dig/Hoe, LB blanked)##iwc_hud", mine.hud_labels ~= false)
+    imgui.text("   (published to IrisPromptBar and written on LateUpdate - the 08-04 crashes were")
+    imgui.text("    re.on_frame, i.e. the render thread, not a race with the panel's rebuild)")
     mc, mine.gate = imgui.checkbox("MINING GATE (Y-slam strikes nearby stone)##iwc_mine", mine.gate)
     if M.auto_gather == nil then M.auto_gather = true end
     mc, M.auto_gather = imgui.checkbox("auto-gather bow after a rock breaks (60:6001)##iwc_mine", M.auto_gather)

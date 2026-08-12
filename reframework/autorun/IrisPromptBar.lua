@@ -9,8 +9,14 @@
 -- dd2-rename-button-prompts) and has only ever been used for the griffin. This makes it a
 -- SHARED SERVICE so every IRIS module gets a native-looking prompt for free.
 --
---   _G.IrisPrompt.set(owner, "Sow")   -- publish; highest priority wins
+--   _G.IrisPrompt.set(owner, "Sow")   -- publish a B action; NEAREST wins (priority tie-breaks)
 --   _G.IrisPrompt.clear(owner)        -- stop offering
+--
+-- ⭐ And since 08-12, for buttons that are NOT the world-interact B:
+--   _G.IrisPrompt.set_slot(owner, "PNL_L03", "Chop")   -- X says Chop (see the slot table below)
+--   _G.IrisPrompt.set_slot(owner, "PNL_L01", " ")      -- LB does nothing here; say nothing
+--   _G.IrisPrompt.clear_slot(owner)                    -- drop all of that owner's slots
+-- Slots: L00=LT L01=LB L02=Y L03=X | R00=RT R01=RB R02=B R03=A  (panel-side names, not letters)
 --
 -- ⛔⛔ LAWS (each one is somebody's crash or wasted evening)
 --   • **RE-ASSERT EVERY FRAME.** The game rewrites these labels itself whenever its prompt
@@ -62,6 +68,32 @@ _G.IrisPrompt.set = function(owner, text, prio, dist, pos, go)
                      dist = tonumber(dist) or 1e9, pos = pos, go = go, at = os.clock() }
 end
 _G.IrisPrompt.clear = function(owner) if owner then slots[owner] = nil end end
+
+-- ── ⭐⭐ EXPLICIT-SLOT PUBLICATION (Aurora 08-12: with a hoe/axe/pickaxe in hand, LB must stop
+--   advertising "Switch Weapon Skill" and X/Y must read "Hoe"/"Chop"/"Dig"). A DIFFERENT SHAPE to
+--   the registry above and deliberately so: those entries COMPETE for one button by distance,
+--   because only one B action can fire. These each NAME their own panel slot and simply co-exist —
+--   a tool's three labels are all true at once and none of them is a world interaction.
+--   Same fire-and-forget contract though: publish every frame the label is true, stop when it
+--   isn't, and the TTL sweeps up anything a publisher forgot.
+local raw = {}      -- ["<slot>|<owner>"] = { slot, owner, text, prio, at }
+_G.IrisPrompt.set_slot = function(owner, slot, text, prio)
+    if not (owner and slot) then return end
+    local k = slot .. "|" .. owner
+    if text == nil then raw[k] = nil; return end
+    -- ⛔ NEVER write an empty string into a live via.gui.Text. Aurora asked for " " for exactly
+    --   this reason, and a single space is also the honest label for a button that does nothing
+    --   here: the slot keeps its glyph and frame, and says nothing.
+    if text == "" then text = " " end
+    raw[k] = { slot = slot, owner = owner, text = tostring(text),
+               prio = tonumber(prio) or 0, at = os.clock() }
+end
+_G.IrisPrompt.clear_slot = function(owner, slot)
+    if not owner then return end
+    for k, v in pairs(raw) do
+        if v.owner == owner and (slot == nil or v.slot == slot) then raw[k] = nil end
+    end
+end
 
 -- ⭐⭐ ONE ACTION AT A TIME — THE NEAREST ONE (Aurora 08-09: "if I stand near the weapon
 --   mount and press B, sometimes because the cookpot is quite close it'll open the cooking
@@ -280,7 +312,11 @@ _G.IrisPrompt.native_world_ready = function(owner)
         and (owner == nil or world.owner == owner)
 end
 
-local function _panel_text(txt)
+-- ⭐ ONE SCENE RESOLVE, N LABELS. A tool publishes three slots at once; resolving the scene,
+--   ui010201, the GUIBase and Root separately for each would be four times the managed traffic on
+--   the game thread for identical output. Each set_Message still gets its OWN pcall so one dead
+--   text object can't poison the rest of the map.
+local function _panel_write(map)
     if not getobj then return false end
     local ok = false
     pcall(function()
@@ -293,12 +329,15 @@ local function _panel_text(txt)
         local base = ui:call("getComponent(System.Type)", sdk.typeof("app.GUIBase"))
         local root = base and base:get_field("Root")
         if not root then return end
-        -- ⛔ parenthesised: an unparenthesised gsub would pass its count as an extra arg
-        local path = (M.slot .. "/PNL_txt/mtx_00")
-        local node = getobj:call(root, "PNL_top/" .. path)
-        if not node then return end
-        node:call("set_Message", txt)
-        ok = true
+        for slot, txt in pairs(map) do
+            -- ⛔ parenthesised: an unparenthesised gsub would pass its count as an extra arg
+            local path = (slot .. "/PNL_txt/mtx_00")
+            local node = getobj:call(root, "PNL_top/" .. path)
+            if node then
+                pcall(function() node:call("set_Message", txt) end)
+                ok = true
+            end
+        end
     end)
     return ok
 end
@@ -325,14 +364,40 @@ re.on_application_entry("LateUpdateBehavior", function()
     -- Never let last frame's success suppress a legacy fallback in this frame.
     world.req_ok, world.text_ok, world.owner = false, false, nil
     if M.enabled == false then return end
-    -- if the GAME is offering its own interact, leave its label alone entirely
-    if _G.IrisPrompt.native_busy() then return end
-    local owner, entry = _G.IrisPrompt.current_entry()
-    local t = entry and entry.text or nil
-    if not t then return end
-    _world_prompt(owner, entry)
-    local ok = _panel_text(t)
-    if not ok and not gui.warned then
+
+    -- ── the explicit slots first. ⚠ These are deliberately OUTSIDE the native_busy stand-down
+    --   and outside the "is anyone offering a B action" test below. "X Chop" is true because a
+    --   tool is in your hands, not because you are stood at something — a chair's native prompt
+    --   appearing must not make the axe's own buttons start lying again.
+    local map, now = nil, os.clock()
+    for k, v in pairs(raw) do
+        if now - (v.at or 0) > TTL then
+            raw[k] = nil                                          -- gone stale
+        else
+            map = map or {}
+            local cur = map[v.slot]
+            if not cur or v.prio > cur.prio then map[v.slot] = { text = v.text, prio = v.prio } end
+        end
+    end
+
+    -- ── the arbitrated B action. Unlike the slots above it DOES stand down for the game's own
+    --   interact, and it outranks any explicit publication that names the same slot.
+    local b_wanted = false
+    if not _G.IrisPrompt.native_busy() then
+        local owner, entry = _G.IrisPrompt.current_entry()
+        if entry and entry.text then
+            b_wanted = true
+            _world_prompt(owner, entry)
+            map = map or {}
+            map[M.slot] = { text = entry.text, prio = math.huge }
+        end
+    end
+
+    if not map then return end
+    local flat = {}
+    for slot, e in pairs(map) do flat[slot] = e.text end
+    local ok = _panel_write(flat)
+    if b_wanted and not ok and not gui.warned then
         gui.warned = true
         _log("could not write the prompt slot (panel hidden, or the game is not offering "
              .. M.slot .. " in this context - a withheld slot cannot be forced; see the "
@@ -340,7 +405,7 @@ re.on_application_entry("LateUpdateBehavior", function()
     end
 end)
 
-re.on_script_reset(function() slots = {} end)
+re.on_script_reset(function() slots = {}; raw = {} end)
 
 re.on_draw_ui(function()
     if not imgui.tree_node("IRIS PROMPT BAR (relabel the game's own button hints)") then return end
@@ -353,6 +418,12 @@ re.on_draw_ui(function()
         imgui.text(string.format("   %-18s '%s'  (prio %d)", tostring(owner), v.text, v.prio))
     end
     if n == 0 then imgui.text("   (no module is offering an action right now)") end
+    local rn = 0
+    for _, v in pairs(raw) do
+        if rn == 0 then imgui.text("explicit slots (each names its own button):") end
+        rn = rn + 1
+        imgui.text(string.format("   %-10s '%s'   <- %s", v.slot, v.text, tostring(v.owner)))
+    end
     local c
     c, M.enabled = imgui.checkbox("enabled", M.enabled ~= false)
     c, world.enabled = imgui.checkbox("native world prompt frame", world.enabled ~= false)
