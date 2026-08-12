@@ -941,11 +941,14 @@ end
 local function name_capture()
     -- poll per key with edges: letters/digits/space/hyphen/apostrophe; shift = capitals
     S.name_keys = S.name_keys or {}
+    -- ⛔ RAW reads (the input-gate law): this box OWNS the typing -- the gate's
+    -- IrisTypingActive flag blocks everyone ELSE, so gated reads here would deadlock
+    local kbr = rawget(_G, "iris_kb_raw") or iris_kb
     local shift = false
-    pcall(function() shift = iris_kb(0x10) == true end)
+    pcall(function() shift = kbr(0x10) == true end)
     local function edge(vk)
         local dwn = false
-        pcall(function() dwn = iris_kb(vk) == true end)
+        pcall(function() dwn = kbr(vk) == true end)
         local was = S.name_keys[vk] == true
         S.name_keys[vk] = dwn
         return dwn and not was
@@ -1290,10 +1293,19 @@ local function creature_label(go2)
         return "Doe"
     end
     if nm:find("ch299020", 1, true) then return "Goat" end
-    if nm:find("ch299221", 1, true) then return "Chicken" end
+    if nm:find("ch299221", 1, true) then return "Hen" end
+    if nm:find("ch299220", 1, true) then return "Rooster" end   -- 08-12: the rooster nameplate leaked its raw id
     if nm:find("ch220", 1, true) then return "Goblin" end
     if nm:find("ch221", 1, true) then return "Saurian" end
     if nm:find("ch222", 1, true) then return "Harpy" end
+    -- ⭐ THE ONE NAME BOOK (08-12): anything the ladder above missed asks the shared
+    -- registry before surrendering to a raw chassis id
+    local reg = rawget(_G, "IrisSpecies")
+    if reg and reg.name then
+        local rn = nil
+        pcall(function() rn = reg.name(nm) end)
+        if rn then return rn end
+    end
     local sp = nm:match("ch%d+")
     return sp and sp or "Creature"
 end
@@ -1452,7 +1464,13 @@ end
 -- collapse them into one token.
 local function oxt_gender(st)
     if st and st.gender ~= "female" and st.gender ~= "male" then
-        st.gender = (math.random() < 0.5) and "female" or "male"
+        -- 08-12: the offering ox's chassis knows its own sex (cow band / bull band)
+        local g9 = nil
+        pcall(function()
+            local sp9 = rawget(_G, "IrisSpecies")
+            g9 = sp9 and sp9.gender and st.go and sp9.gender(st.go) or nil
+        end)
+        st.gender = g9 or ((math.random() < 0.5) and "female" or "male")
     end
     return (st and st.gender) or "female"
 end
@@ -2926,6 +2944,64 @@ local function find_nearest_creature(pgo)
     return best
 end
 
+-- ⭐ 08-12 LINE OF SIGHT (Aurora courted a rat in a cellar UNDER a bridge she could not
+-- see): the hand can only be offered to a creature the eye can find. One ray, player
+-- chest -> creature, against the STATIC WORLD only (the rodeo camera's proven rig: own
+-- query/result instances, Layer 2, native castRay -- never share ray objects across
+-- systems, that was the dead-rays lesson). RENDER space: via.physics knows nothing of
+-- universal positions. ONE chunk local (the 200-local ceiling).
+local LOS = { rig = {} }
+LOS.ensure = function()
+    local R = LOS.rig
+    if R.ready then return true end
+    local ok = pcall(function()
+        R.system = sdk.get_native_singleton("via.physics.System")
+        R.method = sdk.find_type_definition("via.physics.System")
+            :get_method("castRay(via.physics.CastRayQuery, via.physics.CastRayResult)")
+        R.query = sdk.create_instance("via.physics.CastRayQuery"):add_ref()
+        R.result = sdk.create_instance("via.physics.CastRayResult"):add_ref()
+        R.query:clearOptions()
+        R.query:enableAllHits()
+        R.query:enableNearSort()
+        R.filter = R.query:get_FilterInfo()
+    end)
+    R.ready = ok and R.system ~= nil and R.method ~= nil
+        and R.query ~= nil and R.result ~= nil and R.filter ~= nil
+    return R.ready == true
+end
+LOS.vec3 = function(x, y, z)
+    local v = nil
+    pcall(function()
+        v = ValueType.new(sdk.find_type_definition("via.vec3"))
+        v.x = x or 0; v.y = y or 0; v.z = z or 0
+    end)
+    return v
+end
+LOS.clear = function(pgo0, tgo0)
+    -- true = no static world between player and creature. FAIL OPEN when the rig is
+    -- unavailable: a broken ray must never quietly turn taming off.
+    local clear = true
+    pcall(function()
+        if not LOS.ensure() then return end
+        local R = LOS.rig
+        local a = pgo0:call("get_Transform"):call("get_Position")
+        local b = tgo0:call("get_Transform"):call("get_Position")
+        if not (a and b) then return end
+        R.filter:set_Group(0)
+        R.filter:set_Layer(2)   -- static world only: creatures and foliage never blind the eye
+        R.filter:set_MaskBits(0)
+        R.result:clear()
+        -- chest-to-chest lift: a ground-level ray snags every doorstep and kerb
+        R.query:call("setRay(via.vec3, via.vec3)",
+            LOS.vec3(a.x, a.y + 1.2, a.z), LOS.vec3(b.x, b.y + 0.6, b.z))
+        R.method:call(R.system, R.query, R.result)
+        local n = 0
+        pcall(function() n = R.result:get_NumContactPoints() or 0 end)
+        if (tonumber(n) or 0) > 0 then clear = false end
+    end)
+    return clear
+end
+
 local function find_candidate(pgo)
     local pp = pgo and upos(pgo)
     if not pp then return nil end
@@ -2994,7 +3070,9 @@ local function find_candidate(pgo)
                         local dx6, dz6 = p6.x - pp.x, p6.z - pp.z
                         local dl6 = math.max(0.05, math.sqrt(dx6 * dx6 + dz6 * dz6))
                         local dot6 = (dx6 / dl6) * cfx + (dz6 / dl6) * cfz
-                        if dot6 > 0.5 and d < best_d then best_d = d; best = ch end   -- inside the ~60deg cone AND nearest
+                        -- inside the ~60deg cone AND nearest AND actually visible (08-12:
+                        -- the cellar rat -- no courting through floors and bridge decks)
+                        if dot6 > 0.5 and d < best_d and LOS.clear(pgo, go) then best_d = d; best = ch end
                     end
                 end
             end)
@@ -3997,7 +4075,19 @@ local SPECIES_CLIPS = {
         ground = true, burrow = true,   -- the burrow is the RABBIT's -- other ground critters dash
         -- per-species HUD hint (Aurora: ground critters will DIFFER -- rat/spider get their own)
         hud = "Left stick run   R1/Space = HOP   B = burrow (toggle)   X ambush (burrowed)   A collect   Y ping   J/R3 return" },
+    -- CHICKEN (atlas 2026-08-12): GROUND critter -- "chickens can't fly xD" (Aurora,
+    -- watching one attempt the fly-to-arm). No eat clip on the rig (the idle IS the
+    -- pecking); walk 100, run 200; the pin_lift set means native pickup carries fine.
+    ch299221 = { eat_bank = 0, eat_start = 0, eat_loop = 0, bathe = { 0, 0 },
+        walk = 100, idle = 0, idle_cycle = "0",
+        ground = true, eat_pin_skip = true,   -- eat = its own idle; the pin made it shudder
+        eat_turns = { 452, 453 },   -- 08-12: no eat clip exists on the rig at all -- FORAGE
+                                    -- instead: idle punctuated by the 90-degree turn clips
+                                    -- (a hen pecking about is exactly this little shuffle)
+        feed_wait = "It waits for a morsel - grain, greens, anything small... you carry none.",
+        hud = "Left stick run   B = dash   A collect   Y ping   J/R3 return" },
 }
+SPECIES_CLIPS.ch299220 = SPECIES_CLIPS.ch299221   -- both fowl bands share the ch99_220 rig
 SPECIES_CLIPS.ch299440 = SPECIES_CLIPS.ch299400   -- the OTHER bat band (Aurora's tame landed as
                                                   -- ch299440 while the atlas scan was ch299400 --
                                                   -- two bat variants share the rig; alias the profile)
@@ -6656,6 +6746,15 @@ re.on_application_entry("UpdateBehavior", function()
                         -- offering
                         if nm0:find("ch299003_B", 1, true) then return end
                         if iris_ox_is_tamed(ch0) then return end   -- a TAMED ox is family: never watched, never an offering (alive OR dead)
+                        -- 08-12: an ox mid-YOKE-RITE is courting, not carrion-in-waiting --
+                        -- never watched, never an offering (a griffin slammed down and STOLE
+                        -- Aurora's bonding ox out of her open palm; glorious, unacceptable)
+                        local rite9 = S.ox_rite
+                        if rite9 and rite9.ch then
+                            local ra9, ca9 = nil, nil
+                            pcall(function() ra9 = rite9.ch:get_address(); ca9 = ch0:get_address() end)
+                            if ra9 ~= nil and ra9 == ca9 then return end
+                        end
                         local u0 = upos(go0)
                         local d0 = u0 and dist(u0, pu0)
                         if not is_dead(ch0) then
@@ -10955,7 +11054,14 @@ local function do_commit(ch, why)
     -- mid-attack when the stable writes kind/group/AI context onto it (the native crash)
     pcall(function() full_pacify(ch) end)
     pcall(function() strip_hate(ch); clear_targets(ch) end)
-    local gen = (S.trial and S.trial.gender) or S.pact_gender
+    -- 08-12 (a spawned BULL sealed as "female Ox"): chassis truth OUTRANKS every roll --
+    -- for sexed chassis (cow/bull, hen/rooster) the produce gates already decided
+    local chassis_gen = nil
+    pcall(function()
+        local sp = rawget(_G, "IrisSpecies")
+        chassis_gen = sp and sp.gender and sp.gender(go) or nil   -- the BODY: the individual's roll, not the band's
+    end)
+    local gen = chassis_gen or (S.trial and S.trial.gender) or S.pact_gender
         or ((math.random() < 0.5) and "female" or "male")
     S.pact_gender = nil
     local bridged = false
@@ -11043,7 +11149,15 @@ local function try_finish(player, pgo, ch, go, why, at_hand)
     -- phase 1: release EVERYTHING and give the body a sane idle -- never hand over a body
     -- that is mid-forced-clip with a half-asleep action system
     local seal_cat = is_cat(go)
-    if creature_label(go) == "Ox" then
+    local seal_ox = creature_label(go) == "Ox"
+    -- 08-12 (Mootilda sealed at 1/700): whatever the wild body suffered before or during
+    -- the rite, the pact MENDS it -- a fresh companion never starts at death's door
+    pcall(function()
+        local hc9 = hit_controller(ch)
+        local _, mx9 = read_hp(hc9)
+        if mx9 and mx9 > 1 then write_hp(hc9, mx9) end
+    end)
+    if seal_ox then
         play_motion(ch, 0, 0)   -- the ox seals in stillness -- no howl clip on a grazer rig (07-21)
     elseif seal_cat then
         play_motion(ch, 60, 0)   -- a cat doesn't howl the pact (08-05): it SITS before you
@@ -11059,7 +11173,10 @@ local function try_finish(player, pgo, ch, go, why, at_hand)
     -- gone = 50/50 reroll. Stash it across the settle window.
     S.pact_gender = (S.trial and S.trial.gender) or S.pact_gender
     S.finish_pending = { ch = ch, at = os.clock() + 1.6, why = why }
-    if seal_cat then
+    if seal_ox then
+        S.status = "it lows - the pact is sealed"
+        set_prompt("THE PACT IS SEALED", "It lows for you, deep and content.", 2.5, 0xFF80FFB0)
+    elseif seal_cat then
         S.status = "it sits before you - the pact is sealed"
         set_prompt("THE PACT IS SEALED", "It sits before you, unhurried. You are chosen.", 2.5, 0xFF80FFB0)
     else
@@ -11079,6 +11196,15 @@ re.on_application_entry("UpdateBehavior", function()
     pcall(function()
         if C.enabled == false or C.ox_rite_enabled == false then return end
         local now = os.clock()
+        -- ⛔ 08-12 (Aurora: "I paused, when I unpaused the ox was gone... these things
+        -- should never continue, count down or even show when pause menu is open"):
+        -- the rite FREEZES whole while any pause holds -- timers re-baseline on the
+        -- freeze so nothing counts, and nothing draws.
+        if is_game_paused() then
+            if S.ox_rite then S.ox_rite.last = now end
+            S.ox_arm_t0 = nil
+            return
+        end
         local player = get_player()
         local pgo = player and char_go(player)
         local pp = pgo and upos(pgo)
@@ -11113,7 +11239,24 @@ re.on_application_entry("UpdateBehavior", function()
                         local go0 = ch0 and ch0:call("get_GameObject")
                         if not go0 then return end
                         local nm0 = tostring(go_name(go0) or "")
-                        if nm0:find("ch299003", 1, true) and not nm0:find("ch299003_B", 1, true)
+                        -- 08-12 (the cart-ox arming, screenshot 53): cart oxen are refused by
+                        -- OWNERSHIP (app.OxcartAI.CachedOx via the shared registry), not by
+                        -- name -- and the old _B name exclusion is LIFTED: _B is the bull,
+                        -- not the cart ox, and any unemployed ox may be won.
+                        local employed0 = false
+                        pcall(function()
+                            local sp0 = rawget(_G, "IrisSpecies")
+                            employed0 = sp0 and sp0.cart_ox and sp0.cart_ox(go0:get_address()) or false
+                        end)
+                        -- a locked-out ox (the stalled-yoke insult, or any courtship lockout)
+                        -- is invisible to the arming until its patience returns
+                        local locked0 = false
+                        pcall(function()
+                            local ga9 = go0:get_address()
+                            locked0 = ga9 and S.lockouts
+                                and (tonumber(S.lockouts[tostring(ga9)]) or 0.0) > os.clock() or false
+                        end)
+                        if nm0:find("ch299003", 1, true) and not employed0 and not locked0
                             and not is_dead(ch0) and not iris_ox_is_tamed(ch0) then
                             local u0 = upos(go0)
                             local d0 = u0 and dist(u0, pp)
@@ -11124,10 +11267,65 @@ re.on_application_entry("UpdateBehavior", function()
             end)
             if not found0 then S.ox_arm_t0 = nil; return end
             S.ox_arm_t0 = S.ox_arm_t0 or now
+            -- the hand goes OUT during the offer hold (Aurora: "the initial start doesn't
+            -- do the hand out pose") -- the same palm every other tame leads with
+            pcall(function()
+                local phc9 = math.floor(tonumber(C.player_hand_clip) or 6200)
+                if not (S.phold and S.phold.clip == phc9) then
+                    S.phold = { clip = phc9, until_t = now + 1.5 }
+                else
+                    S.phold.until_t = now + 1.5
+                end
+            end)
             iris_prog_hud((now - S.ox_arm_t0) / 1.2, "The Offer")
             if now - S.ox_arm_t0 >= 1.2 then
                 S.ox_arm_t0 = nil
                 S.ox_rite = { ch = found0.ch, go = found0.go, stage = "approach", t0 = now, appr = 0.0, last = now }
+                -- 08-12 (Aurora: "it did IT WAITS but was still walking as normal"): think-stop
+                -- only blocks NEW decisions -- a move command already in flight keeps walking.
+                -- SEIZE the body at rite start: cancel the live action, pin navigation.
+                -- release_creature clears both on every abort; the seal clears nav explicitly.
+                pcall(function() found0.ch:call("resetActionAndAI") end)
+                pcall(function() set_nav_stop(found0.ch, true) end)
+                -- round 8 (STILL walking through the approach): IsStopCalled is a polite
+                -- request that app.NavigationAI honors and the ox's MonsterNavigationController
+                -- ignores. The wolf hold's proven grip: DISABLE the AI components outright.
+                -- release_creature re-enables both on every exit; the wolf seals fine through
+                -- the same try_finish with this exact state.
+                pcall(function() set_ai(found0.ch, false) end)
+                -- round 9 (the wolf grip ALSO failed on this chassis): anchor for the drift
+                -- leash, and a one-shot census of every AI/nav-ish component so the log NAMES
+                -- the mover the wolf doesn't have (receipts for the real kill next round)
+                pcall(function() S.ox_rite.anchor = upos(found0.go) end)
+                pcall(function()
+                    local comps0 = found0.go:call("get_Components")
+                    local n0 = 0
+                    pcall(function() n0 = comps0:get_size() end)
+                    if n0 == 0 then pcall(function() n0 = tonumber(comps0:call("get_Length")) or 0 end) end
+                    local names0 = {}
+                    for i0 = 0, (tonumber(n0) or 0) - 1 do
+                        pcall(function()
+                            local c0 = comps0:call("get_Item", i0) or comps0[i0]
+                            local tn0 = c0:get_type_definition():get_full_name()
+                            if tn0:find("AI") or tn0:find("Nav") or tn0:find("Situation")
+                                or tn0:find("Schedule") or tn0:find("Move") or tn0:find("Think") then
+                                names0[#names0 + 1] = tn0
+                            end
+                        end)
+                    end
+                    log.info("[OxRite] mover census: " .. table.concat(names0, ", "))
+                    local ts0 = nil
+                    pcall(function() ts0 = found0.ch:call("get_IsThinkStop") end)
+                    log.info("[OxRite] think-stop readback: " .. tostring(ts0))
+                end)
+                -- offering snapshots taken HERE (not at offer-open) so greens dropped early,
+                -- during the approach, still read as new when the offer stage looks
+                pcall(function()
+                    local mgr9 = item_mgr()
+                    if mgr9 then S.ox_rite.give_seen = drop_list_snapshot(mgr9) end
+                    S.ox_rite.give_gseen = ground_scan_snapshot(pgo)
+                    S.ox_rite.give_gscan_at = now + 1.0
+                end)
                 set_prompt("THE YOKE RITE", "The ox regards you. Stay near, and move gently.", 7.0, 0xFFFFD080)
                 pcall(function() log.info("[OxRite] armed on " .. tostring(go_name(found0.go))) end)
             end
@@ -11135,6 +11333,17 @@ re.on_application_entry("UpdateBehavior", function()
         end
         -- ===== the rite is LIVE =====
         local ch, go = R.ch, R.go
+        -- ⭐ round 11 -- THE CENSUS RECEIPT: think-stop reads back NIL on ch299003 (the switch
+        -- does not exist on this chassis) and app.MonsterNavigationController is on the body.
+        -- Nav controllers translate the TRANSFORM directly -- no FSM, no root motion needed --
+        -- which is why every animation-side hold failed. This is the muscle. Cut it during
+        -- the rite; every exit and the seal switch it back on.
+        local function yoke_nav_muscle(on9)
+            pcall(function()
+                local mn9 = comp(char_go(ch), "app.MonsterNavigationController")
+                if mn9 then mn9:call("set_Enabled", on9 == true) end
+            end)
+        end
         if not (ch and char_go(ch)) or is_dead(ch) then
             -- death/despawn mid-rite: stand down CLEAN, and DECLINE the corpse for the griffin
             -- (the review's grim catch: your bonding ox must not become the next offering)
@@ -11143,6 +11352,8 @@ re.on_application_entry("UpdateBehavior", function()
                     local ga0 = go and go:get_address()
                     if ga0 then S.oxtame_declined = { addr = ga0, until_t = now + 120.0 } end
                 end)
+                yoke_nav_muscle(true)
+                pcall(function() set_player_fsm(go, true) end)
                 pcall(function() release_creature(ch) end)
             end
             S.ox_rite = nil
@@ -11152,6 +11363,10 @@ re.on_application_entry("UpdateBehavior", function()
         end
         local gp = upos(go)
         if not gp then return end
+        -- the rite SHIELD (08-12, Mootilda sealed at 1/700): pawns fight on around a
+        -- multi-minute rite -- the courted ox is pawn-proof from first regard to the seal.
+        -- release_creature clears it on every abort; the seal-heal mends any earlier hurt.
+        pcall(function() set_immunity(ch, true) end)
         local dp = dist(gp, pp)
         local dt0 = now - (tonumber(R.last) or now)
         R.last = now
@@ -11161,10 +11376,55 @@ re.on_application_entry("UpdateBehavior", function()
         R.ppos = pp
         local npressed = nheld and R.nprev ~= true
         R.nprev = nheld
-        -- walking away ends it gracefully (any stage)
-        if dp > 25.0 then
+        -- 08-12 round 8 (Aurora: "the same cancel logic for each part of the tame"): ONE
+        -- stand-down for every stage's stalled patience -- lockout, full body restore, card.
+        local function yoke_stand_down(msg9)
+            pcall(function()
+                local ga0 = go and go:get_address()
+                if ga0 then S.lockouts = S.lockouts or {}; S.lockouts[tostring(ga0)] = os.clock() + 120.0 end
+            end)
+            yoke_nav_muscle(true)
+            pcall(function() set_player_fsm(go, true) end)
+            pcall(function() release_creature(ch) end)
+            S.ox_rite = nil
+            set_prompt("IT WANTS NONE OF THIS", msg9, 7.0, 0xFF5050FF)
+            pcall(function() log.info("[OxRite] stand-down: " .. tostring(msg9)) end)
+        end
+        -- round 10 (Aurora: "and face the player too"): a slow, heavy turn toward you while
+        -- it holds -- ~70 degrees/s, never a snap. Direction from universal deltas (they are
+        -- translation-invariant); the yaw write is the puppet_step recipe.
+        local function yoke_face_player()
+            pcall(function()
+                local gp9 = upos(go); if not gp9 then return end
+                local tr9 = go:call("get_Transform")
+                local q0 = tr9:call("get_Rotation")
+                local cur9 = math.atan(2.0 * (q0.w * q0.y + q0.x * q0.z),
+                    1.0 - 2.0 * (q0.y * q0.y + q0.x * q0.x))
+                local want9 = math.atan(pp.x - gp9.x, pp.z - gp9.z)
+                local d9 = ((want9 - cur9 + math.pi) % 6.2831853) - math.pi
+                local cap9 = 1.2 * dt0
+                if d9 > cap9 then d9 = cap9 elseif d9 < -cap9 then d9 = -cap9 end
+                local y9 = cur9 + d9
+                local q9 = ValueType.new(sdk.find_type_definition("via.Quaternion"))
+                q9.x = 0; q9.y = math.sin(y9 / 2.0); q9.z = 0; q9.w = math.cos(y9 / 2.0)
+                tr9:call("set_Rotation", q9)
+            end)
+        end
+        -- walking away ends it gracefully (any stage); 08-12 round 8: past 40m it is simply
+        -- ABANDONED -- no fifteen-second grace, no lockout (leaving is not an insult)
+        if dp > 40.0 then
+            yoke_nav_muscle(true)
+            pcall(function() set_player_fsm(go, true) end)
+            pcall(function() release_creature(ch) end)
+            S.ox_rite = nil
+            set_prompt("THE RITE IS ABANDONED", "You have left it behind. The ox returns to its grazing.", 7.0, 0xFFFFD080)
+            pcall(function() log.info("[OxRite] stand-down: abandoned (>40m)") end)
+            return
+        elseif dp > 25.0 then
             R.far_t = R.far_t or now
             if now - R.far_t > 15.0 then
+                yoke_nav_muscle(true)
+                pcall(function() set_player_fsm(go, true) end)
                 pcall(function() release_creature(ch) end)
                 S.ox_rite = nil
                 set_prompt("IT RETURNS TO ITS GRAZING", "The ox loses interest. Come back, and come gently.", 7.0, 0xFFFFD080)
@@ -11174,19 +11434,41 @@ re.on_application_entry("UpdateBehavior", function()
         else
             R.far_t = nil
         end
+        yoke_nav_muscle(false)   -- round 11: the muscle stays cut every rite frame, all stages
         if R.stage == "approach" then
-            -- it holds its ground and watches (the dog-probe hold: think stopped = no wander-off)
+            -- it holds its ground and watches (the dog-probe hold: think stopped = no wander-off;
+            -- round 8: + the wolf grip, AI components OFF -- the ox's monster-nav ignores polite stops)
             pcall(function() set_think_stop(ch, true) end)
+            pcall(function() set_ai(ch, false) end)
+            -- round 10 (Aurora: the leash just STUTTERS -- "force its motion to be standing
+            -- idle from the atlas"): the clip-visibility law was the answer all along. FSM
+            -- off + the atlas standing idle (0:0 com_idle_loop, no root motion) = the body
+            -- holds itself still, and a lying ox stands up into the moment.
+            pcall(function() set_player_fsm(go, false) end)
+            pcall(function()
+                if R.clip ~= 0 then R.clip = 0; play_motion(ch, 0, 0) end
+            end)
+            yoke_face_player()
             if dp <= 8.0 and psp < 2.5 then
                 R.appr = math.min(4.0, (tonumber(R.appr) or 0.0) + dt0)
             elseif psp >= 4.5 then
                 R.appr = 0.0   -- charging at it undoes the moment (no shy walk-away: hunting stays frictionless)
             end
-            iris_prog_hud((tonumber(R.appr) or 0.0) / 4.0, "The Approach")
+            -- patience: The Measure must RISE. 25s without a new high-water mark = it tires.
+            R.appr_stall = R.appr_stall or now
+            if (tonumber(R.appr) or 0.0) > (tonumber(R.appr_hi) or 0.0) then
+                R.appr_hi = R.appr; R.appr_stall = now
+            elseif now - (tonumber(R.appr_stall) or now) > 25.0 then
+                yoke_stand_down("It tires of your distance. The ox returns to its grazing.")
+                return
+            end
+            iris_prog_hud((tonumber(R.appr) or 0.0) / 4.0, "The Measure")
+            -- 08-12 wording (Aurora read "approach" as the OX approaching): these cards
+            -- direct HER feet -- the ox holds its ground on purpose
             if dp > 8.0 then
-                set_prompt("THE APPROACH", "Come closer -- slowly.", 0.6, 0xFF80D0FF)
+                set_prompt("THE APPROACH", "Walk to it slowly -- rushing breaks the moment.", 0.6, 0xFF80D0FF)
             else
-                set_prompt("THE APPROACH", "Be gentle. Let it take your measure.", 0.6, 0xFF80D0FF)
+                set_prompt("THE APPROACH", "Stand near and be still -- it is taking your measure.", 0.6, 0xFF80D0FF)
             end
             if (tonumber(R.appr) or 0.0) >= 4.0 then
                 R.stage = "offer"; R.t0 = now
@@ -11194,41 +11476,108 @@ re.on_application_entry("UpdateBehavior", function()
             end
         elseif R.stage == "offer" then
             pcall(function() set_think_stop(ch, true) end)
+            pcall(function() set_ai(ch, false) end)   -- round 8: the wolf grip holds through the offer too
+            -- round 10: the idle hold until the greens are laid -- then the eat-walk owns the body
+            if not R.fed then
+                pcall(function() set_player_fsm(go, false) end)
+                pcall(function()
+                    if R.clip ~= 0 then R.clip = 0; play_motion(ch, 0, 0) end
+                end)
+                yoke_face_player()
+            end
+            -- patience: a full minute to open the pack and lay the greens (menus don't pause
+            -- the world) -- then it tires of waiting
+            if not R.fed then
+                R.offer_t0 = R.offer_t0 or now
+                if now - (tonumber(R.offer_t0) or now) > 60.0 then
+                    yoke_stand_down("Nothing was laid before it. The ox returns to its grazing.")
+                    return
+                end
+            end
             if R.fed then
-                -- the eating beat: it lowers to the greens where it stands
-                if now - (tonumber(R.fed) or now) > 4.0 then
-                    pcall(feed_prop_clear)
-                    R.stage = "walk"; R.bond = 0.0; R.wp = nil; R.clip = nil
-                    set_prompt("THE YOKE", "Walk with it. Stay by its side as it wanders.", 7.0, 0xFF80FFB0)
+                -- 08-12 (Aurora: "the ox doesn't even approach the food"): it WALKS to the
+                -- laid greens (the wolf feed-machine shape) and EATS with its real clips --
+                -- atlas-verified ch299003 liv 60:0 eat_start -> 60:1 eat_loop.
+                -- ⛔ THE CLIP-VISIBILITY LAW (the sliding ox): think-stop alone leaves the
+                -- FSM owning layer 0 -- clips only SHOW with the FSM off. Off during the
+                -- driven beats, restored at the walk->palm handoff and every exit.
+                pcall(function() set_player_fsm(go, false) end)
+                if R.feedpt and not R.eating and dist(gp, R.feedpt) > 2.0 then
+                    pcall(function() puppet_step(go, gp, R.feedpt.x, R.feedpt.z, 1.0, dt0, 1.2) end)
+                    pcall(function()
+                        if R.clip ~= 100 then R.clip = 100; play_motion(ch, 0, 100) end
+                    end)
+                    R.fed = now   -- the eat beat times from ARRIVAL at the greens
+                else
+                    if not R.eating then
+                        R.eating = true
+                        R.clip = nil
+                        pcall(function() play_motion(ch, 60, 0) end)   -- eat_start
+                        R.eat_loop_at = now + 1.2
+                    end
+                    if R.eat_loop_at and now >= R.eat_loop_at then
+                        R.eat_loop_at = nil
+                        pcall(function() play_motion(ch, 60, 1) end)   -- eat_loop
+                    end
+                    if now - (tonumber(R.fed) or now) > 4.0 then
+                        -- the REAL drop is eaten: despawn its ground object
+                        pcall(function()
+                            if R.drop_go then R.drop_go:call("destroy", R.drop_go); R.drop_go = nil end
+                        end)
+                        R.stage = "walk"; R.bond = 0.0; R.wp = nil; R.clip = nil; R.eating = nil
+                        set_prompt("THE YOKE", "Walk with it. Stay by its side as it wanders.", 7.0, 0xFF80FFB0)
+                    end
                 end
             else
-                local fid = feed_item_held(player, tostring(C.ox_feed_items or "184,187,193"))
-                if fid then
-                    set_prompt("THE OFFERING", "Press N to lay the greens before it.", 0.6, 0xFF80D0FF)
-                    if npressed then
-                        consume_item(player, fid)
-                        local fx, fz = 0.0, 1.0
-                        pcall(function()
-                            local prot = pgo:call("get_Transform"):call("get_Rotation")
-                            local rx = 2.0 * (prot.x * prot.z + prot.w * prot.y)
-                            local rz = 1.0 - 2.0 * (prot.x * prot.x + prot.y * prot.y)
-                            local rl = math.max(0.05, math.sqrt(rx * rx + rz * rz))
-                            fx, fz = rx / rl, rz / rl
-                        end)
-                        pcall(function()
-                            -- LOCAL coords for the prop (never universal: the whole-session law)
-                            local lp = pgo:call("get_Transform"):call("get_Position")
-                            if lp then feed_prop_spawn(lp.x + fx * 1.2, lp.y, lp.z + fz * 1.2) end
-                        end)
-                        -- the player PERFORMS the laying-down (the meal rite's proven gesture pair)
-                        S.pclip = nil
-                        S.phold = { clip = 6020, until_t = now + 35.0 / 30.0, no_pin = true,
-                            next = { clip = 6023, until_t = now + 35.0 / 30.0 + 90.0 / 30.0, no_pin = true } }
+                -- 08-12 round 3 (Morningtide and Pitywort lay IGNORED): pack discards never
+                -- enter get_DropItemList -- that list read as loot-bags-only in the field
+                -- (the law learned at the critter tames, comment at ground_scan_snapshot).
+                -- The REAL detector is the critter pair: a drop-list DELTA plus a scene-mesh
+                -- delta for the discards the list never shows.
+                -- 08-12 round 7 (Aurora RAN AWAY and "it eats" fired): both detectors measure
+                -- from the PLAYER -- running through the world streams new meshes (and loot
+                -- drops) around you, and any of them read as the offering. Two laws now:
+                -- detection only runs with the player NEAR the ox, and the offering only
+                -- counts if it lies NEAR THE OX -- the card says "before it", so does the code.
+                if dp > 10.0 then
+                    set_prompt("IT WAITS", "Return to it -- the offering must be laid before it.", 0.6, 0xFF80D0FF)
+                    return
+                end
+                local mgr9 = item_mgr()
+                if not R.give_seen and mgr9 then
+                    R.give_seen = drop_list_snapshot(mgr9)
+                    R.give_gseen = ground_scan_snapshot(pgo)
+                    R.give_gscan_at = now + 1.0
+                end
+                local drop9 = (mgr9 and R.give_seen) and find_new_drop(mgr9, player, R.give_seen) or nil
+                local drop_go9 = nil
+                if not drop9 and R.give_gseen and now >= (tonumber(R.give_gscan_at) or 0.0) then
+                    R.give_gscan_at = now + 1.0   -- the scene sweep is heavy: once a second
+                    drop_go9 = ground_scan_new(pgo, R.give_gseen)
+                end
+                if drop9 or drop_go9 then
+                    local dgo9 = nil
+                    pcall(function() dgo9 = (drop9 and drop9:call("get_GameObject")) or drop_go9 end)
+                    -- drop render -> UNIVERSAL through the player's own offset
+                    local ux9, uy9, uz9 = pp.x, pp.y, pp.z
+                    pcall(function()
+                        local rp9 = dgo9:call("get_Transform"):call("get_Position")
+                        local prp9 = pgo:call("get_Transform"):call("get_Position")
+                        ux9 = pp.x + (rp9.x - prp9.x); uy9 = pp.y + (rp9.y - prp9.y); uz9 = pp.z + (rp9.z - prp9.z)
+                    end)
+                    -- BEFORE THE OX: the laid thing must be within its reach (universal vs universal)
+                    local near_ox9 = dist({ x = ux9, y = uy9, z = uz9 }, gp) <= 6.0
+                    if near_ox9 then
+                        R.feedpt = { x = ux9, y = uy9, z = uz9 }
+                        R.drop_go = dgo9
                         R.fed = now
-                        set_prompt("THE OFFERING", "You lay the greens down. It eats.", 4.0, 0xFF80FFB0)
+                        set_prompt("THE OFFERING", "The greens lie before it. It comes to eat.", 5.0, 0xFF80FFB0)
+                        pcall(function() log.info("[OxRite] offering seen via " .. (drop9 and "drop-list" or "ground-scan")) end)
+                    else
+                        set_prompt("IT WAITS", "Lay it closer -- the offering must rest before it.", 0.6, 0xFF80D0FF)
                     end
                 else
-                    set_prompt("IT WAITS", "Something green would do -- a leaf of Greenwarish. You carry none.", 0.6, 0xFF5050FF)
+                    set_prompt("IT WAITS", "Open your pack and DROP something green before it -- Greenwarish or other greens.", 0.6, 0xFF80D0FF)
                 end
             end
         elseif R.stage == "walk" then
@@ -11236,12 +11585,31 @@ re.on_application_entry("UpdateBehavior", function()
             -- law: native graze can stall forever, so the walking is guaranteed) and the bond fills
             -- only while you keep its side.
             pcall(function() set_think_stop(ch, true) end)
-            if not R.wp or now > (tonumber(R.wp_t) or 0.0) or dist(gp, R.wp) < 1.5 then
-                local a9 = math.random() * 6.2831853
-                R.wp = { x = gp.x + math.sin(a9) * 7.0, y = gp.y, z = gp.z + math.cos(a9) * 7.0 }
-                R.wp_t = now + 8.0
+            pcall(function() set_player_fsm(go, false) end)   -- clips must OWN the body (the sliding-ox law)
+            -- 08-12 round 4 (Aurora: "random 180 turns... sudden shunts"): no more waypoint
+            -- lottery. The ox carries a HEADING that drifts in gentle bounded arcs -- a new
+            -- goal heading at most ~60 degrees away every 5-9s, and the live heading slews
+            -- toward it at ~35 deg/s. Every turn is a walked curve, never a snap.
+            if R.hdg == nil then
+                -- seed from the body's current facing so the first step continues it, not snaps
+                R.hdg = 0.0
+                pcall(function()
+                    local q9 = go:call("get_Transform"):call("get_Rotation")
+                    R.hdg = math.atan(2.0 * (q9.w * q9.y + q9.x * q9.z),
+                        1.0 - 2.0 * (q9.y * q9.y + q9.x * q9.x))
+                end)
+                R.hdg_tgt = R.hdg
             end
-            pcall(function() puppet_step(go, gp, R.wp.x, R.wp.z, 1.1, dt0, 1.2) end)
+            if not R.hdg_tgt or now > (tonumber(R.hdg_t) or 0.0) then
+                R.hdg_tgt = R.hdg + (math.random() - 0.5) * 2.1
+                R.hdg_t = now + 5.0 + math.random() * 4.0
+            end
+            local trn9 = ((R.hdg_tgt - R.hdg + math.pi) % 6.2831853) - math.pi
+            local cap9 = 0.6 * dt0
+            if trn9 > cap9 then trn9 = cap9 elseif trn9 < -cap9 then trn9 = -cap9 end
+            R.hdg = R.hdg + trn9
+            -- amble pace (round 4: "walking a bit too fast"), stepping along the heading
+            pcall(function() puppet_step(go, gp, gp.x + math.sin(R.hdg) * 4.0, gp.z + math.cos(R.hdg) * 4.0, 0.85, dt0, 1.2) end)
             pcall(function()
                 -- latch the walk clip (com convention: 100 = walk loop; restarting it every frame
                 -- is the anim-spam trap, so assert only on change)
@@ -11254,13 +11622,40 @@ re.on_application_entry("UpdateBehavior", function()
                 set_prompt("THE YOKE", "You fall behind -- keep its side.", 0.6, 0xFF5050FF)
             end
             iris_prog_hud((tonumber(R.bond) or 0.0) / 20.0, "The Yoke")
+            -- 08-12 round 7 (Aurora: "if it stays at 0% too long the ox should run away and
+            -- end the tame"): the ox has PATIENCE. If the bond has not RISEN in 20s -- never
+            -- started or abandoned mid-walk -- it wants none of this. The shared lockout
+            -- ledger keeps the insulted ox uncourtable for two minutes.
+            R.bond_stall = R.bond_stall or now
+            if (tonumber(R.bond) or 0.0) > (tonumber(R.bond_hi) or 0.0) then
+                R.bond_hi = R.bond; R.bond_stall = now
+            elseif now - (tonumber(R.bond_stall) or now) > 20.0 then
+                yoke_stand_down("You did not keep its side. The ox shakes off the moment and returns to its grazing.")
+                return
+            end
             if (tonumber(R.bond) or 0.0) >= 20.0 then
-                R.stage = "palm"; R.clip = nil
+                R.stage = "palm"; R.clip = 0
                 pcall(function() play_motion(ch, 0, 0) end)   -- it slows and stands
+                -- round 10: FSM STAYS OFF -- the native idle was the walking-away problem;
+                -- the atlas idle holds it until the seal restores everything
                 set_prompt("IT SLOWS AND STANDS", "Stand before it, and hold out your hand (hold N).", 8.0, 0xFF80FFB0)
             end
         elseif R.stage == "palm" then
             pcall(function() set_think_stop(ch, true) end)
+            pcall(function() set_ai(ch, false) end)
+            pcall(function() set_player_fsm(go, false) end)   -- round 10: the atlas idle owns it to the seal
+            pcall(function()
+                if R.clip ~= 0 then R.clip = 0; play_motion(ch, 0, 0) end
+            end)
+            yoke_face_player()
+            -- patience: 30s for the hand to come out and STAY -- a new high-water mark resets it
+            R.palm_stall = R.palm_stall or now
+            if (tonumber(R.palm) or 0.0) > (tonumber(R.palm_hi) or 0.0) then
+                R.palm_hi = R.palm; R.palm_stall = now
+            elseif now - (tonumber(R.palm_stall) or now) > 30.0 then
+                yoke_stand_down("The hand never came. The ox returns to its grazing.")
+                return
+            end
             if dp < 3.5 and nheld then
                 R.palm = (tonumber(R.palm) or 0.0) + dt0
                 local phc0 = math.floor(tonumber(C.player_hand_clip) or 6200)
@@ -11280,6 +11675,9 @@ re.on_application_entry("UpdateBehavior", function()
                         if a0 then S.ox_tamed = S.ox_tamed or {}; S.ox_tamed[a0] = true end
                     end)
                     S.ox_rite = nil
+                    yoke_nav_muscle(true)                           -- round 11: the muscle comes back at the seal
+                    pcall(function() set_nav_stop(ch, false) end)   -- the rite pinned nav at arm; the companion must walk
+                    pcall(function() set_player_fsm(go, true) end)  -- round 10: the FSM comes back at the seal
                     try_finish(player, pgo, ch, go, "the yoke rite", true)
                     pcall(function() log.info("[OxRite] SEALED: the ox joins the family") end)
                     return
@@ -11630,11 +12028,24 @@ re.on_frame(function()
                 if ach and S.tamed_addrs and S.tamed_addrs[ach] then return end
                 local nm = go_name(go)
                 local companion_name = (companion_addr and ach and ach == companion_addr) and companion_nm or nil
-                local tier, rgb = nil, nil
+                local tier, rgb, sense_name = nil, nil, nil
                 if companion_name then tier, rgb = "your companion", 0x66FF66   -- already tamed: GREEN + pet name, not a target
                 elseif name_in_csv(nm, C.critter_bands) then tier, rgb = "tameable pet", 0xFF9020
                 elseif name_in_csv(nm, C.target_bands) then tier, rgb = "tameable", 0xFF9020
-                elseif nm:find("ch299003", 1, true) then tier, rgb = "tameable pack-beast", 0xFFC040   -- the ox: yoke rite, ride comes later (07-21 honesty fix)
+                elseif nm:find("ch299003", 1, true) then
+                    -- 08-12: an EMPLOYED ox (oxcart ownership via the registry) is spoken for --
+                    -- the label must never promise a tame the rite will refuse
+                    local employed8, g8 = false, nil
+                    pcall(function()
+                        local sp8 = rawget(_G, "IrisSpecies")
+                        employed8 = sp8 and sp8.cart_ox and sp8.cart_ox(go:get_address()) or false
+                        g8 = sp8 and sp8.gender and sp8.gender(go) or nil   -- the BODY: per-individual roll
+                    end)
+                    -- 08-12 (Aurora: "see what's spawned where"): the sense reads the chassis --
+                    -- identical models, honest labels
+                    sense_name = (g8 == "male" and "Bull") or (g8 == "female" and "Cow") or nil
+                    if employed8 then tier, rgb = "yoked to its cart", 0x909090
+                    else tier, rgb = "tameable pack-beast", 0xFFC040 end   -- the ox: yoke rite, ride comes later (07-21 honesty fix)
                 elseif name_in_csv(nm, tostring(C.sense_mount_bands or "ch253,ch299003")) then tier, rgb = "tameable mount", 0xFFC040   -- griffin = passive tame + RIDE, gold
                 elseif name_in_csv(nm, C.sense_boss_bands) then tier, rgb = "combat tame", 0x5050FF
                 end
@@ -11650,7 +12061,7 @@ re.on_frame(function()
                 if sp then
                     local col = afull + rgb
                     draw.filled_circle(sp.x, sp.y, 7, col, 16)
-                    iris_screen_text(string.format("%s  -  %s (%.0fm)", companion_name or creature_label(go), tier, dd), sp.x + 11, sp.y - 8, col, 17)
+                    iris_screen_text(string.format("%s  -  %s (%.0fm)", companion_name or sense_name or creature_label(go), tier, dd), sp.x + 11, sp.y - 8, col, 17)
                 end
             end)
         end
@@ -11709,6 +12120,10 @@ re.on_frame(function()
     -- onto the card (the baby card's proven pattern -- no overlay needed)
     pcall(function()
         if S.name_pending then
+            -- 08-12 (typing opened the Stable Screen / customisation): while the card is
+            -- up, EVERY gated IRIS hotkey is dead -- re-asserted each frame, the gate
+            -- clears it, so an abandoned card can never deadlock the stack
+            _G.IrisTypingActive = true
             if not S.name_paused then name_pause(true) end
             -- lazy-register the pretty D2D card (reframework-d2d loads AFTER us)
             if not S.name_d2d_reg and _G.d2d and type(d2d.register) == "function" then
@@ -11718,7 +12133,7 @@ re.on_frame(function()
                 end)
             end
             local sealed = name_capture()
-            local esc = false; pcall(function() esc = iris_kb(0x1B) end)
+            local esc = false; pcall(function() esc = (rawget(_G, "iris_kb_raw") or iris_kb)(0x1B) end)
             if esc then name_pause(false); S.name_pending = nil; S.name_buf = ""; return end
             -- imgui FALLBACK card only when the D2D card isn't drawing
             if not S.name_d2d_reg then
@@ -11837,12 +12252,31 @@ re.on_frame(function()
             draw_marker(S.wyrm_offer_go,
                 "[E/B] Wyrm's Rite (3 crystals -> mount)", 0xFFFF9060)
         end
+        -- 08-12 round 11 (Aurora: "the ox isn't being marked like it normally does"):
+        -- the courted ox wears the same marker every other tame wears -- species + gender
+        -- glyph, the gender being the individual's own roll (the one the seal will lock)
+        local R9 = S.ox_rite
+        if R9 and R9.go then
+            local lbl9 = "Ox"
+            pcall(function() lbl9 = tostring(creature_label(R9.go)) end)
+            pcall(function()
+                local sp9 = rawget(_G, "IrisSpecies")
+                local g9 = sp9 and sp9.gender and sp9.gender(R9.go) or nil
+                if g9 == "female" then lbl9 = lbl9 .. " \u{2640}"
+                elseif g9 == "male" then lbl9 = lbl9 .. " \u{2642}" end
+            end)
+            draw_marker(R9.go, lbl9, 0xFFFFC040)
+        end
     end)
     pcall(function()
         -- MUSIC SAFETY (runs even when the mod is toggled off): never leave a theme stuck playing.
         -- The main music edge lives past several early-returns (disabled/pause/player-loss), so
         -- reconcile the stop here where it always runs. S.armed clears the moment a tame ends/loses.
-        if S.music_playing and (C.enabled ~= true or C.music_enabled ~= true or S.armed ~= true) then
+        -- 08-12 round 3 (the silent yoke): the ox rite never sets S.armed -- this edge was
+        -- KILLING the theme the same frame the want-edge started it. It must know every
+        -- state the want-edge knows.
+        if S.music_playing and (C.enabled ~= true or C.music_enabled ~= true
+            or (S.armed ~= true and S.ox_rite == nil)) then
             bgm_stop(S.music_playing.g, S.music_playing.p); S.music_playing = nil
         end
         if C.enabled ~= true then return end
@@ -14680,7 +15114,10 @@ re.on_frame(function()
         -- ===== TAMING MUSIC (ask #2): a chosen in-game theme plays while a tame is active =====
         -- Placed BEFORE the no-target return so the stop-edge still fires when the wolf is lost.
         do
-            local want = (C.music_enabled == true) and (S.armed == true) and (S.target ~= nil)
+            -- 08-12: the YOKE RITE sings too (Aurora: "all the other ones do") -- same
+            -- theme, same central stop-edge when the rite ends however it ends
+            local want = (C.music_enabled == true)
+                and (((S.armed == true) and (S.target ~= nil)) or (S.ox_rite ~= nil))
             if want and not S.music_playing then
                 local g = math.floor(tonumber(C.music_group) or 23)
                 local p = math.floor(tonumber(C.music_phase) or 10)
@@ -14853,7 +15290,26 @@ re.on_frame(function()
                     fd.eat_at = nil
                     play_motion(ch, tonumber(fd.eat_bank) or tonumber(C.cue_eat_bank) or 60, tonumber(fd.eat_loop) or tonumber(C.cue_eat_loop) or 26)
                 end
-                if fd.pin then
+                -- forage turns (08-12, the statue chicken): a species with NO eat clip on
+                -- its rig (fowl) just stood in idle. Punctuate the idle with its 90-degree
+                -- turn clips -- the little shuffle of a hen pecking about the ground.
+                if fd.turns then
+                    fd.turn_at = fd.turn_at or (now + 1.0)
+                    if now >= fd.turn_at then
+                        fd.turn_at = now + 1.4 + math.random() * 0.9
+                        fd.turn_ix = ((tonumber(fd.turn_ix) or 0) % #fd.turns) + 1
+                        pcall(function() play_motion(ch, 0, fd.turns[fd.turn_ix]) end)
+                        fd.turn_back_at = now + 0.8
+                    end
+                    if fd.turn_back_at and now >= fd.turn_back_at then
+                        fd.turn_back_at = nil
+                        pcall(function() play_motion(ch, tonumber(fd.eat_bank) or 0, tonumber(fd.eat_loop) or 0) end)
+                    end
+                end
+                -- pin_skip (08-12, the vibrating chicken): the pin exists because SOME eat
+                -- clips carry root motion (the bat's) -- snap-pinning a species whose "eat"
+                -- is its own idle just makes it shudder in place. Skip for those.
+                if fd.pin and fd.pin_skip ~= true then
                     pcall(function()
                         local pv = ValueType.new(sdk.find_type_definition("via.Position"))
                         pv.x = fd.pin.x; pv.y = fd.pin.y; pv.z = fd.pin.z
@@ -15475,7 +15931,15 @@ re.on_frame(function()
                     -- GENDER rolls the moment courtship begins -- known IN ADVANCE (Aurora's
                     -- breeding rule: the player can judge if this one is the gender they need).
                     -- It rides the whole rite and lands in the stable record at commit.
-                    gender = (math.random() < 0.5) and "female" or "male" }
+                    -- 08-12: chassis-sexed species (hen/rooster/cow/bull) READ their truth
+                    gender = (function()
+                        local g9 = nil
+                        pcall(function()
+                            local sp9 = rawget(_G, "IrisSpecies")
+                            g9 = sp9 and sp9.gender and sp9.gender(nm) or nil
+                        end)
+                        return g9 or ((math.random() < 0.5) and "female" or "male")
+                    end)() }
                 S.trial = T
                 S.wolf_clip = nil   -- stale cache from the LAST trial made wolf_clip(0) a no-op
                                     -- and left the chase-run looping = the endless meet shove
@@ -16198,7 +16662,9 @@ re.on_frame(function()
                             eat_bank = (se9 and se9.eat_bank) or tonumber(C.crow_scavenge_bank) or 60,
                             eat_start = (se9 and se9.eat_start) or tonumber(C.crow_scavenge_clip) or 20,
                             eat_loop = (se9 and se9.eat_loop) or tonumber(C.crow_scavenge_clip) or 20,
-                            eat_secs = tonumber(C.critter_offer_secs) or 4.0 }
+                            eat_secs = tonumber(C.critter_offer_secs) or 4.0,
+                            pin_skip = (se9 and se9.eat_pin_skip) or nil,
+                            turns = (se9 and se9.eat_turns) or nil }
                         if T.on_arm then
                             T.on_arm = nil   -- it flies down toward the meal; the arm comes down
                             unparent_critter(ch); T.parented = nil
@@ -20492,5 +20958,9 @@ re.on_frame(function()
     if S.oxtame and tostring(S.oxtame.stage or "idle") ~= "idle" then
         music_mode = "context"
     end
+    -- 08-12 (the silent yoke, round 4): the YOKE RITE is also a parallel machine that never
+    -- touches S.mode -- the watcher heard "idle" through the whole tame. "trusting" is
+    -- accepted by the watcher under EVERY start_mode config (context is not).
+    if S.ox_rite then music_mode = "trusting" end
     rawset(_G, "IrisTamingMode", music_mode)
 end)

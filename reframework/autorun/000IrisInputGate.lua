@@ -43,6 +43,10 @@ function iris_input_blocked()
     if _G.RiftSpeak_ExternalTyping == true then return true end
     if _G.RiftSpeakPromptOpen == true then return true end   -- legacy spelling: three IRIS files shipped this one
     if _G.IrisKeyCaptureActive == true then return true end
+    if _G.IrisTypingActive == true then return true end      -- 08-12: the IRIS naming card (d2d, not
+                                                             -- the overlay) -- typing "O" must not open
+                                                             -- the Stable Screen. Re-assert every frame
+                                                             -- while the card is up; cleared below.
     local ui = false
     pcall(function() ui = reframework:is_drawing_ui() == true end)
     return ui
@@ -60,4 +64,7 @@ end
 -- A rebind capture that gets abandoned (panel closed mid-pick) must not leave every
 -- hotkey in the stack dead. This file loads first, so this handler runs first: the flag
 -- only survives if the capture re-asserts it on the frame it is actually armed.
-re.on_frame(function() _G.IrisKeyCaptureActive = false end)
+re.on_frame(function()
+    _G.IrisKeyCaptureActive = false
+    _G.IrisTypingActive = false   -- same law: only a card that is REALLY up re-asserts it
+end)

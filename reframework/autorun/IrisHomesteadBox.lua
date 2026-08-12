@@ -166,8 +166,29 @@ local function heal_code(sp, code)
     return pick or code
 end
 
+-- ⛔⛔ 08-12 (Tails the drake, sent [H]ome, spawned as a FULL BOSS ENCOUNTER -- "Arisen...
+-- Stand against me!" -- and torched the house): resident bodies keep their OWN combat AI,
+-- and v1 has no predator calm. Only DOCILE species get bodies in the yard; predators keep
+-- their [Home] flag but stay "indoors" (no body) until the calm arc ships.
+local DOCILE = {
+    ch299200 = true, ch299210 = true,                    -- rabbit, rat
+    ch299400 = true, ch299410 = true, ch299430 = true,   -- bat, crow, bird
+    ch299220 = true, ch299221 = true,                    -- fowl
+    ch299003 = true,                                     -- ox
+}
+
 local function spawn_resident(rec, ax, ay, az, slot)
     if not ok_spawn then return false end
+    local band0 = tostring(rec.species or ""):match("ch%d+") or ""
+    if not DOCILE[band0] then
+        B.warned_pred = B.warned_pred or {}
+        if not B.warned_pred[rec.id] then
+            B.warned_pred[rec.id] = true
+            pcall(function() log.info("[IrisHomesteadBox] " .. tostring(rec.name)
+                .. " stays indoors -- the yard cannot yet hold a predator's temper (calm arc pending)") end)
+        end
+        return false
+    end
     B.spawner = B.spawner or SpawnRequest:new()
     -- placement: a deterministic ring slot per resident (stable spots, no pile-ups)
     local ang = (slot * 2.399963)   -- golden angle: spreads any count evenly

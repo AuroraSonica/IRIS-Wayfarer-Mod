@@ -1,0 +1,283 @@
+{
+ "key": "hay_barn",
+ "name": "Hay Barn (timber, Vermund farm)",
+ "source": "COMPOSITE GROUPS capture 2026-08-12, env_5834, anchor=footprint centroid @ lowest-piece ground",
+ "specs": [
+  {
+   "id": "sm51_053_00",
+   "mesh": "environment/props/sm5x/sm51/sm51_053/sm51_053_00",
+   "mdf": "environment/props/sm5x/sm51/sm51_053/sm51_053_00.mdf2",
+   "label": "barn sm51_053_00"
+  },
+  {
+   "id": "sm51_065_00",
+   "mesh": "environment/props/sm5x/sm51/sm51_065/sm51_065_00",
+   "mdf": "environment/props/sm5x/sm51/sm51_065/sm51_065_00.mdf2",
+   "label": "barn sm51_065_00"
+  },
+  {
+   "id": "sm51_083_00",
+   "mesh": "environment/props/sm5x/sm51/sm51_083/sm51_083_00",
+   "mdf": "environment/props/sm5x/sm51/sm51_083/sm51_083_00.mdf2",
+   "label": "barn sm51_083_00"
+  },
+  {
+   "id": "sm51_307_00",
+   "mesh": "environment/props/sm5x/sm51/sm51_307/sm51_307_00",
+   "mdf": "environment/props/sm5x/sm51/sm51_307/sm51_307_00.mdf2",
+   "label": "barn sm51_307_00",
+   "no_mcol_e": true,
+   "no_mcol_t": true,
+   "no_rmesh": true,
+   "no_sdftex": true
+  },
+  {
+   "id": "sm61_597_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_597/sm61_597_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_597/sm61_597_00.mdf2",
+   "label": "barn sm61_597_00"
+  },
+  {
+   "id": "sm61_598_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_598/sm61_598_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_598/sm61_598_00.mdf2",
+   "label": "barn sm61_598_00"
+  },
+  {
+   "id": "sm61_599_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_599/sm61_599_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_599/sm61_599_00.mdf2",
+   "label": "barn sm61_599_00"
+  },
+  {
+   "id": "sm62_434_00",
+   "mesh": "environment/props/sm6x/sm62/sm62_434/sm62_434_00",
+   "mdf": "environment/props/sm6x/sm62/sm62_434/sm62_434_00.mdf2",
+   "label": "barn sm62_434_00"
+  },
+  {
+   "id": "sm62_441_00",
+   "mesh": "environment/props/sm6x/sm62/sm62_441/sm62_441_00",
+   "mdf": "environment/props/sm6x/sm62/sm62_441/sm62_441_00.mdf2",
+   "label": "barn sm62_441_00"
+  },
+  {
+   "id": "sm62_443_00",
+   "mesh": "environment/props/sm6x/sm62/sm62_443/sm62_443_00",
+   "mdf": "environment/props/sm6x/sm62/sm62_443/sm62_443_00.mdf2",
+   "label": "barn sm62_443_00"
+  }
+ ],
+ "placements": [
+  {
+   "id": "sm62_434_00",
+   "off": {
+    "x": 5.811,
+    "y": 3.0,
+    "z": 2.162
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.9407,
+    "z": 0.0,
+    "w": 0.3393
+   }
+  },
+  {
+   "id": "sm62_434_00",
+   "off": {
+    "x": -4.946,
+    "y": 3.0,
+    "z": 1.036
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.3393,
+    "z": 0.0,
+    "w": 0.9407
+   }
+  },
+  {
+   "id": "sm62_443_00",
+   "off": {
+    "x": -4.946,
+    "y": 3.0,
+    "z": 1.036
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.3393,
+    "z": 0.0,
+    "w": 0.9407
+   }
+  },
+  {
+   "id": "sm62_443_00",
+   "off": {
+    "x": 5.811,
+    "y": 3.0,
+    "z": 2.162
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.9407,
+    "z": 0.0,
+    "w": 0.3393
+   }
+  },
+  {
+   "id": "sm62_441_00",
+   "off": {
+    "x": -3.032,
+    "y": 5.5,
+    "z": -1.274
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.3393,
+    "z": 0.0,
+    "w": 0.9407
+   }
+  },
+  {
+   "id": "sm61_598_00",
+   "off": {
+    "x": 3.897,
+    "y": 5.5,
+    "z": 4.472
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.9407,
+    "z": 0.0,
+    "w": 0.3393
+   }
+  },
+  {
+   "id": "sm61_599_00",
+   "off": {
+    "x": -2.638,
+    "y": 0.0,
+    "z": 2.951
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.3393,
+    "z": 0.0,
+    "w": 0.9407
+   }
+  },
+  {
+   "id": "sm51_307_00",
+   "off": {
+    "x": -0.416,
+    "y": 0.275,
+    "z": -6.062
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.6744,
+    "z": 0.0,
+    "w": 0.7384
+   }
+  },
+  {
+   "id": "sm51_065_00",
+   "off": {
+    "x": -1.066,
+    "y": 0.366,
+    "z": -2.216
+   },
+   "rot": {
+    "x": -0.0,
+    "y": -0.3413,
+    "z": 0.0,
+    "w": 0.94
+   }
+  },
+  {
+   "id": "sm51_083_00",
+   "off": {
+    "x": -0.493,
+    "y": 0.275,
+    "z": -5.492
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.2626,
+    "z": 0.0,
+    "w": 0.9649
+   }
+  },
+  {
+   "id": "sm51_053_00",
+   "off": {
+    "x": 0.289,
+    "y": 0.275,
+    "z": -5.169
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.2563,
+    "z": 0.0,
+    "w": 0.9666
+   }
+  },
+  {
+   "id": "sm61_597_00",
+   "off": {
+    "x": 1.981,
+    "y": 0.0,
+    "z": 6.781
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.4252,
+    "z": 0.0,
+    "w": 0.9051
+   }
+  },
+  {
+   "id": "sm61_597_00",
+   "off": {
+    "x": -4.946,
+    "y": 0.0,
+    "z": 1.036
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.3393,
+    "z": 0.0,
+    "w": 0.9407
+   }
+  },
+  {
+   "id": "sm61_597_00",
+   "off": {
+    "x": 5.811,
+    "y": 0.0,
+    "z": 2.162
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.9407,
+    "z": 0.0,
+    "w": 0.3393
+   }
+  },
+  {
+   "id": "sm61_597_00",
+   "off": {
+    "x": -1.117,
+    "y": 0.0,
+    "z": -3.583
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.9051,
+    "z": 0.0,
+    "w": -0.4252
+   }
+  }
+ ]
+}

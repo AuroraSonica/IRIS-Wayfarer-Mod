@@ -104,7 +104,7 @@
         "collect_snd_id": 4054656403,
         "companion_nameplate": true,
         "connect_range": 8.0,
-        "critter_bands": "ch299410,ch299430,ch299400,ch299420,ch299440,ch299200,ch299210",
+        "critter_bands": "ch299410,ch299430,ch299400,ch299420,ch299440,ch299200,ch299210,ch299220,ch299221",
         "critter_call_clip": 6200,
         "critter_feed_items": "184,187,193,1,2,4,5,10,11",
         "critter_feed_names": "warish,pittywort,morningtide,syrupwort,pitywort,apple,grapes,fig,berry",

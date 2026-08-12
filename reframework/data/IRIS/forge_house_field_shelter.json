@@ -1,0 +1,293 @@
+{
+ "key": "field_shelter",
+ "name": "Field Shelter (gabled timber, Vermund farm)",
+ "source": "COMPOSITE GROUPS capture 2026-08-12, env_5962+5834, anchor=footprint centroid @ lowest-piece ground",
+ "specs": [
+  {
+   "id": "sm61_577_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_577/sm61_577_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_577/sm61_577_00.mdf2",
+   "label": "shelter sm61_577_00"
+  },
+  {
+   "id": "sm61_578_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_578/sm61_578_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_578/sm61_578_00.mdf2",
+   "label": "shelter sm61_578_00"
+  },
+  {
+   "id": "sm61_581_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_581/sm61_581_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_581/sm61_581_00.mdf2",
+   "label": "shelter sm61_581_00"
+  },
+  {
+   "id": "sm61_582_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_582/sm61_582_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_582/sm61_582_00.mdf2",
+   "label": "shelter sm61_582_00"
+  },
+  {
+   "id": "sm61_583_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_583/sm61_583_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_583/sm61_583_00.mdf2",
+   "label": "shelter sm61_583_00"
+  },
+  {
+   "id": "sm61_584_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_584/sm61_584_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_584/sm61_584_00.mdf2",
+   "label": "shelter sm61_584_00"
+  },
+  {
+   "id": "sm61_589_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_589/sm61_589_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_589/sm61_589_00.mdf2",
+   "label": "shelter sm61_589_00"
+  },
+  {
+   "id": "sm61_596_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_596/sm61_596_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_596/sm61_596_00.mdf2",
+   "label": "shelter sm61_596_00"
+  },
+  {
+   "id": "sm61_597_00",
+   "mesh": "environment/props/sm6x/sm61/sm61_597/sm61_597_00",
+   "mdf": "environment/props/sm6x/sm61/sm61_597/sm61_597_00.mdf2",
+   "label": "shelter sm61_597_00"
+  },
+  {
+   "id": "sm62_443_00",
+   "mesh": "environment/props/sm6x/sm62/sm62_443/sm62_443_00",
+   "mdf": "environment/props/sm6x/sm62/sm62_443/sm62_443_00.mdf2",
+   "label": "shelter sm62_443_00"
+  }
+ ],
+ "placements": [
+  {
+   "id": "sm61_584_00",
+   "off": {
+    "x": -1.376,
+    "y": 3.0,
+    "z": -4.227
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_582_00",
+   "off": {
+    "x": -1.376,
+    "y": 3.0,
+    "z": -4.227
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_581_00",
+   "off": {
+    "x": -2.116,
+    "y": 3.0,
+    "z": -2.922
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_583_00",
+   "off": {
+    "x": 3.844,
+    "y": 3.0,
+    "z": -1.27
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_578_00",
+   "off": {
+    "x": -1.376,
+    "y": 0.0,
+    "z": -4.227
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_596_00",
+   "off": {
+    "x": -2.116,
+    "y": 0.0,
+    "z": -2.922
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_577_00",
+   "off": {
+    "x": 2.539,
+    "y": 0.0,
+    "z": -2.01
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.967,
+    "z": 0.0,
+    "w": 0.2549
+   }
+  },
+  {
+   "id": "sm61_581_00",
+   "off": {
+    "x": -3.595,
+    "y": 3.0,
+    "z": -0.311
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.864,
+    "z": 0.0,
+    "w": 0.5035
+   }
+  },
+  {
+   "id": "sm61_581_00",
+   "off": {
+    "x": 0.148,
+    "y": 3.0,
+    "z": 5.256
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.5035,
+    "z": 0.0,
+    "w": 0.864
+   }
+  },
+  {
+   "id": "sm61_581_00",
+   "off": {
+    "x": 1.626,
+    "y": 3.0,
+    "z": 2.645
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.5035,
+    "z": 0.0,
+    "w": 0.864
+   }
+  },
+  {
+   "id": "sm61_584_00",
+   "off": {
+    "x": 3.105,
+    "y": 3.0,
+    "z": 0.035
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.5035,
+    "z": 0.0,
+    "w": 0.864
+   }
+  },
+  {
+   "id": "sm62_443_00",
+   "off": {
+    "x": 0.148,
+    "y": 3.0,
+    "z": 5.256
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.5035,
+    "z": 0.0,
+    "w": 0.864
+   }
+  },
+  {
+   "id": "sm61_578_00",
+   "off": {
+    "x": 3.844,
+    "y": 0.0,
+    "z": -1.27
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.967,
+    "z": 0.0,
+    "w": 0.2549
+   }
+  },
+  {
+   "id": "sm61_597_00",
+   "off": {
+    "x": -5.073,
+    "y": 0.0,
+    "z": 2.298
+   },
+   "rot": {
+    "x": 0.0,
+    "y": -0.2549,
+    "z": 0.0,
+    "w": 0.967
+   }
+  },
+  {
+   "id": "sm61_596_00",
+   "off": {
+    "x": 1.626,
+    "y": 0.0,
+    "z": 2.645
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.5035,
+    "z": 0.0,
+    "w": 0.864
+   }
+  },
+  {
+   "id": "sm61_589_00",
+   "off": {
+    "x": 0.148,
+    "y": 0.0,
+    "z": 5.256
+   },
+   "rot": {
+    "x": 0.0,
+    "y": 0.5035,
+    "z": 0.0,
+    "w": 0.864
+   }
+  }
+ ]
+}

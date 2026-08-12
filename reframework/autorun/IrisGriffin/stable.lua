@@ -138,7 +138,11 @@ function griffin_stable_hp_restore_tick()
             hp, ignored, hc = griffin_stable_read_live_hp(q.ch)
         end
         local want = tonumber(q.want)
-        if hc and hp and want and hp > want + 0.05 then
+        -- 08-12 (Tails summoned at 99,990/100,000): the drop-in LANDING costs a few HP
+        -- inside this very construction window, and the old upper-bound-only clamp
+        -- refused to heal it back. The window is 2s -- nothing legitimate hurts a
+        -- fresh summon in it -- so hold the handover value from BOTH sides.
+        if hc and hp and want and math.abs(hp - want) > 0.05 then
             griffin_downed_set_hp(hc, want)
         end
     end)

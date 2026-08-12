@@ -2426,6 +2426,66 @@ local function costume_tick()
         -- buck clips. The pin runs first; any residual drive nudge this
         -- frame is millimetres and gets wiped by next frame's pin.
         costume.cur_speed = 0.0
+        -- 08-12 (Aurora: the breather trot was "very stuttery"): the anchor
+        -- used to advance in the TAME tick while the pin applied it HERE in
+        -- LateUpdate -- two clocks stepping one position = judder. The
+        -- advance now happens in the same breath as the pin, with a slow
+        -- WANDERING heading (re-rolled every 1-2s) so the circuit reads like
+        -- an animal ambling, not a rail. Leash steering preserved.
+        local ro2 = tame_hold.rodeo
+        if ro2 and ro2.phase == "rest" then
+            local now2 = os.clock()
+            local pdt = math.min(0.05, now2 - (tame_hold.pin_t or now2))
+            tame_hold.pin_t = now2
+            pcall(function()
+                local ox_tf2 = costume.ox_go:call("get_Transform")
+                if not ro2.wander_until or now2 >= ro2.wander_until then
+                    ro2.wander_until = now2 + 1.0 + math.random()
+                    ro2.wander_rate = (math.random() - 0.5) * math.rad(50.0)
+                end
+                local turn2 = (ro2.wander_rate or 0.0) * pdt
+                local hx0 = tame_hold.anchor[1]
+                    - (tame_hold.anchor_home and tame_hold.anchor_home[1]
+                        or tame_hold.anchor[1])
+                local hz0 = tame_hold.anchor[3]
+                    - (tame_hold.anchor_home and tame_hold.anchor_home[3]
+                        or tame_hold.anchor[3])
+                local fwd = ox_tf2:call("get_AxisZ")
+                if math.sqrt(hx0 * hx0 + hz0 * hz0) > 3.0 then
+                    local want = math.atan(-hx0, -hz0)
+                    local have = math.atan(tonumber(fwd.x) or 0.0,
+                        tonumber(fwd.z) or 1.0)
+                    local dyaw = want - have
+                    while dyaw > math.pi do dyaw = dyaw - 2 * math.pi end
+                    while dyaw < -math.pi do dyaw = dyaw + 2 * math.pi end
+                    turn2 = math.max(-1.0, math.min(1.0, dyaw))
+                        * math.rad(80.0) * pdt
+                end
+                if turn2 ~= 0.0 then
+                    local rot = ox_tf2:call("get_Rotation")
+                    local half = turn2 * 0.5
+                    local sy, cy = math.sin(half), math.cos(half)
+                    local qx = rot.x * cy - rot.z * sy
+                    local qy = rot.w * sy + rot.y * cy
+                    local qz = rot.x * sy + rot.z * cy
+                    local qw = rot.w * cy - rot.y * sy
+                    rot.x, rot.y, rot.z, rot.w = qx, qy, qz, qw
+                    ox_tf2:call("set_Rotation", rot)
+                end
+                fwd = ox_tf2:call("get_AxisZ")
+                -- 08-12 (Aurora: "walk speed of the breather is too fast"):
+                -- with the idle-latch fight fixed, a true WALK works -- the
+                -- 08-06 "walk slid" verdict was the latch snapping, not the
+                -- clip. 1.6 m/s matches the walk clip 901:1 commanded below.
+                local step = 1.6 * pdt
+                tame_hold.anchor[1] = tame_hold.anchor[1]
+                    + (tonumber(fwd.x) or 0.0) * step
+                tame_hold.anchor[3] = tame_hold.anchor[3]
+                    + (tonumber(fwd.z) or 0.0) * step
+            end)
+        else
+            tame_hold.pin_t = nil
+        end
         pcall(function()
             local tf = costume.horse_go:call("get_Transform")
             local p = tf:call("get_UniversalPosition")
@@ -3696,7 +3756,14 @@ local function costume_tick()
                 -- horse copies that drift every frame, producing vibration and
                 -- the slow stationary ice-skate. Latch X/Z once fully stopped;
                 -- release immediately for movement, falls, kicks or hit recoil.
+                -- 08-12 THE BREATHER STUTTER: during the tame rodeo the rest
+                -- phase's pin IS a mover (it walks the anchor forward at trot
+                -- pace), but cur_speed reads 0 so this latch stayed armed and
+                -- snapped the horse back every frame until the pin drifted
+                -- >1m -- freeze, 1m lurch, freeze. The pin owns the body for
+                -- the whole brace/rodeo; the latch must stand down there.
                 if S.ride_pose_on and target_speed <= 0.0 and cur <= 0.02
+                    and not tame_pinned
                     and not costume.jump and not costume.fall_v
                     and not costume.kick and not costume.hit_react_hold then
                     local pos = ox_tf:call("get_UniversalPosition")
@@ -3754,6 +3821,12 @@ local function costume_tick()
                             local stationary_ground = S.ride_pose_on
                                 and (tonumber(costume.cur_speed) or 0.0) <= 0.02
                                 and costume.fall_v == nil
+                                -- 08-12: the rodeo rest phase WALKS the body
+                                -- (pin-driven, cur_speed still 0) -- it must
+                                -- ground-follow smoothly, not in 8cm steps
+                                and not (tame_pinned and tame_hold
+                                    and tame_hold.rodeo
+                                    and tame_hold.rodeo.phase == "rest")
                             if dyg < 0.0 and -dyg < 1.0 then
                                 -- Ray contacts flicker by a few centimetres on
                                 -- triangle seams. Do not bounce a stationary
@@ -7923,6 +7996,42 @@ local function tame_card(title, sub, argb)
     S.status = title .. (sub and (" - " .. sub) or "")
 end
 
+-- 08-12 (Aurora): a species + gender tag over the whole tame -- "Unicorn ♀" /
+-- "Horse ♂" -- so you know what you are wrestling before the christening.
+-- Species asks the wild-horses api per frame (a unicorn promotion mid-tame
+-- updates live); drawn just above the ritual card, unicorns in pale blue.
+local function tame_species_line(tame)
+    local rec = tame and tame.record
+    local go = rec and rec.game_object
+    if not (go and valid(go)) then return end
+    local font = rawget(_G, "IrisFont")
+    if not (font and type(font.text) == "function") then return end
+    local species = "Horse"
+    pcall(function()
+        local api = rawget(_G, "__iris_wild_horses_api")
+        if api and api.is_unicorn and api.is_unicorn(go) then
+            species = "Unicorn"
+        end
+    end)
+    local sym = (tame.gender == "female") and "\u{2640}" or "\u{2642}"
+    local label = species .. " " .. sym
+    local sw, sh = 1920.0, 1080.0
+    pcall(function()
+        local ds = imgui.get_display_size()
+        if ds then
+            sw = tonumber(ds.x) or sw
+            sh = tonumber(ds.y) or sh
+        end
+    end)
+    -- rough centring: glyph count (utf8 -- the symbol is 3 BYTES), ~0.30em wide
+    local n = #label
+    pcall(function() n = utf8.len(label) or n end)
+    local base = 18
+    local half = n * (sh / 1080.0) * base * 0.30
+    local col = (species == "Unicorn") and 0xFFA8E0FF or 0xFFE2D6BA
+    pcall(font.text, label, sw * 0.5 - half, sh * 0.105, col, base)
+end
+
 -- the house gauges (drawn by the griffin probe's d2d suite, cross-file):
 -- IrisProgressHUD = the amber charge bar; IrisRodeoHUD = Grip + Break
 local function tame_charge_bar(frac, label)
@@ -8212,6 +8321,7 @@ local function tame_tick()
         tame_abort("the horse is gone")
         return
     end
+    tame_species_line(tame)
     local player_pos = universal_pos(player_game_object())
     local horse_pos = universal_pos(record.game_object)
     local d = (player_pos and horse_pos)
@@ -8491,12 +8601,14 @@ local function tame_tick()
             tame_card("IT TIRES",
                 gripping and "LET GO to catch your grip"
                 or "breathe - regain your grip", TAME_GREEN)
-            -- 08-06 r4/r5 (Aurora: walk slid, then paced on the spot; "use
-            -- trot"): COMMAND the trot, 901:2, with force_hold so nothing
-            -- stomps it; the anchor moves at matching trot pace above
-            if S.costume and S.costume.cmd_clip ~= 2 then
+            -- 08-12: WALK, not trot. The 08-06 "walk slid / paced on the
+            -- spot" that forced the trot was the idle-latch fight (now
+            -- fixed); with the body stepping at a real 1.6 m/s the walk
+            -- clip 901:1 finally matches its own feet. force_hold so
+            -- nothing stomps it.
+            if S.costume and S.costume.cmd_clip ~= 1 then
                 S.costume.force_hold = true
-                S.costume.cmd_bank, S.costume.cmd_clip = 901, 2
+                S.costume.cmd_bank, S.costume.cmd_clip = 901, 1
                 pcall(function()
                     local motion = S.costume.horse_character
                         :call("get_Motion")
@@ -8504,7 +8616,7 @@ local function tame_tick()
                     if layer then
                         layer:call(
                             "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
-                            901, 2, 0.0, 0.35, 1, 1)
+                            901, 1, 0.0, 0.35, 1, 1)
                     end
                 end)
             end
@@ -8513,45 +8625,11 @@ local function tame_tick()
                 -- now recovers ~half a bar, not all of it -- the duel bites
                 ro.grip = math.min(1.0, ro.grip + dt / 6.0)
             end
-            -- 08-06 r5 (Aurora): the breather TROTS a circuit -- anchor moves
-            -- at trot pace to match the 901:2 clip. Walking-on-the-spot fix:
-            -- at the leash edge it STEERS HOME instead of stopping, so the
-            -- legs always have real ground speed under them.
-            pcall(function()
-                local costume = S.costume
-                if not (tame.anchor and tame.anchor_home and costume
-                    and valid(costume.ox_go)) then return end
-                local ox_tf2 = costume.ox_go:call("get_Transform")
-                local fwd = ox_tf2:call("get_AxisZ")
-                local hx0 = tame.anchor[1] - tame.anchor_home[1]
-                local hz0 = tame.anchor[3] - tame.anchor_home[3]
-                if math.sqrt(hx0 * hx0 + hz0 * hz0) > 3.0 then
-                    -- outside the leash: bend the heading toward home
-                    local want = math.atan(-hx0, -hz0)
-                    local have = math.atan(tonumber(fwd.x) or 0.0,
-                        tonumber(fwd.z) or 1.0)
-                    local dyaw = want - have
-                    while dyaw > math.pi do dyaw = dyaw - 2 * math.pi end
-                    while dyaw < -math.pi do dyaw = dyaw + 2 * math.pi end
-                    local turn2 = math.max(-1.0, math.min(1.0, dyaw))
-                        * math.rad(80.0) * dt
-                    local rot = ox_tf2:call("get_Rotation")
-                    local half = turn2 * 0.5
-                    local sy, cy = math.sin(half), math.cos(half)
-                    local qx = rot.x * cy - rot.z * sy
-                    local qy = rot.w * sy + rot.y * cy
-                    local qz = rot.x * sy + rot.z * cy
-                    local qw = rot.w * cy - rot.y * sy
-                    rot.x, rot.y, rot.z, rot.w = qx, qy, qz, qw
-                    ox_tf2:call("set_Rotation", rot)
-                    fwd = ox_tf2:call("get_AxisZ")
-                end
-                local step = 3.0 * dt   -- trot pace, matches 901:2
-                tame.anchor[1] = tame.anchor[1]
-                    + (tonumber(fwd.x) or 0.0) * step
-                tame.anchor[3] = tame.anchor[3]
-                    + (tonumber(fwd.z) or 0.0) * step
-            end)
+            -- 08-12: the breather's movement now lives INSIDE the costume-tick
+            -- pin (same clock as the position write -- the two-tick split was
+            -- the "very stuttery" trot Aurora reported), with a wandering
+            -- heading re-rolled every 1-2s. Nothing to do here but let the
+            -- trot clip play and the grip recover.
             if now >= ro.phase_until then
                 ro.phase = "frenzy"
                 ro.phase_until = now + 4.0

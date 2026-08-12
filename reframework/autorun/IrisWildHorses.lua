@@ -151,6 +151,7 @@ local C = {
     -- The horn is its own material (oral_mat), so it glows independently of the coat.
     unicorn_horn_glow = 1.4,
     unicorn_mane_glow = 0.9,      -- mane_mat, independent again
+    unicorn_eye_glow = 2.0,       -- light-blue emissive on eye_mat (0 = doe brown)
     -- ⛔ OFF until IRIS_08_unicorn.pak is installed. Flipping this on without the pak
     -- means create_resource on an unservable path = instant CTD. Default-off is the
     -- only safe default for an asset the script cannot verify from Lua.
@@ -187,7 +188,10 @@ local C = {
     -- Blank = auto-pick a joint that actually exists on the HORSE skeleton.
     -- ⛔ Never default to a player joint name like L_Breast: it does not exist here.
     unicorn_efx_joint = "",
-    unicorn_efx_interval = 2.0,   -- re-request cadence (the burst is not a loop)
+    unicorn_efx_interval = 0.35,  -- re-seat cadence: element 11 ignores every follow
+                                  -- mechanism, ONLY a fresh fire re-places it -- so
+                                  -- fast re-fires ARE the position lock (07 recipe:
+                                  -- "at 0.25s it re-glues continuously")
     unicorn_efx_color = true,     -- tint the sparkle to match the coat / rainbow
     -- ⭐ AUTO-BOLT (08-11): hand-dialling XYZ offsets against a moving head is
     -- hopeless (Aurora, correctly). Measured invariant from the rest pose: the horn
@@ -256,8 +260,13 @@ local function load_config()
     C.unicorn_body_glow = math.max(0.0, math.min(4.0, C.unicorn_body_glow))
     C.unicorn_horn_glow = math.max(0.0, math.min(6.0, C.unicorn_horn_glow))
     C.unicorn_mane_glow = math.max(0.0, math.min(6.0, C.unicorn_mane_glow))
+    C.unicorn_eye_glow = math.max(0.0, math.min(8.0, C.unicorn_eye_glow or 2.0))
     C.unicorn_rainbow_speed = math.max(0.0, math.min(3.0, C.unicorn_rainbow_speed))
     C.unicorn_efx_index = math.max(0, math.floor(C.unicorn_efx_index or 0))
+    -- 08-12 one-shot migration: 2.0 was the old shipped default and is exactly
+    -- the "sparkle keeps moving" complaint -- a 2s-stale world position. Only
+    -- the old default is migrated; a hand-picked value survives.
+    if C.unicorn_efx_interval == 2.0 then C.unicorn_efx_interval = 0.35 end
     C.unicorn_efx_interval = math.max(0.25, math.min(30.0, C.unicorn_efx_interval))
     -- migration: the old auto-bolt scale ran 1.5-5.0 (line-multiple semantics);
     -- v2 is 0..2 along the actual horn. Old saved values collapse to the tip.
@@ -660,6 +669,23 @@ function UNI.apply_material(game_object)
                         writes = writes + 1
                     else missed[#missed + 1] = "MaskColor" end
                 end
+            elseif name:find("eye_mat") then
+                -- ⭐ 08-12 (Aurora): LIGHT-BLUE MYTHICAL EYES on the real v1.9
+                -- eyeball. eye_mat runs Character_Enemy_EYE, whose emissives are
+                -- the UNDERSCORED Emissive_Color1/2 -- the exact pair the
+                -- panther's glowing eyes prove in IrisWildCats (HDR values =
+                -- visible glow). EyeGlowController is already latched off on
+                -- unicorns, so nothing re-caches over these writes.
+                local eg = C.unicorn_eye_glow or 0.0
+                local eye_rgba = {0.35 * eg, 0.75 * eg, 1.0 * eg, 1.0}
+                for _, pname in ipairs({"Emissive_Color1", "Emissive_Color2"}) do
+                    attempted = attempted + 1
+                    if UNI.set_float4(mesh, mi, pname, eye_rgba) then
+                        writes = writes + 1
+                    else
+                        missed[#missed + 1] = pname
+                    end
+                end
             end
         end
     end)
@@ -686,6 +712,14 @@ function UNI.reset_material(game_object)
         local black = {0.0, 0.0, 0.0, 1.0}
         for mi = 0, count - 1 do
             local name = tostring(mesh:call("getMaterialName", mi) or "")
+            if name:find("eye_mat") then
+                -- undo the light-blue eye glow (underscored names on the EYE shader)
+                for _, pname in ipairs({"Emissive_Color1", "Emissive_Color2"}) do
+                    if UNI.set_float4(mesh, mi, pname, black) then
+                        writes = writes + 1
+                    end
+                end
+            end
             if name:find("body_mat") or name:find("oral_mat")
                 or name:find("mane_mat") then
                 for _, pair in ipairs({
@@ -968,10 +1002,16 @@ function UNI.spawn_efx(address)
             -- and invisible (field-proven: manual mode's stray offsets were
             -- the only reason it was ever visible). Lift it clear of the bone,
             -- plus the world trims for fine placement.
+            -- ⛔ 08-12 (Aurora, element 3: "appearing to its left or behind"):
+            -- the offset vec3 is WORLD-fixed, so any X/Z trim points at a
+            -- COMPASS direction, not a horse direction -- as she turns, the
+            -- sparkle reads left/behind/front. Auto mode is therefore
+            -- VERTICAL-ONLY (up is up at every heading); X/Z trims belong to
+            -- manual mode alone.
             off = Vector3f.new(
-                C.unicorn_efx_ox or 0.0,
+                0.0,
                 (C.unicorn_efx_oy or 0.0) + (C.unicorn_efx_lift or 0.4),
-                C.unicorn_efx_oz or 0.0)
+                0.0)
             joint = (C.unicorn_efx_joint ~= "" and C.unicorn_efx_joint)
                 or "Head_0"
             entry.joint = joint
@@ -1006,6 +1046,28 @@ function UNI.spawn_efx(address)
     end)
     entry.container = container
     entry.mp_cleared = nil   -- a fresh container needs MaintainPosition cleared again
+    -- ⭐⭐ 08-12 THE ATTACH FIX (Aurora: "can we not just apply it to the
+    -- horse?"): every element spawns with MaintainPosition=true -- engine-
+    -- speak for "hold the spawn-time WORLD position even though a follow
+    -- target was given". The old manual glue path cleared it; bone-attach
+    -- auto mode NEVER did, so even follow-capable elements (3) froze in
+    -- place at every fire and the sparkle read as a wandering emitter.
+    -- Clear it on EVERY fresh container: the engine's own joint-follow
+    -- engages and the effect rides the horse.
+    if container then
+        local cleared = 0
+        for _, eff in ipairs(UNI.container_effects(container)) do
+            if pcall(function() eff:call("set_MaintainPosition", false) end) then
+                cleared = cleared + 1
+            end
+        end
+        entry.mp_cleared = cleared > 0
+        UNI.efx_mp_debug = string.format("mp cleared on %d effect(s)", cleared)
+        if cleared == 0 then
+            log("efx: WARNING no effect object found in container -- "
+                .. "MaintainPosition NOT cleared (sparkle will freeze in place)")
+        end
+    end
     if not container then
         UNI.efx_status = string.format(
             "efx: requestEffect returned nil (dcIndex %s / id %s / element %s / joint %s)",
@@ -1068,6 +1130,36 @@ function UNI.container_effect(container)
         effect = value and value._items and value._items[0]
     end)
     return effect
+end
+
+-- 08-12: the singular version reads DICTIONARY BUCKET 0 only -- element 11
+-- happened to hash there, element 3 does not ("mp clear" silently never
+-- happened, the sparkle kept freezing at every fire). Walk every bucket and
+-- every item instead.
+function UNI.container_effects(container)
+    local out = {}
+    pcall(function()
+        local entries = container.CreatedEffects
+            and container.CreatedEffects._entries
+        if not entries then return end
+        local n = 0
+        pcall(function() n = tonumber(entries:get_size()) or 0 end)
+        for i = 0, n - 1 do
+            pcall(function()
+                local e = entries[i]
+                local items = e and e.value and e.value._items
+                if items then
+                    local m = 0
+                    pcall(function() m = tonumber(items:get_size()) or 0 end)
+                    for j = 0, m - 1 do
+                        local eff = items[j]
+                        if eff then out[#out + 1] = eff end
+                    end
+                end
+            end)
+        end
+    end)
+    return out
 end
 
 -- Ask the TYPE whether a method exists before calling it. pcall alone is a poor test
@@ -3683,18 +3775,124 @@ end
 -- 08-12: write REAL native max HP through the HitControllerContext -- the
 -- property the loss-gauge recompute reads FROM, so the value sticks and the
 -- ridden HUD bar shows it honestly.
-function RP.apply_native_hp(go)
+function RP.apply_native_hp(go, skip_heal)
     local target = math.floor(C.unicorn_hp or 1000)
+    local before, after = nil, nil
     local ok = pcall(function()
         local hc = get_component(go, "app.HitController")
-        local ctx = hc and hc:call("get_HitContext")
+        if not hc then error("no HitController") end
+        -- read through the SAME getter the ride HUD uses, so the log tells
+        -- the truth about what the player actually sees
+        pcall(function() before = tonumber(hc:call("get_OriginalMaxHp")) end)
+        local ctx = hc:call("get_HitContext")
         if not ctx then error("no HitContext") end
         ctx:call("set_OriginalMaxHpProp", target * 1.0)
         ctx:call("set_ReducedMaxHpProp", target * 1.0)
+        -- 08-12: the prop setters alone reported ok=true yet the bar stayed
+        -- 250/250 -- belt over braces, write the plain context FIELDS too
+        pcall(function() ctx:set_field("OriginalMaxHp", target * 1.0) end)
+        pcall(function() ctx:set_field("ReducedMaxHp", target * 1.0) end)
+        -- 08-12 round 2 (field log: "read 250 before / 250 after" in the SAME
+        -- millisecond as a clean write): the getter does not read the object
+        -- get_HitContext hands out. Dump shows THREE more lanes on the
+        -- controller -- its own <ReducedMaxHp> field, a private <HitContext>
+        -- backing field (possibly a different instance), and a
+        -- CachedContextHolder. Write them all; the read-back log names the
+        -- lane that finally sticks.
+        pcall(function()
+            hc:set_field("<ReducedMaxHp>k__BackingField", target * 1.0)
+        end)
+        pcall(function()
+            local fctx = hc:get_field("<HitContext>k__BackingField")
+            if fctx then
+                pcall(function() fctx:call("set_OriginalMaxHpProp", target * 1.0) end)
+                pcall(function() fctx:call("set_ReducedMaxHpProp", target * 1.0) end)
+                pcall(function() fctx:set_field("OriginalMaxHp", target * 1.0) end)
+                pcall(function() fctx:set_field("ReducedMaxHp", target * 1.0) end)
+            end
+        end)
+        -- 08-12 round 4: STOP GUESSING, START READING. Every lane so far
+        -- "succeeded" while the getter read 250 -- so this pass verifies each
+        -- lane with its own read-back and sweeps EVERY HitController component
+        -- on the body (get_component only ever returned the first).
+        local d = {}
+        pcall(function()
+            d.ctx_prop = tonumber(ctx:call("get_OriginalMaxHpProp"))
+        end)
+        pcall(function()
+            local holder = hc:get_field("<CachedContextHolder>k__BackingField")
+            if not holder then d.holder = "nil"; return end
+            local tn = "?"
+            pcall(function()
+                tn = holder:get_type_definition():get_full_name()
+            end)
+            local seen, wrote = 0, 0
+            local okwalk = pcall(function()
+                local en = holder:call("GetEnumerator")
+                while en and en:call("MoveNext") do
+                    local c2 = en:call("get_Current")
+                    if c2 then
+                        seen = seen + 1
+                        local ctn = ""
+                        pcall(function()
+                            ctn = c2:get_type_definition():get_full_name()
+                        end)
+                        d.first_ctx_type = d.first_ctx_type or ctn
+                        if ctn:find("HitControllerContext") then
+                            pcall(function() c2:call("set_OriginalMaxHpProp", target * 1.0) end)
+                            pcall(function() c2:call("set_ReducedMaxHpProp", target * 1.0) end)
+                            wrote = wrote + 1
+                        end
+                    end
+                end
+            end)
+            d.holder = string.format("%s walk=%s seen=%d wrote=%d",
+                tn, tostring(okwalk), seen, wrote)
+        end)
+        -- every HitController component on the GameObject
+        pcall(function()
+            local arr = go:call("getComponents(System.Type)",
+                sdk.typeof("app.HitController"))
+            local n = arr and arr:get_size() or 0
+            d.hc_count = n
+            local reads = {}
+            for i = 0, n - 1 do
+                local h2 = arr[i]
+                pcall(function()
+                    local c3 = h2:call("get_HitContext")
+                    if c3 then
+                        c3:call("set_OriginalMaxHpProp", target * 1.0)
+                        c3:call("set_ReducedMaxHpProp", target * 1.0)
+                    end
+                end)
+                local r = nil
+                pcall(function()
+                    r = tonumber(h2:call("get_OriginalMaxHp"))
+                end)
+                reads[#reads + 1] = tostring(r)
+            end
+            d.hc_reads = table.concat(reads, ",")
+        end)
+        RP.last_ctx_written = string.format(
+            "ctx_prop_after=%s | holder: %s | hc x%s reads: %s | first_ctx=%s",
+            tostring(d.ctx_prop), tostring(d.holder),
+            tostring(d.hc_count), tostring(d.hc_reads),
+            tostring(d.first_ctx_type))
+        pcall(function() after = tonumber(hc:call("get_OriginalMaxHp")) end)
     end)
-    set_hp(go, target)
-    log(string.format("unicorn native HP -> %d (ctx write ok=%s)",
-        target, tostring(ok)))
+    if not skip_heal then set_hp(go, target) end
+    local line = string.format(
+        "unicorn native HP -> %d (ok=%s, read %s before / %s after) [%s]",
+        target, tostring(ok), tostring(before), tostring(after),
+        tostring(RP.last_ctx_written))
+    -- the 5s re-assert would repeat this forever on a stubborn engine --
+    -- only log when the outcome CHANGES (the 12:54-12:57 field log was 35
+    -- identical lines)
+    if line ~= RP.last_hp_log then
+        RP.last_hp_log = line
+        log(line)
+    end
+    return after
 end
 
 -- 08-12 HEAL OVER TIME (Aurora's design: "a heal over time effect when you
@@ -3711,54 +3909,107 @@ function RP.start_hot(center)
 end
 
 function RP.tick_heal(go, center)
-    local healed = false
+    local healed, why = false, "error"
     pcall(function()
         local p = RP.go_pos(go)
-        if not (p and center) then return end
+        if not (p and center) then why = "no position"; return end
         local dx, dy, dz = p.x - center.x, p.y - center.y, p.z - center.z
-        if (dx * dx + dy * dy + dz * dz)
-            > (C.blessing_radius * C.blessing_radius) then return end
+        local d2 = dx * dx + dy * dy + dz * dz
+        if d2 > (C.blessing_radius * C.blessing_radius) then
+            why = string.format("%.1fm outside the %.0fm circle",
+                math.sqrt(d2), C.blessing_radius or 4)
+            return
+        end
         local hc = get_component(go, "app.HitController")
-        if not hc then return end
+        if not hc then why = "no HitController"; return end
         local hp = tonumber(hc:call("get_Hp"))
         local max = RP.native_max_hp(go)
-        if not (hp and max) or hp <= 0 or hp >= max then return end
+        if not (hp and max) then why = "no hp/max read"; return end
+        if hp <= 0 then why = "dead"; return end
+        if hp >= max then why = "already full"; return end
         local amount = max * (C.blessing_hot_pct or 0.08)
         healed = set_hp(go, math.min(max, hp + amount))
+        why = healed and "healed" or "set_hp refused"
     end)
-    return healed
+    return healed, why
 end
 
 function RP.hot_pulse()
     local h = RP.hot
     if not h then return end
+    local healed = 0
+    -- first pulse of each circle logs WHY each target was or wasn't healed
+    -- (08-12: "Lyra still at very low health" with zero evidence either way)
+    local diag = not h.diag_done
+    h.diag_done = true
     local player = RP.player_go()
-    if player then RP.tick_heal(player, h.pos) end
+    if player then
+        local ok1, why1 = RP.tick_heal(player, h.pos)
+        if ok1 then healed = healed + 1 end
+        if diag then log("blessing: player -> " .. tostring(why1)) end
+    end
     pcall(function()
         local pm = sdk.get_managed_singleton("app.PawnManager")
-        if not pm then return end
-        for _, getter in ipairs({"get_PartyPawnCharacterList",
-                                 "getPartyPawnList", "get_PartyPawnList"}) do
+        if not pm then
+            if diag then log("blessing: no PawnManager") end
+            return
+        end
+        -- ⛔ order matters (dump-verified 08-12): get_PartyPawnList returns
+        -- List<app.Pawn> whose items have NO get_GameObject ("pawn 0 ->
+        -- invalid GO" in the field log); the CharacterList getters return
+        -- real app.Character components. Characters first.
+        for _, getter in ipairs({"get_AlivePawnCharacterList",
+                                 "get_PawnCharacterList"}) do
             local list = nil
             if pcall(function() list = pm:call(getter) end) and list then
                 local count = 0
                 pcall(function() count = tonumber(list:call("get_Count")) end)
+                if diag then
+                    log(string.format("blessing: pawn list via %s (%d)",
+                        getter, count or -1))
+                end
                 for i = 0, (count or 0) - 1 do
                     pcall(function()
                         local chr = list:call("get_Item", i)
                         local go = chr and chr:call("get_GameObject")
-                        if valid(go) then RP.tick_heal(go, h.pos) end
+                        if valid(go) then
+                            local ok2, why2 = RP.tick_heal(go, h.pos)
+                            if ok2 then healed = healed + 1 end
+                            if diag then
+                                log(string.format("blessing: pawn %d -> %s",
+                                    i, tostring(why2)))
+                            end
+                        elseif diag then
+                            log("blessing: pawn " .. i .. " -> invalid GO")
+                        end
                     end)
                 end
                 return
             end
         end
+        if diag then log("blessing: NO pawn-list getter answered") end
     end)
     -- the unicorns too -- a blessing warms its caster
     for _, rec in pairs(REGISTRY) do
         if rec.variant == "unicorn" and valid(rec.game_object) then
-            RP.tick_heal(rec.game_object, h.pos)
+            if RP.tick_heal(rec.game_object, h.pos) then
+                healed = healed + 1
+            end
         end
+    end
+    -- 08-12 (Aurora: "didn't see any healing"): the pulse was SILENT, and it
+    -- also does nothing at full HP -- indistinguishable from broken. Every
+    -- pulse now reports; the log proves each actual HP write.
+    local left = math.max(0.0, h.ends - os.clock())
+    if healed > 0 then
+        h.did_heal = true
+        RP.blessing_status = string.format(
+            "circle healing %d target(s) (%.0fs left)", healed, left)
+        log(string.format("blessing: HoT pulse healed %d (%.1fs left)",
+            healed, left))
+    else
+        RP.blessing_status = string.format(
+            "circle live, everyone full (%.0fs left)", left)
     end
 end
 
@@ -3865,6 +4116,7 @@ function RP.neuter_poll()
         log("blessing: shell instance never appeared for neutering (id "
             .. tostring(RP.shell_req_id) .. ")")
         RP.shell_req_id, RP.shell_poll_left = nil, nil
+        collectgarbage("collect")
         return
     end
     pcall(function()
@@ -3880,7 +4132,19 @@ function RP.neuter_poll()
         end)
         log("blessing: circle shell neutered (decorative)")
         RP.shell_req_id, RP.shell_poll_left = nil, nil
+        -- ⛔⛔ 08-12 CRASH FIX (the first ridden cast CTD'd 11s after the
+        -- strike): this poll wraps the shell INSTANCE + its HitCtrl/collider
+        -- in Lua refs. The shell expires ~10s later; if the GC only gets to
+        -- those wrappers AFTER the engine frees the shell, each release is a
+        -- use-after-free ("REManagedObject:release ... not managed by our Lua
+        -- state" x2 in the crash log, heap AV on the audio thread 70ms on).
+        -- Collect NOW, while the shell is alive, so every wrapper dies clean.
+        RP.gc_after_neuter = true
     end)
+    if RP.gc_after_neuter then
+        RP.gc_after_neuter = nil
+        collectgarbage("collect")
+    end
 end
 
 function RP.nearest_unicorn(range)
@@ -4405,12 +4669,27 @@ re.on_frame(function()
                     end)
                 end
             end
-            -- Sparkle re-request cadence (harmless for looping elements like 11 --
-            -- spawn_efx finishes the previous container first, so no stacking).
+            -- Sparkle re-request cadence. 08-12: with MaintainPosition cleared
+            -- the engine follows the joint, so a STILL-PLAYING effect must be
+            -- left alone (killing a looping element every 0.35s was the
+            -- "vibrating madly" strobe). Re-fire only when it has gone quiet.
             if C.unicorn_efx_enabled and not entry.exp_granted
                 and now >= (entry.next_efx or 0) then
                 entry.next_efx = now + (C.unicorn_efx_interval or 2.0)
-                UNI.spawn_efx(address)
+                local playing = false
+                if entry.container then
+                    for _, eff in ipairs(UNI.container_effects(entry.container)) do
+                        pcall(function()
+                            if eff:call("get_Running") == true then
+                                playing = true
+                            end
+                        end)
+                    end
+                    -- if MaintainPosition never cleared on this container, a
+                    -- running loop is FROZEN in the world -- replace it anyway
+                    if not entry.mp_cleared then playing = false end
+                end
+                if not playing then UNI.spawn_efx(address) end
             elseif entry.container
                 and (not C.unicorn_efx_enabled or entry.exp_granted) then
                 UNI.kill_efx(address)
@@ -4420,6 +4699,23 @@ re.on_frame(function()
             -- source the loss gauge recomputes from -- write it and the HUD
             -- bar, potions, everything read 1000 natively. The damage hook
             -- drops its unicorn scaling in exchange (no double-counting).
+            -- 08-12: was a fire-once latch; first field test showed the write
+            -- "succeeds" then the bar still reads 250 -- something recomputes
+            -- or reads elsewhere. Now VERIFY through the HUD's own getter
+            -- every 5s and re-assert on mismatch; the log cadence tells us
+            -- whether the engine reverts it (and how often) or never took it.
+            if now >= (entry.next_hp_check or 0) then
+                entry.next_hp_check = now + 5.0
+                pcall(function()
+                    local want = tonumber(C.unicorn_hp) or 1000
+                    local hc = get_component(record.game_object,
+                        "app.HitController")
+                    local read = hc and tonumber(hc:call("get_OriginalMaxHp"))
+                    if not read or read < want - 0.5 then
+                        RP.apply_native_hp(record.game_object, true)
+                    end
+                end)
+            end
             if not entry.hp_boosted then
                 entry.hp_boosted = true
                 pcall(function()
@@ -4706,6 +5002,14 @@ re.on_draw_ui(function()
         if changed then
             C.unicorn_horn_glow = value; save_config(); repaint_all()
         end
+
+        -- v1.9 real eyeballs: light-blue emissive on the dedicated eye shader
+        changed, value = imgui.slider_float(
+            "Eye glow (light blue)", C.unicorn_eye_glow or 2.0, 0.0, 8.0, "%.2f")
+        if changed then
+            C.unicorn_eye_glow = value; save_config(); repaint_all()
+        end
+        imgui.text("  (0 = natural doe brown; ~2 = soft mythic cyan)")
 
         -- ⛔ The one switch that can CRASH if flipped without the asset installed.
         changed, value = imgui.checkbox(

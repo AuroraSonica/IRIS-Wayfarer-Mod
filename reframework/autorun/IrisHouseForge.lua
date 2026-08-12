@@ -134,6 +134,17 @@ do
         { file = "IRIS/forge_house_farm_true.json", label = "farm TRUE (Aurora's capture, 47 pieces)" },
         { file = "IRIS/forge_house_einis_shell.json", label = "Eini's home SHELL+interior" },
         { file = "IRIS/forge_house_einis.json", label = "Eini's ivy + door (dressing)" },
+        -- Aurora's 2026-08-12 farm-outbuilding captures (KIT DIFF + COMPOSITE GROUPS at the
+        -- Vermund farm): composite-only structural kits, gen_farm_outbuildings.py
+        { file = "IRIS/forge_house_ox_stable.json", label = "OUTBUILDING: Ox Stable (open timber)" },
+        { file = "IRIS/forge_house_hay_barn.json", label = "OUTBUILDING: Hay Barn (timber)" },
+        { file = "IRIS/forge_house_field_shelter.json", label = "OUTBUILDING: Field Shelter (gabled)" },
+        -- Aurora's 2026-08-12 CITY expedition (Vernworth + Battahl + Eini re-capture with
+        -- the DepthOcc layer). v1 selections - iterate on test-build screenshots.
+        { file = "IRIS/forge_house_vernworth_mansion.json", label = "CITY: Vernworth Mansion (231 pieces - heavy build)" },
+        { file = "IRIS/forge_house_einis_v2.json", label = "CITY: Eini's Home v2 (282 pieces - has the missing sections)" },
+        { file = "IRIS/forge_house_flame_barracks.json", label = "CITY: Flamebearer Barracks (Battahl stone)" },
+        { file = "IRIS/forge_house_flame_conference.json", label = "CITY: Flamebearer Conference Hall (Battahl stone)" },
     }
     local have = {}
     for _, s in ipairs(SPECS) do have[s.id] = true end

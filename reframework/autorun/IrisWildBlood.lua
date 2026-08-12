@@ -37,6 +37,8 @@ local BANDS = {
     ch257000 = true, ch257001 = true,               -- drakes
     ch254000 = true, ch258000 = true,               -- chimera, wyvern band
     ch260000 = true,                                 -- garm
+    ch299003 = true,                                 -- pasture ox (08-12: it GREW at the seal --
+                                                     -- the wild body had never rolled a gene)
 }
 
 -- the ledger: GO addr -> { iv, base, want, name, at } -- session-only by design (wild
@@ -98,6 +100,18 @@ re.on_frame(function()
                 local nm = tostring(go:call("get_Name") or "")
                 local band = nm:match("ch%d+")
                 if not (band and BANDS[band]) then return end
+                -- 08-12 CORRECTION: _B is the BULL, not the cart ox (a harnessed _A armed
+                -- the rite in the field). Cart oxen are excluded by OWNERSHIP -- the shared
+                -- registry asks each oxcart's AI which ox it employs. Never re-scale an ox
+                -- out of its harness; bulls gene like any other ox.
+                if nm:find("ch299003", 1, true) then
+                    local employed = false
+                    pcall(function()
+                        local sp = rawget(_G, "IrisSpecies")
+                        employed = sp and sp.cart_ox and sp.cart_ox(go:get_address()) or false
+                    end)
+                    if employed then return end
+                end
                 local tr = go:call("get_Transform")
                 local p = tr:call("get_Position")
                 local dx, dy, dz = p.x - pp.x, p.y - pp.y, p.z - pp.z

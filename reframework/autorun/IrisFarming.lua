@@ -2883,13 +2883,36 @@ local function _try_animal_produce()
             local ok9, why9 = _ani_eligible(a)
             if not ok9 then _log(kind .. ": " .. tostring(why9)); kind = nil end
         end
+        if kind == "milk" then
+            -- 08-12 (the forced bull randomisation): GENDER OUTRANKS CHASSIS. The world
+            -- spawns only cow-band oxen, so some present as bulls by IRIS's roll -- and a
+            -- bull has nothing to give. Record gender first (tamed truth), then the roll.
+            local g9 = nil
+            pcall(function()
+                local b9 = rawget(_G, "IrisGriffinBridge")
+                g9 = b9 and b9.body_gender and b9.body_gender(a.go:get_address()) or nil
+            end)
+            if g9 == nil then
+                pcall(function()
+                    local sp9 = rawget(_G, "IrisSpecies")
+                    g9 = sp9 and sp9.gender and sp9.gender(a.go) or nil
+                end)
+            end
+            if g9 == "male" then _log("milk: a bull has nothing to give"); kind = nil end
+        end
         if kind then
             local d = _delta() or { x = 0, z = 0 }
             local key = string.format("%s@%d,%d", a.name,
                 math.floor((a.pos.x + d.x) / 5), math.floor((a.pos.z + d.z) / 5))
+            -- 08-12 (Mootilda milked twice): the grid key breaks the moment the animal WALKS
+            -- out of its 5m cell -- a wanderer reads as a new animal. Latch by BODY ADDRESS
+            -- too (follows it anywhere this session); the grid key stays as the backstop for
+            -- penned animals across a game restart. Either latch counts.
+            local akey = nil
+            pcall(function() akey = "a" .. tostring(a.go:get_address()) end)
             local today = _today()
             local days = _ani_days()
-            if today and days[key] == today then
+            if today and (days[key] == today or (akey and days[akey] == today)) then
                 _log(kind .. ": this animal has already given today - come back tomorrow")
                 return true
             end
@@ -2927,7 +2950,11 @@ local function _try_animal_produce()
                         .. (n9 > 1 and " (fortune smiles on this one)" or ""))
                 end)
             end
-            if today then days[key] = today; pcall(function() json.dump_file(ANI_FILE, days) end) end
+            if today then
+                days[key] = today
+                if akey then days[akey] = today end
+                pcall(function() json.dump_file(ANI_FILE, days) end)
+            end
             return true
         end
     end

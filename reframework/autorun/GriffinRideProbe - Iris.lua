@@ -9290,7 +9290,7 @@ griffin_profile_keys = {
     "route3_rise_ascend_clip", "route3_rise_ascend_start_clip",
     "route3_rise_descend_clip", "route3_rise_descend_start_clip", "route3_rise_clip_bank",
     "route3_ground_jump_windup", "route3_rise_secs", "route3_pawn_ride_back",
-    "route3_rise_retire_at_window", "route3_loopcam_dist",
+    "route3_rise_retire_at_window", "route3_loopcam_dist", "route3_soar_directional",
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
@@ -9375,8 +9375,12 @@ function griffin_species_profile_apply(key)
     -- everywhere: glide -1 (flap.lua's own drake design: "just keep flapping through a
     -- sprint" -- also stops the soar machinery painting griffin bank-50 dush clips), jump =
     -- launch clip held through the arc, landing descent = the front-landing approach clip.
+    -- ⛔ v11 guard: node_up ~= "" limits this to PRE-v10 profiles. v10 deliberately sets
+    -- glide back to 5100 (nodeless flight) -- without the guard this block re-fired on every
+    -- auto-apply and ate v10's values (ascend -1 = dead A-press, glide -1 = dead soar).
     if key:find("ch257", 1, true)
-        and math.floor(tonumber(p.flap_glide_clip) or -1) == 5100 then
+        and math.floor(tonumber(p.flap_glide_clip) or -1) == 5100
+        and tostring(p.route3_rise_node_up or "") ~= "" then
         p.flap_glide_clip = -1
         p.route3_landing_descent_clip = 400   -- com_Landing_Front approach (5101 = null T-pose)
         p.route3_jump_clip_mid = -1           -- hold the 5210 launch flap through the arc
@@ -9448,6 +9452,47 @@ function griffin_species_profile_apply(key)
         p.idle_motion = 0
         p.route3_seat_offset_x = 0.0; p.route3_seat_offset_y = 2.3; p.route3_seat_offset_z = 1.6
         p.spawn_scale = 0.55
+        migrated = true
+    end
+    -- ⭐⭐ v10 2026-08-12 -- NODELESS FLIGHT (Aurora's call, and the right one): held travel
+    -- nodes flicker the climb state natively (unhookable -- getter pin AND setter veto both
+    -- failed on instruments), and that flicker IS the close-up camera AND the knocking. Drop
+    -- the nodes entirely: ascend/descend/soar = movement + clip 5100 (com_flight_loop, the
+    -- majestic locked-wing soar). ⚠ FIELD TEST: 5100 is in the streamed family -- if it
+    -- paints as T-pose airborne, fall back to flap-base + additive hover poses (L1).
+    if key:find("ch257", 1, true)
+        and tostring(p.route3_rise_node_up or "") == "Fly.Flight.FlightPathTraceTarget" then
+        p.route3_rise_node_up = ""
+        p.route3_rise_node_down = ""
+        p.route3_rise_ascend_clip = 5100
+        p.route3_rise_ascend_start_clip = -1
+        p.route3_rise_descend_clip = 5100
+        p.route3_rise_descend_start_clip = -1
+        p.route3_rise_clip_bank = 0
+        p.flap_glide_clip = 5100          -- B-soar = the same glide loop
+        p.flap_glide_bank = 0
+        p.route3_rise_retire_at_window = false   -- nothing to retire anymore
+        p.route3_soar_directional = false -- directional soar sub-clips are griffin bank-50 ids
+        migrated = true
+    end
+    if p.route3_soar_directional == nil then
+        p.route3_soar_directional = not key:find("ch257", 1, true)
+        migrated = true
+    end
+    -- ⭐ v11 2026-08-12 REPAIR: v3 re-fired after v10 (its glide==5100 trigger matched v10's
+    -- intended value) and clobbered three v10 values on the very next auto-apply. Restore them.
+    -- Signature = post-v10 (nodes cleared) but ascend dead -- exactly the clobbered state.
+    if key:find("ch257", 1, true)
+        and tostring(p.route3_rise_node_up or "") == ""
+        and math.floor(tonumber(p.route3_rise_ascend_clip) or -1) == -1 then
+        p.route3_rise_ascend_clip = 5100
+        p.route3_rise_descend_clip = 5100
+        p.route3_rise_clip_bank = 0
+        p.flap_glide_clip = 5100
+        p.flap_glide_bank = 0
+        if math.floor(tonumber(p.route3_landing_descent_clip) or -1) == 400 then
+            p.route3_landing_descent_clip = 5210   -- v4's fix (400 = mid-air impact) re-asserted
+        end
         migrated = true
     end
     -- ⭐ SELF-HEAL part 2 (08-11, found by full disk diff): the v4/v6 BACKFILLS seeded new keys
@@ -10870,6 +10915,9 @@ local function adopt_native_climb_mount()
 end
 
 local function dismount_griffin()
+    -- round 6b: disarm the onAbortClimb veto BEFORE any teardown -- rejected aborts
+    -- during dismount = "she stays glued to the body" (the steady-seat lesson below).
+    S.route3_abort_veto_off_until = os.clock() + 3.0
     -- 07-24 IRIS PUPPET SEAT: release the rodeo seat FIRST (it restores
     -- the player body/pose/camera); the rest of this teardown then finds
     -- an ordinary standing player.
@@ -11624,6 +11672,7 @@ function route3_create_saddle_proxy()
 end
 
 function route3_stop_proxy_ride(reason)
+    S.route3_abort_veto_off_until = os.clock() + 3.0   -- round 6b: never reject aborts mid-teardown
     route3_wilds_rider_pose_stop(tostring(reason or "proxy stop"))
     S.route3_proxy_ride_active = false
     S.route3_seat_parented = false
@@ -21330,6 +21379,10 @@ end
 
 function route3_rise_start_clip(dir, dur, now)
     local descending = (tonumber(dir) or 1.0) < 0.0
+    -- ⭐ v10 nodeless flight: the cinematic used to arm on NODE FIRE (lockout). With no node,
+    -- arm it on the rise press itself -- the shot covers the movement window. Node species
+    -- (griffin) also pass here; their lockout arm makes this redundant but harmless.
+    S.route3_loopcam_clip_until = (tonumber(now) or os.clock()) + math.max(0.5, tonumber(dur) or 1.0) + 0.8
     -- NODE takes priority if the picker set one: fire it the SAFE way (requestActionCore priority 10
     -- ONLY -- NO setCurrentNode, which the AI reverts to a T-pose). The node owns the animation; the
     -- movement burst still drives the actual up/down. ⛔ PreSwoop/LoopTheLoop break the camera -- avoid.
@@ -21568,11 +21621,31 @@ function route3_rise_tick()
         local rclip = math.floor(tonumber(S.route3_rise_clip) or -1)
         if S.route3_rise_clip_looped ~= true and now >= (tonumber(S.route3_rise_clip_loop_at) or math.huge) then
             S.route3_rise_clip_looped = true
-            S.route3_rise_clip_replay_at = now + 0.7
+            S.route3_rise_clip_replay_at = now + 0.25
             pcall(function() play_griffin_motion(rclip, rbank, true, "rise") end)
         elseif S.route3_rise_clip_looped == true and now >= (tonumber(S.route3_rise_clip_replay_at) or math.huge) then
-            S.route3_rise_clip_replay_at = now + 0.7
-            pcall(function() play_griffin_motion(rclip, rbank, true, "rise") end)
+            -- ⭐ v11 FRAME-AWARE REPLAY (2026-08-12): the old fixed 0.7s replay restarted the
+            -- clip from frame 0 every 0.7s -- fine for the griffin's short bank-50 bursts,
+            -- but it CHOPS the drake's long com_flight_loop ("repeats a lot, goes into a
+            -- t-pose sometimes" on video). Same recipe as the predation L0 driver: repaint
+            -- ONLY when the layer lost our clip or the clip genuinely reached its end.
+            S.route3_rise_clip_replay_at = now + 0.25   -- read cadence, not restart cadence
+            local lost, wrap = false, false
+            pcall(function()
+                local ch = reacquire_griffin()
+                local m = ch and ch:call("get_Motion")
+                local l = m and m:call("getLayer", 0)
+                if not l then return end
+                local mid = tonumber(l:call("get_MotionID")) or -1
+                local endf = tonumber(l:call("get_EndFrame")) or 0.0
+                local fr = tonumber(l:call("get_Frame")) or 0.0
+                lost = (mid ~= rclip)
+                wrap = (not lost) and endf > 0.0 and fr >= endf - 8.0
+                -- re-loop by SEEK, never changeMotion (flap's own law: "no clip restarts").
+                -- Every changeMotion on the ridden body is a knock/attach-jolt suspect.
+                if wrap then l:call("set_Frame", 0.0) end
+            end)
+            if lost then pcall(function() play_griffin_motion(rclip, rbank, true, "rise") end) end
         end
     elseif (tonumber(S.route3_rise_clip_until) or 0.0) > 0.0 and now >= (tonumber(S.route3_rise_clip_until) or 0.0) then
         S.route3_rise_clip_until = 0.0
@@ -25428,6 +25501,10 @@ function griffin_loopcam_active()
     if S.route3_hud_panel_drawn == false then return false end
     local locked = false
     pcall(function() locked = griffin_node_lockout_active() == true end)
+    -- v10: a clip-only rise has no lockout -- the press-armed window keeps the shot alive
+    if not locked and os.clock() < (tonumber(S.route3_loopcam_clip_until) or 0.0) then
+        locked = true
+    end
     if not locked then
         local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
             tonumber(S.route3_simple_dive_until) or 0.0)
@@ -25436,7 +25513,7 @@ function griffin_loopcam_active()
         -- "weird close-up". Keep filming ~1.5s past the window so the native cam resumes only
         -- after its flight mode has settled. Per-species (retire_at_window species only).
         if C.route3_rise_retire_at_window == true and S.route3_loopcam_t0 ~= nil
-            and w > 0.0 and os.clock() < w + 1.5 then
+            and w > 0.0 and os.clock() < w + 2.5 then
             return true
         end
         -- ⭐ hold-refire grace (2026-08-11): a one-frame lock gap between a travel node bailing
@@ -25469,6 +25546,9 @@ function griffin_loopcam_active()
         -- mode (measured: ~5.6m while FSM in Fly.*, 8m+ once parked back in Wait)
         if w > now then cap = math.max(cap, (w - S.route3_loopcam_t0) + 1.6) end
     end
+    -- v10 nodeless: the press-armed clip shot sets its own length
+    local cu = tonumber(S.route3_loopcam_clip_until) or 0.0
+    if cu > now then cap = math.max(cap, cu - S.route3_loopcam_t0) end
     if now - S.route3_loopcam_t0 > cap then
         S.route3_loopcam_status = "released (shot over, lock still held)"
         return false
@@ -25527,14 +25607,12 @@ _G.iris_camset_veto_fn = function(args)
             tn = obj and obj:get_type_definition():get_full_name() or "nil"
         end)
         S.route3_camset_last = string.format("%s %s", os.date("%H:%M:%S"), tn)
+        -- ⛔ ROUND 5: assignment vetoes are RETIRED to observe-only. Window-scoped expired too
+        -- early (close-up landed after the tail); full-time wedged the camera (the game needs
+        -- its Usually->Climbing bounce to recover the climbing controller). The real fix is
+        -- pinning the climb STATE at its setter -- see the set_IsClimbOnCharacter hook below.
         if tn == "app.UsuallyCameraController" and S.mounted == true then
-            local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
-                tonumber(S.route3_simple_dive_until) or 0.0)
-            if S.route3_node_lock_at ~= nil or os.clock() < w + 1.5 then
-                S.route3_camset_veto_count = (tonumber(S.route3_camset_veto_count) or 0) + 1
-                S.route3_camset_last = S.route3_camset_last .. " VETOED"
-                return sdk.PreHookResult.SKIP_ORIGINAL
-            end
+            S.route3_camset_veto_count = (tonumber(S.route3_camset_veto_count) or 0) + 1
         end
         return nil
     end)
@@ -25551,6 +25629,337 @@ if _G.IRIS_CAMSET_VETO_HOOKED == nil then
                 if f then return f(args) end
             end)
         end
+    end)
+end
+-- ⭐⭐⭐ ROUND 3 -- THE ROOT (2026-08-12): the game re-requests the Usually camera EVERY FRAME
+-- during a node window (143 vetoed sets in one ascend) because the player's climb flag reads
+-- FALSE while the node runs (the documented node-window flicker). Blocking per-frame requests
+-- = frozen camera + the close-up lands when the gate expires. Fix the INPUT instead: pin
+-- get_IsClimbOnCharacter / get_IsClimbOrStandOnCharacter to TRUE for the PLAYER while mounted
+-- in a window. The camera chooser then never wants Usually at all -- and if the jostle/knock
+-- system reads the same flag, it dies with it. ⛔ This LIES to readers only -- it never fires
+-- climb actions (the re-latch teleport lesson stays respected).
+_G.iris_climbflag_pin_fn = function(this_addr)
+    -- ⛔ NEUTERED (round 4 verdict): 309 pins yet 148 Usually requests -- the camera chooser
+    -- reads the state natively, not through these getters; the pins mostly fed OUR OWN ride
+    -- probes (update_player_climb_state etc.), i.e. the pin lied to our own mount logic for
+    -- zero gain. Hook stays installed (hooks persist); this dispatch keeps it inert.
+    return false
+end
+-- ⭐⭐⭐ ROUND 5 -- PIN THE STATE AT ITS SETTER (2026-08-12): the getters were the wrong end
+-- (native readers bypass them). set_IsClimbOnCharacter is where the node-window flicker gets
+-- WRITTEN: veto FALSE writes for the PLAYER while mounted in a window and the real field
+-- stays true for every reader -- camera chooser, attach solver (the knocking), all of it.
+-- Genuine dismounts happen outside windows and pass through untouched.
+_G.iris_climbset_veto_fn = function(args)
+    local ok, ret = pcall(function()
+        if S.mounted ~= true then return nil end
+        -- convention proven by tonight's working hooks: args[2] = this, args[3] = first param
+        local incoming = (sdk.to_int64(args[3]) & 0xFF) ~= 0
+        if incoming then return nil end   -- true writes always pass
+        local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+            tonumber(S.route3_simple_dive_until) or 0.0)
+        if not (S.route3_node_lock_at ~= nil or os.clock() < w + 2.5) then return nil end
+        local pl = get_player()
+        local pa = nil
+        pcall(function() pa = pl and pl:get_address() end)
+        if pa == nil or sdk.to_int64(args[2]) ~= pa then return nil end
+        S.route3_climbset_veto_count = (tonumber(S.route3_climbset_veto_count) or 0) + 1
+        return sdk.PreHookResult.SKIP_ORIGINAL
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_CLIMBSET_VETO_HOOKED == nil then
+    _G.IRIS_CLIMBSET_VETO_HOOKED = true
+    for _, mn in ipairs({ "set_IsClimbOnCharacter", "set_IsClimbOrStandOnCharacter" }) do
+        pcall(function()
+            local td = sdk.find_type_definition("app.Character")
+            local m = td and td:get_method(mn)
+            if m then
+                sdk.hook(m, function(args)
+                    local f = _G.iris_climbset_veto_fn
+                    if f then return f(args) end
+                end)
+            end
+        end)
+    end
+end
+if _G.IRIS_CLIMBFLAG_PIN_HOOKED == nil then
+    _G.IRIS_CLIMBFLAG_PIN_HOOKED = true
+    for _, mn in ipairs({ "get_IsClimbOnCharacter", "get_IsClimbOrStandOnCharacter" }) do
+        pcall(function()
+            local td = sdk.find_type_definition("app.Character")
+            local m = td and td:get_method(mn)
+            if m then
+                sdk.hook(m, function(args)
+                    local f = _G.iris_climbflag_pin_fn
+                    _G.iris_climbflag_force = (f and f(sdk.to_int64(args[2]))) or nil
+                end, function(retval)
+                    if _G.iris_climbflag_force then
+                        _G.iris_climbflag_force = nil
+                        S.route3_climbpin_count = (tonumber(S.route3_climbpin_count) or 0) + 1
+                        return sdk.to_ptr(1)
+                    end
+                    return retval
+                end)
+            end
+        end)
+    end
+end
+
+-- ⭐⭐⭐ ROUND 6 -- THE ABORT CHECK (2026-08-12, the nodeless bisect verdict): all three bisect
+-- runs failed AND soar fails too, so the trigger is neither the cinematic nor the clip nor the
+-- nodes -- it is the NATIVE CLIMB itself. il2cpp: app.Character.isNeedAbortClimbOnCharacter()
+-- is the per-frame "should this cling break?" decision and onAbortClimb(root,current) is the
+-- executor. Theory: drake poses (undulating flight loop, pitch) trip the abort check, the climb
+-- drops + re-grabs -- each re-grab is one KNOCK, each drop is the camera downgrade. Veto the
+-- DECISION for the player while mounted (a mounted rider never has a legitimate native abort;
+-- dismounts tear the ride down first, so the veto is already off by then). Counters prove or
+-- kill the theory even if the veto itself gets native-bypassed like the getter pins did.
+_G.iris_climbabort_pre_fn = function(args)
+    local ok, ret = pcall(function()
+        _G.iris_climbabort_veto = nil
+        S.route3_abortchk_count = (tonumber(S.route3_abortchk_count) or 0) + 1
+        if S.mounted ~= true or C.route3_climb_abort_veto == false then return nil end
+        local pl = get_player()
+        local pa = nil
+        pcall(function() pa = pl and pl:get_address() end)
+        if pa == nil or sdk.to_int64(args[2]) ~= pa then return nil end
+        _G.iris_climbabort_veto = true
+        return nil
+    end)
+    if ok then return ret end
+end
+_G.iris_climbabort_post_fn = function(retval)
+    local ok, ret = pcall(function()
+        local wanted = (sdk.to_int64(retval) & 0xFF) ~= 0
+        if wanted then
+            S.route3_abortchk_true_count = (tonumber(S.route3_abortchk_true_count) or 0) + 1
+            S.route3_abortchk_last_true = os.clock()
+        end
+        if _G.iris_climbabort_veto and wanted then
+            _G.iris_climbabort_veto = nil
+            S.route3_abortchk_veto_count = (tonumber(S.route3_abortchk_veto_count) or 0) + 1
+            return sdk.to_ptr(0)
+        end
+        _G.iris_climbabort_veto = nil
+        return retval
+    end)
+    if ok then return ret end
+    return retval
+end
+_G.iris_onabort_fn = function(args)
+    pcall(function()
+        S.route3_onabort_count = (tonumber(S.route3_onabort_count) or 0) + 1
+        S.route3_onabort_last = os.clock()
+        -- WHOSE abort? (round 6b: 280 real-aborts, 0 decision-checks -- the executor runs
+        -- directly, native never consults isNeedAbortClimbOnCharacter)
+        local this = sdk.to_int64(args[2])
+        local pa = nil
+        pcall(function() local pl = get_player(); pa = pl and pl:get_address() end)
+        if pa ~= nil and this == pa then
+            S.route3_onabort_player = (tonumber(S.route3_onabort_player) or 0) + 1
+        else
+            local ga = nil
+            pcall(function() local ch = reacquire_griffin(); ga = ch and ch:get_address() end)
+            if ga ~= nil and this == ga then
+                S.route3_onabort_drake = (tonumber(S.route3_onabort_drake) or 0) + 1
+            else
+                S.route3_onabort_other = (tonumber(S.route3_onabort_other) or 0) + 1
+                -- round 8 forensics: NAME the mystery aborters (295 "other" in one flight)
+                pcall(function()
+                    local mo = sdk.to_managed_object(args[2])
+                    local nm = mo and tostring(go_name(char_go(mo)) or "?") or "?"
+                    if type(S.route3_onabort_names) ~= "table" then S.route3_onabort_names = {} end
+                    S.route3_onabort_names[nm] = (tonumber(S.route3_onabort_names[nm]) or 0) + 1
+                end)
+            end
+        end
+    end)
+end
+-- ⭐ ROUND 8 (2026-08-12): veto the abort REQUEST at its entry -- app.ObjectClimber.
+-- requestAbortClimb() on the PLAYER's climber while mounted. Round 6b proved skipping the
+-- post-abort callback desyncs state; the REQUEST is an external input, so refusing it means
+-- the abort machinery simply never starts (no partial teardown, no jolt, no re-latch cycle).
+_G.iris_reqabort_fn = function(args)
+    local ok, ret = pcall(function()
+        S.route3_reqabort_count = (tonumber(S.route3_reqabort_count) or 0) + 1
+        local pca = tonumber(S.route3_player_climb_addr) or -1
+        if pca < 0 or sdk.to_int64(args[2]) ~= pca then return nil end
+        S.route3_reqabort_player = (tonumber(S.route3_reqabort_player) or 0) + 1
+        if S.mounted ~= true or C.route3_reqabort_veto == false then return nil end
+        if os.clock() < (tonumber(S.route3_abort_veto_off_until) or 0.0) then return nil end
+        S.route3_reqabort_veto_count = (tonumber(S.route3_reqabort_veto_count) or 0) + 1
+        return sdk.PreHookResult.SKIP_ORIGINAL
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_REQABORT_HOOKED == nil then
+    _G.IRIS_REQABORT_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.ObjectClimber")
+        local m = td and td:get_method("requestAbortClimb")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_reqabort_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
+end
+-- round 6b VETO: skip onAbortClimb for the MOUNTED PAIR only (player or the ridden body).
+-- Separate hook because the round-6 closure is pinned discarding returns; a second pre-hook
+-- on the same method CAN skip the original. Other characters' aborts always pass (pawns
+-- climbing enemies mid-fight must keep theirs).
+-- ⛔ round 6b VERDICT (field): vetoing onAbortClimb did NOT stop the knocking (230/231 player
+-- aborts vetoed, symptoms identical) and likely CAUSED the fade-to-black (abort ran, its
+-- bookkeeping skipped = state desync -> rescue fade). Forced OFF at load (flight-anim-toggle
+-- law); the hook stays as an opt-in instrument only.
+C.route3_climb_abort_veto = false
+_G.iris_onabort_veto_fn = function(args)
+    local ok, ret = pcall(function()
+        if S.mounted ~= true or C.route3_climb_abort_veto ~= true then return nil end
+        if os.clock() < (tonumber(S.route3_abort_veto_off_until) or 0.0) then return nil end
+        local this = sdk.to_int64(args[2])
+        local pa, ga = nil, nil
+        pcall(function() local pl = get_player(); pa = pl and pl:get_address() end)
+        pcall(function() local ch = reacquire_griffin(); ga = ch and ch:get_address() end)
+        if this ~= pa and this ~= ga then return nil end
+        S.route3_onabort_veto_count = (tonumber(S.route3_onabort_veto_count) or 0) + 1
+        return sdk.PreHookResult.SKIP_ORIGINAL
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_CLIMBABORT_HOOKED == nil then
+    _G.IRIS_CLIMBABORT_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.Character")
+        local m = td and td:get_method("isNeedAbortClimbOnCharacter")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_climbabort_pre_fn
+                if f then return f(args) end
+            end, function(retval)
+                local f = _G.iris_climbabort_post_fn
+                if f then return f(retval) end
+                return retval
+            end)
+        end
+    end)
+    pcall(function()
+        local td = sdk.find_type_definition("app.Character")
+        local m = td and td:get_method("onAbortClimb")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_onabort_fn
+                if f then f(args) end
+            end)
+        end
+    end)
+end
+if _G.IRIS_CLIMBABORT_VETO_HOOKED == nil then
+    _G.IRIS_CLIMBABORT_VETO_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.Character")
+        local m = td and td:get_method("onAbortClimb")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_onabort_veto_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
+end
+
+-- ⭐⭐⭐ ROUND 7 -- THE SHAKE-OFF TRACK (2026-08-12, il2cpp): monsters carry
+-- app.Monster.ShakeOffTrack -- shake-off events AUTHORED INSIDE MOTION CLIPS. The drake is a
+-- cling-boss, so her clips fire ShakeOff events (enum app.ShakeOffTrack.ShakeOff: 0 None,
+-- 1 Weak, 2 Strong, 3 ForceFall); app.Character.updateShakeOff turns them into climb-abort
+-- requests on every rider (~1173 attempts in one soar). Weak/Strong = the knocking jolts;
+-- ForceFall = the fade-to-black drop. The griffin never knocks because her ride clips are
+-- authored for the carry-to-nest mechanic (no shake events). FIX ON THE DRAKE'S SIDE ONLY:
+-- skip her updateShakeOff while she is the mounted body + belt-and-braces per-frame clear of
+-- ShakeOffType/ForceShakeOffType. The player's climb is never touched (no glue risk).
+_G.iris_shakeoff_skip_fn = function(args)
+    local ok, ret = pcall(function()
+        if S.mounted ~= true or C.route3_shakeoff_suppress == false then return nil end
+        local ga = tonumber(S.route3_drake_addr) or -1
+        if ga < 0 or sdk.to_int64(args[2]) ~= ga then return nil end
+        S.route3_shakeoff_skip_count = (tonumber(S.route3_shakeoff_skip_count) or 0) + 1
+        return sdk.PreHookResult.SKIP_ORIGINAL
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_SHAKEOFF_HOOKED == nil then
+    _G.IRIS_SHAKEOFF_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.Character")
+        local m = td and td:get_method("updateShakeOff")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_shakeoff_skip_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
+end
+function iris_shakeoff_calm_tick()
+    if S.mounted ~= true then S.route3_drake_addr = nil; return end
+    -- ⭐⭐⭐ ROUND 9 -- PIN THE FIELD (2026-08-12): the stamina bar RATCHETING to the 466 hard
+    -- floor on the drake (and never on the griffin) is on-screen proof IsClimbOnCharacter
+    -- blinks false constantly during drake flight. Getter pin failed (native readers bypass),
+    -- setter veto failed (field written RAW) -- but a per-frame FIELD write is visible to every
+    -- native reader: camera chooser (the close-up), abort logic (the storm), stamina hold (the
+    -- ratchet). Count each re-true = the flicker-rate instrument we never had.
+    if C.route3_climbfield_pin ~= false
+        and os.clock() >= (tonumber(S.route3_abort_veto_off_until) or 0.0) then
+        pcall(function()
+            local pl = get_player()
+            if not pl then return end
+            local cur = nil
+            pcall(function() cur = pl:get_field("<IsClimbOnCharacter>k__BackingField") end)
+            if cur == false then
+                S.route3_climbfield_retrues = (tonumber(S.route3_climbfield_retrues) or 0) + 1
+            end
+            pcall(function() pl:set_field("<IsClimbOnCharacter>k__BackingField", true) end)
+            pcall(function() pl:set_field("<IsClimbOrStandOnCharacter>k__BackingField", true) end)
+        end)
+    end
+    -- ⭐ ROUND 10 -- SLOW THE WINGS (2026-08-12): round 9 proved the blink can't be erased
+    -- post-hoc (426 caught, zero cure -- native acts on the false in the same update). The
+    -- blink is the grip solver's tolerance breaking against BONE VELOCITY, so attack the
+    -- physics: play the airborne clips slower and the same animation moves the spine under
+    -- the threshold. re-trues counter = the live dial readout (blinks/flight vs speed).
+    if S.airborne == true then
+        local spd = tonumber(C.route3_air_clip_speed) or 1.0
+        if spd < 0.99 then
+            pcall(function()
+                local ch = reacquire_griffin()
+                local m = ch and ch:call("get_Motion")
+                if m then m:call("set_PlaySpeed", spd) end
+            end)
+        end
+    end
+    pcall(function()
+        local ch = reacquire_griffin()
+        if not ch then S.route3_drake_addr = nil; return end
+        pcall(function() S.route3_drake_addr = ch:get_address() end)   -- feeds the hook's cheap compare
+        -- round 8: cache the player's ObjectClimber address for the request-veto hook
+        pcall(function()
+            local pl = get_player()
+            local ctrl = pl and pl:call("get_ClimbCtrl")
+            S.route3_player_climb_addr = ctrl and ctrl:get_address() or nil
+        end)
+        if C.route3_shakeoff_suppress == false then return end
+        -- observe BEFORE clearing: nonzero reads prove the track really fires on her clips
+        local cur = -1
+        pcall(function() cur = tonumber(ch:call("get_ShakeOffType")) or -1 end)
+        if cur > 0 then
+            S.route3_shake_seen = (tonumber(S.route3_shake_seen) or 0) + 1
+            S.route3_shake_last_type = cur
+        end
+        pcall(function() ch:call("set_ShakeOffType", 0) end)
+        pcall(function() ch:call("set_ForceShakeOffType", 0) end)   -- app.Monster level (pcall-guarded)
     end)
 end
 
@@ -29621,6 +30030,33 @@ _G.IrisGriffinBridge = {
         pcall(function() griffin_dismiss() end)
         return true, "dismissed"
     end,
+    body_gender = function(addr)
+        -- 08-12 (IrisSpecies): the LOCKED gender of a TAMED body -- the live companion's
+        -- record, or a homestead resident's record (IrisHomesteadBox.addrs binds body ->
+        -- rec id). nil for wild bodies: the caller may then roll presentation.
+        if not addr then return nil end
+        local g = nil
+        pcall(function()
+            if S.griffin then
+                local go9 = char_go(S.griffin)
+                if go9 and go9:get_address() == addr then
+                    local r9 = griffin_stable_live_rec()
+                    g = r9 and r9.gender or nil
+                end
+            end
+        end)
+        if g then return g end
+        pcall(function()
+            local hb = rawget(_G, "IrisHomesteadBox")
+            local rid = hb and hb.addrs and hb.addrs[addr] or nil
+            if rid == nil then return end
+            local st = S.route3_stable
+            for _, r in ipairs((st and st.companions) or {}) do
+                if r.id == rid then g = r.gender break end
+            end
+        end)
+        return g
+    end,
     -- ── HOMESTEAD BOX data layer (08-11, slice 1: records only -- the resident
     -- SPAWNER arrives in its own arc; a "home" soul is parked at the plot, not
     -- summonable-at-your-side until called back). home.hs = homestead index, so a
@@ -29725,6 +30161,28 @@ _G.IrisGriffinBridge = {
         end
         if S.live_rec_id == id and S.griffin and char_go(S.griffin) then
             local ch = S.griffin
+            -- ⛔⛔ 08-12 THE BULL CRASH (dump receipt: ACCESS_VIOLATION read 0x110 = null-this
+            -- in app.MonsterBridgeNavAgent.get_isOnBridgeNaviStart, seconds after releasing a
+            -- SPAWNER-BORN bull near a bridge): a monster-nav body whose bridge-nav agent was
+            -- never wired (spawner bodies skip the generator's nav setup) must NOT be allowed
+            -- to think free -- its first navigationRequest dereferences the null agent on a
+            -- JOB THREAD, where no airbag hook is permitted (the Guard 2 law: hooking a
+            -- job-thread method hard-kills the process). Release DESPAWNS such a body instead.
+            local nav_unsafe = false
+            pcall(function()
+                local go9 = char_go(ch)
+                local mnav = go9 and go9:call("getComponent(System.Type)", sdk.typeof("app.MonsterNavigationController"))
+                if mnav ~= nil then
+                    local bag = go9:call("getComponent(System.Type)", sdk.typeof("app.MonsterBridgeNavAgent"))
+                    if bag == nil then nav_unsafe = true end
+                end
+            end)
+            if nav_unsafe then
+                pcall(function() log.info("[IrisStable] release-to-wild refused: monster nav without bridge agent - despawn release") end)
+                local ok0, why0 = false, nil
+                pcall(function() ok0, why0 = _G.IrisGriffinBridge.stable_release(id) end)
+                return ok0, ok0 and "released - the wild takes them back (this one cannot roam here)" or why0
+            end
             -- ⛔⛔ 08-11 (Aurora: "the rabbit just became Bugs"): the freed body stayed in
             -- the spawner's instance list, reacquire re-ADOPTED it (no active record = no
             -- species filter), and live_rec's species-match fallback then bound it to the
@@ -34195,6 +34653,7 @@ re.on_frame(function()
     safe_run("route3_camcycle_tick", route3_camcycle_tick)
     safe_run("griffin_kbcapture_tick", griffin_kbcapture_tick)
     safe_run("route3_rise_tick", route3_rise_tick)
+    safe_run("iris_shakeoff_calm_tick", iris_shakeoff_calm_tick)
     -- ⛔ MUST run before route3_rise_tick / the flight drive: it owns the standdown window.
     safe_run("griffin_jointprobe_tick", griffin_jointprobe_tick)
     safe_run("route3_rise_fc_lift_tick", route3_rise_fc_lift_tick)
@@ -34367,6 +34826,68 @@ re.on_draw_ui(function()
             yn(S.route3_proxy_ride_active), yn(S.airborne), tostring(S.route3_flight_status or "(none)")))
         imgui.separator()
 
+        -- 🐉 DRAKE TESTING (2026-08-12, temporary — dies with the rest of the dev UI).
+        -- Everything the close-cam/knocking bisect needs, in one box. Both checkboxes are
+        -- the SAME variables as the ones buried in the loop-camera tree, just surfaced.
+        if imgui.tree_node("🐉 DRAKE TESTING (camera/knocking bisect)##c_drktest") then
+            imgui.text_colored("ROUND 10: SLOW THE WINGS. Drag speed to 0.5, fly, watch re-trues.", 0xFF80D0FF)
+            local dks
+            dks, C.route3_air_clip_speed = imgui.drag_float(
+                "air animation speed (1.0 = normal)##c_drk_airspeed",
+                tonumber(C.route3_air_clip_speed) or 1.0, 0.01, 0.3, 1.0)
+            if dks then save_config() end
+            imgui.text(string.format("climb-flag re-trues=%d  (blinks caught -- lower = calmer grip)",
+                tonumber(S.route3_climbfield_retrues) or 0))
+            local dkp
+            dkp, C.route3_climbfield_pin = imgui.checkbox(
+                "PIN the climb flag TRUE while mounted (field write)##c_drk_fieldpin",
+                C.route3_climbfield_pin ~= false)
+            if dkp then save_config() end
+            local dkv
+            dkv, C.route3_reqabort_veto = imgui.checkbox(
+                "REFUSE climb-abort requests on the rider##c_drk_reqabort",
+                C.route3_reqabort_veto ~= false)
+            if dkv then save_config() end
+            imgui.text(string.format("abort REQUESTS=%d (player=%d REFUSED=%d)",
+                tonumber(S.route3_reqabort_count) or 0, tonumber(S.route3_reqabort_player) or 0,
+                tonumber(S.route3_reqabort_veto_count) or 0))
+            imgui.text(string.format("abort executions=%d (player=%d other=%d)",
+                tonumber(S.route3_onabort_count) or 0, tonumber(S.route3_onabort_player) or 0,
+                tonumber(S.route3_onabort_other) or 0))
+            if type(S.route3_onabort_names) == "table" then
+                local parts = {}
+                for nm, n in pairs(S.route3_onabort_names) do parts[#parts + 1] = { nm, n } end
+                table.sort(parts, function(a, b) return a[2] > b[2] end)
+                local line = ""
+                for i = 1, math.min(3, #parts) do
+                    line = line .. (i > 1 and "  " or "") .. tostring(parts[i][1]) .. "=" .. tostring(parts[i][2])
+                end
+                if line ~= "" then imgui.text("other aborters: " .. line) end
+            end
+            local dk1, dk2
+            dk1, C.route3_loopcam = imgui.checkbox(
+                "cinematic camera on ascend/descend##c_drk_loopcam", C.route3_loopcam ~= false)
+            if dk1 then save_config() end
+            dk2, C.route3_rise_clip_enabled = imgui.checkbox(
+                "flight animation (clip paint) on ascend/descend##c_drk_riseclip",
+                C.route3_rise_clip_enabled ~= false)
+            if dk2 then save_config() end
+            if imgui.button("APPLY species profile now##c_drk_apply") then
+                pcall(function()
+                    local dgo = select(2, reacquire_griffin())
+                    local raw = dgo and (tostring(go_name(dgo) or ""):match("^[^@]+") or "") or ""
+                    local skey = raw:match("ch%d+_%a_%d+") or raw:match("ch%d+_%d+")
+                    griffin_species_profile_apply(skey or griffin_species_key())
+                    save_config()
+                    status("profile: " .. tostring(S.route3_profile_status))
+                end)
+            end
+            imgui.same_line()
+            imgui.text(tostring(S.route3_rise_status or "(no rise yet)"))
+            imgui.tree_pop()
+        end
+        imgui.separator()
+
         if imgui.button("Spawn / replace##c_spawn") then spawn_griffin() end
         imgui.same_line()
         if imgui.button("Adopt / ride##c_adopt") then route3_start_auto_ride("button") end
@@ -34460,8 +34981,10 @@ re.on_draw_ui(function()
                     local active = comp.id == cst.active
                     local gsym = (comp.gender == "female" and " \u{2640}") or (comp.gender == "male" and " \u{2642}") or ""
                     -- the record's KIND stamp outranks the species band (08-06:
-                    -- Chad the horse read "(Doe)" -- both are ch299011)
-                    local kind_nm = (comp.kind == "horse" and "Horse")
+                    -- Chad the horse read "(Doe)" -- both are ch299011).
+                    -- 08-12: the VARIANT outranks the kind (Epona read "(Horse)")
+                    local kind_nm = (comp.variant == "unicorn" and "Unicorn")
+                        or (comp.kind == "horse" and "Horse")
                         or iris_type_name(comp.species)
                     local label = string.format("%s%s%s  (%s)##c_stable_%d",
                         active and "> " or "    ",
@@ -35312,6 +35835,9 @@ re.on_draw_ui(function()
             imgui.text(string.format("cam SETS: last=%s vetoed=%d",
                 tostring(S.route3_camset_last or "(none seen)"),
                 tonumber(S.route3_camset_veto_count) or 0))
+            imgui.text(string.format("climb-flag pins: %d | climb-set FALSE vetoes: %d",
+                tonumber(S.route3_climbpin_count) or 0,
+                tonumber(S.route3_climbset_veto_count) or 0))
             -- pawn ride toggle surfaced here (old UI's checkbox is gone): untick = the pawn
             -- does not board at the next mount -- the solo-flight knocking A/B.
             local pr
