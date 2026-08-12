@@ -370,7 +370,13 @@ function griffin_tamed_save()
     if not comp then return false end
     local pos = transform_pos(go)
     comp.name = tostring(C.route3_griffin_name or comp.name or "Companion")
-    comp.species = tostring(S.route3_tamed_species or comp.species or "ch253000_00")
+    -- ⛔⛔ 08-12 (Tails: drake -> doe -> horse, TWICE -- re-corrupted minutes after the
+    -- one-shot repair): SPECIES IS IDENTITY, written once at the tame and never again.
+    -- S.route3_tamed_species is GLOBAL state -- it still held the released unicorn's
+    -- ch299011, and this line stamped it onto whoever was ACTIVE on every 10s parked-spot
+    -- save. A save records position/hp/guid; it must never rewrite who a soul IS.
+    -- Fill-if-missing only.
+    comp.species = tostring(comp.species or S.route3_tamed_species or "ch253000_00")
     -- the body's instance GUID (in the GameObject name) survives script
     -- resets: reclaim can match THIS body exactly, never a same-species twin
     pcall(function()

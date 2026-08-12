@@ -2863,6 +2863,14 @@ local function _ani_eligible(a)
         local b = rawget(_G, "IrisGriffinBridge")
         tamed = (b and b.is_companion_body and b.is_companion_body(a.go) == true) or false
     end)
+    -- 08-11 HOMESTEAD BOX: the yard's residents produce too (Aurora's whole point --
+    -- milk the ox and collect the eggs AT the farm)
+    if not tamed then
+        pcall(function()
+            local hb = rawget(_G, "IrisHomesteadBox")
+            tamed = (hb and hb.is_resident and hb.is_resident(a.go:get_address()) == true) or false
+        end)
+    end
     if not tamed then return false, "only a tamed, stable-summoned animal produces" end
     return true
 end

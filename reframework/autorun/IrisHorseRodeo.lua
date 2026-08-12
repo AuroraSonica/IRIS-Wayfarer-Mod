@@ -3599,6 +3599,7 @@ local function costume_tick()
                     or pad_turn ~= 0 or pad_gallop
                 if any_input and costume.force_hold
                     and not costume.jump and not costume.kick
+                    and not costume.bless
                     and not costume.hit_react_hold then
                     -- grabbing the reins releases any force-hold test clip
                     costume.force_hold = nil
@@ -6863,7 +6864,9 @@ local RIDE_HUD_LABELS = {
     {"PNL_top/PNL_R01/PNL_txt/mtx_00", ""},         -- RB
     {"PNL_top/PNL_L00/PNL_txt/mtx_00", ""},         -- LT
     {"PNL_top/PNL_L01/PNL_txt/mtx_00", ""},         -- LB
-    {"PNL_top/PNL_L02/PNL_txt/mtx_00", ""},         -- Y
+    -- Y: dynamic -- "Blessing" ONLY while the mount is a unicorn (written
+    -- per-tick below; blank rows are never written, per the mount-CTD law).
+    {"PNL_top/PNL_L02/PNL_txt/mtx_00", "", dynamic = "bless"},  -- Y
     {"PNL_top/PNL_L03/PNL_txt/mtx_00", "Kick"},     -- X
     {"PNL_top/PNL_R02/PNL_txt/mtx_00", "Gallop"},   -- B
 }
@@ -6902,6 +6905,17 @@ local function horse_ride_hud_tick()
             -- and the AV follows. The type guard below was necessary but NOT sufficient:
             -- the object is a genuine via.gui.Text, it is the EMPTY WRITE that detonates.
             local txt = tostring(row[2] or "")
+            -- 08-12: dynamic Y slot -- "Blessing" only while the mount is a
+            -- unicorn (never written otherwise, so the empty-write law holds).
+            if row.dynamic == "bless" then
+                local isu = false
+                pcall(function()
+                    local api = rawget(_G, "__iris_wild_horses_api")
+                    isu = api and api.is_unicorn
+                        and api.is_unicorn(costume.horse_go) or false
+                end)
+                txt = isu and "Blessing" or ""
+            end
             if txt == "" then
                 -- opt-in only: a single space reads blank without taking the empty path.
                 -- Default is the griffin's proven behaviour -- leave the slot alone.

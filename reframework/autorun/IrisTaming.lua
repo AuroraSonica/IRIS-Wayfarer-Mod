@@ -12,7 +12,7 @@ local C = {
     enabled = true,
     tame_key = 0x4E,
     tame_cooldown = 30.0,         -- breather after a tame before the next courtship can arm
-    critter_bands = "ch299410,ch299430,ch299400,ch299440,ch299420,ch299200,ch299210",   -- the SMALL tier: crow, bird, both bat bands, seabird, RABBIT, RAT
+    critter_bands = "ch299410,ch299430,ch299400,ch299440,ch299420,ch299200,ch299210,ch299220,ch299221",   -- the SMALL tier: crow, bird, both bat bands, seabird, RABBIT, RAT, CHICKENS (08-11)
     wyrm_rite_key = 0x45,         -- E -- open the Wyrmfeeding rite dialog at a camp
     -- WYRM RITE SHELL (Aurora's VFX pick, 08-08): ch227 timezone-destroy
     -- shell cast ON the beast, scaled to cover it, tinted deep dragon-red.
@@ -1655,11 +1655,16 @@ local function oxtame_request_decoy(st, pos)
         local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
         q.x = 0; q.y = 0; q.z = 0; q.w = 1
         local p = ValueType.new(sdk.find_type_definition("via.Position"))
-        -- Just inside the ox body: the rat remains visually absent, while its Character is alive at
-        -- precisely the place on which the Griffin must line up.
-        p.x = (tonumber(pos.x) or 0.0) + 0.20
-        p.y = (tonumber(pos.y) or 0.0) + 0.05
-        p.z = (tonumber(pos.z) or 0.0) + 0.20
+        -- Wwise can post the rat's birth squeak before Lua receives its component and disables it.
+        -- Birth therefore happens far above audible range. On acquisition we stop/disable its own
+        -- containers FIRST, then make the one allowed transform write to the real target beneath
+        -- the ox. Think is stopped by spawnIdle, so the staging body cannot act or fall away.
+        local target_x = (tonumber(pos.x) or 0.0) + 0.20
+        local target_y = (tonumber(pos.y) or 0.0) + 0.05
+        local target_z = (tonumber(pos.z) or 0.0) + 0.20
+        p.x = target_x
+        p.y = target_y + 600.0
+        p.z = target_z
         sp:requestAddInstances(tostring(C.oxtame_live_bait_cid or "ch299210_A_00"), p, q, {
             spawnIdle = true,
             ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
@@ -1668,7 +1673,7 @@ local function oxtame_request_decoy(st, pos)
         S.oxtame_decoy_spawner = sp
         S.oxtame_decoy_pump_until = os.clock() + math.max(3.0,
             tonumber(C.oxtame_live_bait_spawn_timeout) or 8.0)
-        S.oxtame_decoy_pos = { x = p.x, y = p.y, z = p.z }
+        S.oxtame_decoy_pos = { x = target_x, y = target_y, z = target_z }
         S.oxtame_decoy_cleanup_at = nil
         st.decoy_requested = true
         st.decoy_request_at = os.clock()
@@ -1696,17 +1701,6 @@ local function oxtame_acquire_decoy(st)
             st.decoy_ch = born
             S.oxtame_decoy_ch = born
             local go = char_go(born)
-            -- One placement before the Griffin is ever pointed at it. Never transform-write a live
-            -- target during flight: that is the exact AITargetPosition race which crashed the last
-            -- full-puppet experiment.
-            pcall(function()
-                local p0 = S.oxtame_decoy_pos
-                if p0 then
-                    local p = ValueType.new(sdk.find_type_definition("via.Position"))
-                    p.x = p0.x; p.y = p0.y; p.z = p0.z
-                    set_upos(go, p)
-                end
-            end)
             pcall(function() set_nav_stop(born, true) end)
             pcall(function() set_immunity_soft(born, true) end)
             -- This body exists only as an AI target. Silence both audio component families rather
@@ -1724,6 +1718,17 @@ local function oxtame_acquire_decoy(st)
                 if sc then
                     pcall(function() sc:call("stopAll()") end)
                     sc:call("set_Enabled", false)
+                end
+            end)
+            -- One placement after silence, before the Griffin is ever pointed at it. Never
+            -- transform-write a live target during flight: that is the exact AITargetPosition race
+            -- which crashed the old full-puppet experiment.
+            pcall(function()
+                local p0 = S.oxtame_decoy_pos
+                if p0 then
+                    local p = ValueType.new(sdk.find_type_definition("via.Position"))
+                    p.x = p0.x; p.y = p0.y; p.z = p0.z
+                    set_upos(go, p)
                 end
             end)
             pcall(function() log.info("[OxTame] live-bait decoy born and planted under the offering") end)
@@ -3094,6 +3099,14 @@ local function load_state()
         -- migration: the RAT (2026-07-15) -- second ground critter; tames with ROTTEN food
         if not tostring(C.critter_bands or ""):find("ch299210", 1, true) then
             C.critter_bands = tostring(C.critter_bands or "") .. ",ch299210"
+        end
+        -- migration: the FOWL (2026-08-11, the Homestead Box needs its chickens) -- both
+        -- chicken bands join the critter tame; egg-collection at the farm is the payoff
+        if not tostring(C.critter_bands or ""):find("ch299220", 1, true) then
+            C.critter_bands = tostring(C.critter_bands or "") .. ",ch299220"
+        end
+        if not tostring(C.critter_bands or ""):find("ch299221", 1, true) then
+            C.critter_bands = tostring(C.critter_bands or "") .. ",ch299221"
         end
         -- migration: the first bat roost defaults (0, -0.05, 0) buried him in the armpit
         -- (image 43) -- shift saved configs still on them up and out so he's visible to tune
@@ -20471,5 +20484,13 @@ end)
 -- patching the ten separate sites in here that reset S.mode to "idle", and every abort,
 -- death and reload path then tears the music down for free.
 re.on_frame(function()
-    rawset(_G, "IrisTamingMode", tostring(S.mode or "idle"))
+    local music_mode = tostring(S.mode or "idle")
+    -- The Griffin/ox rite is a parallel state machine and never changes S.mode, so the music
+    -- watcher previously saw "idle" throughout a successful tame. Publish it as courting from the
+    -- offering's birth until every success/abort path clears S.oxtame; the existing watcher then
+    -- owns both start and teardown without another collection of fragile stop sites.
+    if S.oxtame and tostring(S.oxtame.stage or "idle") ~= "idle" then
+        music_mode = "context"
+    end
+    rawset(_G, "IrisTamingMode", music_mode)
 end)

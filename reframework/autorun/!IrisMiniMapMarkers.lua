@@ -37,14 +37,42 @@ local function note(message)
 end
 
 -- A texture resource holder is safe to retain with add_ref; unlike the map UI
--- controls, it is not owned by a streamed ui020301 instance.
+-- controls, it is not owned by a streamed ui020301 instance. Do NOT create it
+-- during autorun: a non-nil holder made before the game's texture mounts are ready
+-- resolves to the GUI's white missing-texture square. The full-map implementation
+-- succeeds because it creates this lazily after its UI opens; mirror that timing.
 local sign_resource, sign_holder = nil, nil
-pcall(function()
-    sign_resource = sdk.create_resource("via.render.TextureResource", SIGN_TEXTURE)
-    if sign_resource then sign_resource:add_ref() end
-    sign_holder = sign_resource and sign_resource:create_holder("via.render.TextureResourceHolder") or nil
-    if sign_holder then sign_holder:add_ref() end
-end)
+local sign_attempted_at, sign_ready_at = -1000.0, math.huge
+
+local function ensure_sign_holder()
+    if sign_holder then
+        if os.clock() < sign_ready_at then return false end
+        -- Some RE Engine builds expose get_Resource on the holder. Where present,
+        -- require the asynchronous resource to exist; where absent, the timed
+        -- grace period remains our compatibility fallback.
+        local ok, resolved = pcall(function() return sign_holder:call("get_Resource") end)
+        if ok then return resolved ~= nil end
+        return true
+    end
+    local now = os.clock()
+    if now - sign_attempted_at < 5.0 then return false end
+    sign_attempted_at = now
+    pcall(function()
+        sign_resource = sdk.create_resource("via.render.TextureResource", SIGN_TEXTURE)
+        if sign_resource then sign_resource:add_ref() end
+        sign_holder = sign_resource and sign_resource:create_holder("via.render.TextureResourceHolder") or nil
+        if sign_holder then
+            sign_holder:add_ref()
+            -- Give the render resource one second to resolve before assigning it.
+            -- Until then the already-working native house glyph remains visible.
+            sign_ready_at = now + 1.0
+        end
+    end)
+    note("lazy sign texture: resource=" .. tostring(sign_resource ~= nil)
+        .. " holder=" .. tostring(sign_holder ~= nil)
+        .. (sign_holder and " (native fallback for 1s while it resolves)" or " (retrying in 5s)"))
+    return false
+end
 
 -- Plain slot numbers only -- never managed UI references.
 local last_custom_slots = {}
@@ -71,7 +99,7 @@ local function set_icon_texture(icon, holder)
 end
 
 local function apply_custom_sign(icon)
-    if not (icon and sign_holder) then return false end
+    if not icon or not ensure_sign_holder() then return false end
     local changed = false
     pcall(function()
         local texture = icon:get_field("Tex")
@@ -260,5 +288,4 @@ sdk.hook(update_icon,
         return retval
     end)
 
-note("armed dormant-pool minimap markers (owned=house, unowned=custom sign; no manager/list writes; sign texture="
-    .. tostring(sign_holder ~= nil) .. ")")
+note("armed dormant-pool minimap markers (owned=house, unowned=lazy custom sign; no manager/list writes)")

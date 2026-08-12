@@ -207,6 +207,7 @@ local C = {
     -- ⚠ Only takes if the effect object exposes a seek method -- "Dump effect API"
     -- in the panel writes the real method list so this can be wired exactly.
     unicorn_efx_skip = 0.0,
+    unicorn_efx_lift = 0.4,       -- metres above the attach bone (0 = buried)
     unicorn_reassert_s = 2.0,     -- 0 disables the periodic material re-assert
     -- ⭐ "BASE" HP on purpose (Aurora 08-11): a per-creature Pokémon-style IV
     -- system is planned -- REGISTRY rec.base_hp is the reserved per-creature
@@ -218,6 +219,9 @@ local C = {
     blessing_range = 5.0,         -- how near the unicorn you must stand to cast
     blessing_radius = 4.0,        -- heal circle radius
     blessing_cooldown = 120.0,    -- per-unicorn seconds
+    blessing_hot_s = 8.0,         -- healing circle lifetime
+    blessing_hot_tick = 0.5,      -- seconds between heal pulses
+    blessing_hot_pct = 0.08,      -- fraction of max HP restored per pulse
     -- Unicorns are rare: a hunter who kills one instead of taming it gets a
     -- real prize (bonus on top of the native kill award). Aurora 08-11.
     unicorn_kill_exp = 10000,
@@ -900,12 +904,11 @@ function UNI.kill_efx(address)
     local entry = S.unicorns[address]
     if not entry then return end
     if entry.container then
-        -- ⛔ 08-11 v2: EVERY stop lever, unconditionally. finishAll alone let a
-        -- looping element live forever; killAll alone still left "sliders do
-        -- nothing" symptoms. All three are pcall'd -- whichever bites, bites.
+        -- ⛔ 08-11 v3: killAll + finishAll ONLY. v2 also set isDisposing, and
+        -- the sparkle stopped appearing AT ALL -- if the engine recycles the
+        -- container for the next request, we were poisoning our own re-fires.
         pcall(function() entry.container:call("killAll") end)
         pcall(function() entry.container:call("finishAll") end)
-        pcall(function() entry.container:call("set_isDisposing", true) end)
     end
     entry.container = nil
 end
@@ -961,11 +964,19 @@ function UNI.spawn_efx(address)
             -- picks the joint empirically, ZERO offset, no math. The panel's
             -- bone combo kills + re-fires on change so every pick shows
             -- immediately.
-            off = Vector3f.new(0.0, 0.0, 0.0)
+            -- ⛔ zero offset = the sparkle fires INSIDE the body mesh, buried
+            -- and invisible (field-proven: manual mode's stray offsets were
+            -- the only reason it was ever visible). Lift it clear of the bone,
+            -- plus the world trims for fine placement.
+            off = Vector3f.new(
+                C.unicorn_efx_ox or 0.0,
+                (C.unicorn_efx_oy or 0.0) + (C.unicorn_efx_lift or 0.4),
+                C.unicorn_efx_oz or 0.0)
             joint = (C.unicorn_efx_joint ~= "" and C.unicorn_efx_joint)
                 or "Head_0"
             entry.joint = joint
-            R.efx_bolt_debug = "bone-attach mode: " .. joint .. ", zero offset"
+            R.efx_bolt_debug = string.format(
+                "bone-attach: %s, lift %.2f", joint, C.unicorn_efx_lift or 0.4)
         else
             pcall(function()
                 local jj = transform:call("getJointByName(System.String)", joint)
@@ -1555,6 +1566,42 @@ local function install_damage_hook()
         return
     end
     DMG_HOOK.installed = true
+    -- Vanilla-flow unicorn bounty (Aurora: "I would have liked it to show up
+    -- as the vanilla notification"): override the exp amount INSIDE the
+    -- game's own dispenser when the victim is a registered unicorn -- the
+    -- normal pipeline then handles notification, pawn share, level-up.
+    -- v2 (the ExpGranter.evaluateExpAmount attempt installed but never fired
+    -- on a real kill): hook the DISPENSER'S award methods instead. The
+    -- ExpDispenser lives on the DYING character, so `this` names the victim;
+    -- the Int32 exp arg is overridden in place and the vanilla pipeline
+    -- (notification, pawn share, level-up) runs untouched.
+    pcall(function()
+        local dtd = sdk.find_type_definition("app.ExpDispenser")
+        for _, mname in ipairs({"addExpToPlayer", "addExpToPawn"}) do
+            local mm = dtd and dtd:get_method(mname)
+            if mm then
+                sdk.hook(mm, function(args)
+                    pcall(function()
+                        -- Probe proved the dispenser sits on the PLAYER
+                        -- (ch000000_00), so victim identity comes from the
+                        -- damage hook instead: a hit on a unicorn arms
+                        -- RP.bounty_until, and the kill's exp award always
+                        -- lands inside that window.
+                        if RP.bounty_until
+                            and os.clock() <= RP.bounty_until then
+                            RP.bounty_until = nil
+                            local amount = math.floor(
+                                C.unicorn_kill_exp or 10000)
+                            args[4] = sdk.to_ptr(amount)
+                            log("unicorn bounty: " .. mname
+                                .. " exp overridden to " .. amount)
+                        end
+                    end)
+                end, function(retval) return retval end)
+                log("bounty hook installed on ExpDispenser." .. mname)
+            end
+        end
+    end)
     sdk.hook(method, function(args)
         pcall(function()
             local hc = sdk.to_managed_object(args[2])
@@ -1573,6 +1620,18 @@ local function install_damage_hook()
                     base = rec.base_hp
                         or (rec.variant == "unicorn" and C.unicorn_hp)
                         or C.horse_hp
+                    -- Bounty arming: the fatal blow ALWAYS passes through
+                    -- here, and here we KNOW the victim (the dispenser hook
+                    -- provably cannot -- it lives on the PLAYER). Any hit on
+                    -- a unicorn opens a short window; an exp award landing
+                    -- inside it is that unicorn's kill.
+                    if rec.variant == "unicorn" then
+                        RP.bounty_until = os.clock() + 3.0
+                        -- 08-12: unicorns carry REAL native 1000 HP now (the
+                        -- HitContext write on promote) -- scaling their damage
+                        -- as well would double-count to 4000 effective.
+                        base = 250.0
+                    end
                 end
             end)
             local rate = math.max(0.05, math.min(1.0,
@@ -3333,6 +3392,10 @@ local function update_horse(record, now)
     if valid(motion) then
         register_bank(state, motion)
         JP.register(state, motion)   -- every live horse carries the jump pack (bank 902)
+        -- ⛔ 08-12: bank 903 was only registered by the on-foot RP.play path, so
+        -- the RODEO's ridden blessing fired changeMotion at an unregistered
+        -- bank = silent no-animation cast. Same treatment as 902.
+        RP.register(state, motion)
     end
     state.live = read_layer(layer)
     maintain_locomotion(state)
@@ -3539,7 +3602,6 @@ rawset(_G, "__iris_wild_horses_api", {
     end,
     blessing_strike = function(go)
         if not valid(go) then return nil end
-        local healed = nil
         pcall(function()
             local tf = go:call("get_Transform")
             local p = tf:call("get_Position")
@@ -3548,10 +3610,9 @@ rawset(_G, "__iris_wild_horses_api", {
             local circle = Vector3f.new(
                 p.x + fwd.x * 1.6, p.y, p.z + fwd.z * 1.6)
             RP.spawn_circle(go, circle, rot)
-            healed = RP.heal_party(circle)
-            RP.heal_full(go, "unicorn (ridden strike)")
+            RP.start_hot(circle)   -- 08-12: heal-over-time zone
         end)
-        return healed
+        return "HoT started"
     end,
 })
 
@@ -3617,6 +3678,88 @@ function RP.heal_full(go, label)
     log(string.format("blessing: heal %s max=%.0f setHp ok=%s readback=%s",
         tostring(label), max, tostring(ok), tostring(after)))
     return ok
+end
+
+-- 08-12: write REAL native max HP through the HitControllerContext -- the
+-- property the loss-gauge recompute reads FROM, so the value sticks and the
+-- ridden HUD bar shows it honestly.
+function RP.apply_native_hp(go)
+    local target = math.floor(C.unicorn_hp or 1000)
+    local ok = pcall(function()
+        local hc = get_component(go, "app.HitController")
+        local ctx = hc and hc:call("get_HitContext")
+        if not ctx then error("no HitContext") end
+        ctx:call("set_OriginalMaxHpProp", target * 1.0)
+        ctx:call("set_ReducedMaxHpProp", target * 1.0)
+    end)
+    set_hp(go, target)
+    log(string.format("unicorn native HP -> %d (ctx write ok=%s)",
+        target, tostring(ok)))
+end
+
+-- 08-12 HEAL OVER TIME (Aurora's design: "a heal over time effect when you
+-- stand in the circle"). The strike now STARTS a zone instead of instant-
+-- healing: while it lives, everyone standing inside ticks up.
+function RP.start_hot(center)
+    RP.hot = {
+        pos = center,
+        ends = os.clock() + (C.blessing_hot_s or 8.0),
+        next_tick = 0.0,
+    }
+    RP.blessing_status = string.format("healing circle live (%.0fs)",
+        C.blessing_hot_s or 8.0)
+end
+
+function RP.tick_heal(go, center)
+    local healed = false
+    pcall(function()
+        local p = RP.go_pos(go)
+        if not (p and center) then return end
+        local dx, dy, dz = p.x - center.x, p.y - center.y, p.z - center.z
+        if (dx * dx + dy * dy + dz * dz)
+            > (C.blessing_radius * C.blessing_radius) then return end
+        local hc = get_component(go, "app.HitController")
+        if not hc then return end
+        local hp = tonumber(hc:call("get_Hp"))
+        local max = RP.native_max_hp(go)
+        if not (hp and max) or hp <= 0 or hp >= max then return end
+        local amount = max * (C.blessing_hot_pct or 0.08)
+        healed = set_hp(go, math.min(max, hp + amount))
+    end)
+    return healed
+end
+
+function RP.hot_pulse()
+    local h = RP.hot
+    if not h then return end
+    local player = RP.player_go()
+    if player then RP.tick_heal(player, h.pos) end
+    pcall(function()
+        local pm = sdk.get_managed_singleton("app.PawnManager")
+        if not pm then return end
+        for _, getter in ipairs({"get_PartyPawnCharacterList",
+                                 "getPartyPawnList", "get_PartyPawnList"}) do
+            local list = nil
+            if pcall(function() list = pm:call(getter) end) and list then
+                local count = 0
+                pcall(function() count = tonumber(list:call("get_Count")) end)
+                for i = 0, (count or 0) - 1 do
+                    pcall(function()
+                        local chr = list:call("get_Item", i)
+                        local go = chr and chr:call("get_GameObject")
+                        if valid(go) then RP.tick_heal(go, h.pos) end
+                    end)
+                end
+                return
+            end
+        end
+    end)
+    -- the unicorns too -- a blessing warms its caster
+    for _, rec in pairs(REGISTRY) do
+        if rec.variant == "unicorn" and valid(rec.game_object) then
+            RP.tick_heal(rec.game_object, h.pos)
+        end
+    end
 end
 
 function RP.heal_party(center)
@@ -3841,6 +3984,17 @@ function RP.blessing_tick()
         end
     end
     RP.neuter_poll()
+    -- heal-over-time zone lives independently of the ritual state machine
+    local h = RP.hot
+    if h then
+        if now > h.ends then
+            RP.hot = nil
+            RP.blessing_status = "healing circle faded"
+        elseif now >= (h.next_tick or 0) then
+            h.next_tick = now + (C.blessing_hot_tick or 0.5)
+            RP.hot_pulse()
+        end
+    end
     local b = RP.blessing
     if not b then return end
     local rec = REGISTRY[b.addr]
@@ -3879,10 +4033,8 @@ function RP.blessing_tick()
             circle = circle or b.pos
             RP.spawn_circle(go, circle, b.rot)
             pcall(function() play_category("nicker", go) end)
-            local healed = RP.heal_party(circle)
-            RP.heal_full(go, "unicorn")
-            RP.blessing_status = string.format(
-                "blessing struck -- %d party healed", healed)
+            -- 08-12: heal-over-time zone (Aurora's design), not instant heal
+            RP.start_hot(circle)
         end
         local done = (t > 0.5 and frame and endframe and endframe > 0
             and frame >= endframe - 4) or t > 2.5
@@ -4255,29 +4407,39 @@ re.on_frame(function()
             end
             -- Sparkle re-request cadence (harmless for looping elements like 11 --
             -- spawn_efx finishes the previous container first, so no stacking).
-            if C.unicorn_efx_enabled and now >= (entry.next_efx or 0) then
+            if C.unicorn_efx_enabled and not entry.exp_granted
+                and now >= (entry.next_efx or 0) then
                 entry.next_efx = now + (C.unicorn_efx_interval or 2.0)
                 UNI.spawn_efx(address)
-            elseif not C.unicorn_efx_enabled and entry.container then
+            elseif entry.container
+                and (not C.unicorn_efx_enabled or entry.exp_granted) then
                 UNI.kill_efx(address)
             end
-            -- Blessing HP: heal to full once per unicorn registration (the
-            -- 1000 "base HP" is damage scaling, so this just tops the native
-            -- pool; rec.base_hp is the future IV override).
+            -- 08-12: REAL native HP (Aurora: the tamed unicorn's bar read
+            -- 250/250). HitControllerContext.set_OriginalMaxHpProp is the
+            -- source the loss gauge recomputes from -- write it and the HUD
+            -- bar, potions, everything read 1000 natively. The damage hook
+            -- drops its unicorn scaling in exchange (no double-counting).
             if not entry.hp_boosted then
                 entry.hp_boosted = true
                 pcall(function()
-                    RP.heal_full(record.game_object, "unicorn promote")
+                    RP.apply_native_hp(record.game_object)
                 end)
             end
-            -- Kill bounty: granted once, the frame the body reads dead.
+            -- Kill bounty flows through the vanilla dispenser hook now (real
+            -- notification). The direct set_Exp grant is retired -- it paid
+            -- silently and would DOUBLE the award alongside the hook.
             if not entry.exp_granted then
                 pcall(function()
                     local ch = get_component(record.game_object,
                         "app.Character")
                     if ch and ch:call("get_IsDead") == true then
                         entry.exp_granted = true
-                        RP.grant_kill_exp()
+                        -- A dead unicorn keeps no magic: kill the sparkle
+                        -- (it lingered at the death spot -- Aurora 08-11).
+                        UNI.kill_efx(address)
+                        log("unicorn died -- sparkle killed; bounty rides"
+                            .. " the vanilla kill exp")
                     end
                 end)
             end
@@ -4672,6 +4834,18 @@ re.on_draw_ui(function()
             if imgui.button("Refresh bones##uni_efx_bones") then
                 UNI.list_bones()
             end
+            changed, value = imgui.slider_float(
+                "Lift above bone (m)", C.unicorn_efx_lift or 0.4,
+                -1.0, 2.0, "%.2f")
+            if changed then
+                C.unicorn_efx_lift = value
+                save_config()
+                for address, e in pairs(S.unicorns) do
+                    e.next_efx = 0.0
+                    e.joint = nil
+                    UNI.kill_efx(address)
+                end
+            end
         end
         changed, value = imgui.slider_float(
             "Position along horn", C.unicorn_efx_tip, 0.0, 2.0, "%.2f")
@@ -4824,6 +4998,13 @@ re.on_draw_ui(function()
             changed, value = imgui.slider_float(
                 "Cooldown (s)", C.blessing_cooldown, 0.0, 600.0, "%.0f")
             if changed then C.blessing_cooldown = value; save_config() end
+            changed, value = imgui.slider_float(
+                "Circle lifetime (s)", C.blessing_hot_s, 2.0, 30.0, "%.0f")
+            if changed then C.blessing_hot_s = value; save_config() end
+            changed, value = imgui.slider_float(
+                "Heal per pulse (% max)", (C.blessing_hot_pct or 0.08) * 100,
+                1.0, 50.0, "%.0f")
+            if changed then C.blessing_hot_pct = value / 100.0; save_config() end
             changed, value = imgui.slider_float(
                 "Unicorn base HP", C.unicorn_hp, 250.0, 5000.0, "%.0f")
             if changed then C.unicorn_hp = value; save_config() end

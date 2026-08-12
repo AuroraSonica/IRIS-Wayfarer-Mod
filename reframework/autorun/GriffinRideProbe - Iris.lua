@@ -25429,12 +25429,20 @@ function griffin_loopcam_active()
     local locked = false
     pcall(function() locked = griffin_node_lockout_active() == true end)
     if not locked then
+        local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+            tonumber(S.route3_simple_dive_until) or 0.0)
+        -- ⭐ HAND-BACK TAIL (2026-08-12, tape-proven): at lock release the native camera's FIRST
+        -- authority frame snaps to ~5.7m (cling mode) before relaxing to the normal 8m -- the
+        -- "weird close-up". Keep filming ~1.5s past the window so the native cam resumes only
+        -- after its flight mode has settled. Per-species (retire_at_window species only).
+        if C.route3_rise_retire_at_window == true and S.route3_loopcam_t0 ~= nil
+            and w > 0.0 and os.clock() < w + 1.5 then
+            return true
+        end
         -- ⭐ hold-refire grace (2026-08-11): a one-frame lock gap between a travel node bailing
         -- and the rise-hold re-firing it cleared t0 here, so the re-fire started a SECOND shot
         -- (Aurora: "the camera thing twice"). Keep the shot timer alive while the rise window
         -- is still open; clear it only once the window has genuinely closed.
-        local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
-            tonumber(S.route3_simple_dive_until) or 0.0)
         if w <= os.clock() then S.route3_loopcam_t0 = nil end
         return false
     end
@@ -25466,6 +25474,84 @@ function griffin_loopcam_active()
         return false
     end
     return true
+end
+
+-- ⭐⭐⭐ THE CLOSE-UP VETO (2026-08-12, THE camera fix -- snapshot-diff proven). The ride's
+-- normal view is app.ClimbingCameraController (ControlType 6). At node fire the native climb
+-- state transiently reads false (the documented node-window flicker), and the game calls
+-- switchCamera(1 = Usually ...) = the ON-FOOT camera glued to a rider on a huge drake = "the
+-- weird close-up". Veto exactly that: Usually-downgrades while MOUNTED during a node window.
+-- Menus/cutscenes/talk (types 12/15/...) and genuine dismounts outside windows pass through.
+-- Hook installed ONCE via versioned guard; logic dispatched through _G so a reload updates
+-- behaviour (the hook-pins-old-closures law).
+_G.iris_camswitch_veto_fn = function(args)
+    local ok, ret = pcall(function()
+        local ct = tonumber(sdk.to_int64(args[3])) or -1
+        S.route3_camswitch_last = string.format("%s ct=%d", os.date("%H:%M:%S"), ct)
+        if ct == 1 and S.mounted == true then
+            local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+                tonumber(S.route3_simple_dive_until) or 0.0)
+            if S.route3_node_lock_at ~= nil or os.clock() < w + 1.5 then
+                S.route3_camswitch_veto_count = (tonumber(S.route3_camswitch_veto_count) or 0) + 1
+                S.route3_camswitch_last = S.route3_camswitch_last .. " VETOED"
+                return sdk.PreHookResult.SKIP_ORIGINAL
+            end
+        end
+        return nil
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_CAMSWITCH_VETO_HOOKED == nil then
+    _G.IRIS_CAMSWITCH_VETO_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.MainCameraController")
+        local m = td and td:get_method(
+            "switchCamera(app.CameraDefine.ControlType, app.CameraSwitchInterpParam, app.PostEffectSetting, app.CameraDefine.ToPlayerCameraOption)")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_camswitch_veto_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
+end
+-- ⭐⭐⭐ ROUND 2 (panel read: switchCamera fired with ct=0 Player -- the Usually/Climbing pick
+-- is INTERNAL to the player control type, not a switchCamera arg). Hook the ASSIGNMENT there
+-- is no way around: set_CurrentCameraController. Refuse an incoming UsuallyCameraController
+-- while mounted in a node window -- _Current stays the ClimbingCameraController = no close-up.
+_G.iris_camset_veto_fn = function(args)
+    local ok, ret = pcall(function()
+        local tn = "?"
+        pcall(function()
+            local obj = sdk.to_managed_object(args[3])
+            tn = obj and obj:get_type_definition():get_full_name() or "nil"
+        end)
+        S.route3_camset_last = string.format("%s %s", os.date("%H:%M:%S"), tn)
+        if tn == "app.UsuallyCameraController" and S.mounted == true then
+            local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
+                tonumber(S.route3_simple_dive_until) or 0.0)
+            if S.route3_node_lock_at ~= nil or os.clock() < w + 1.5 then
+                S.route3_camset_veto_count = (tonumber(S.route3_camset_veto_count) or 0) + 1
+                S.route3_camset_last = S.route3_camset_last .. " VETOED"
+                return sdk.PreHookResult.SKIP_ORIGINAL
+            end
+        end
+        return nil
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_CAMSET_VETO_HOOKED == nil then
+    _G.IRIS_CAMSET_VETO_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.MainCameraController")
+        local m = td and td:get_method("set_CurrentCameraController")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_camset_veto_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
 end
 
 -- place the camera at (tx,ty,tz) looking at (ax,ay,az); returns false if degenerate/no camera.
@@ -25514,6 +25600,55 @@ function griffin_loopcam_write_lookat(tx, ty, tz, ax, ay, az)
     return true
 end
 
+-- ⭐ CAMERA STATE SNAPSHOT (2026-08-12): reflect over the MainCameraController's whole field
+-- tree (one level into camera/mode/param-ish sub-objects). Two snapshots -- one during the
+-- native close-up, one after it settles -- and the DIFF names the mode by its real field.
+function griffin_camsnap_capture(label)
+    local out = { label = label, when = os.date("%H:%M:%S"), fields = {} }
+    local count = 0
+    pcall(function()
+        local cm = sdk.get_managed_singleton("app.CameraManager")
+        local ctrl = cm and cm._MainCameraControllers and cm._MainCameraControllers[0]
+        if not ctrl then out.err = "no controller"; return end
+        local function snap_obj(obj, prefix, depth)
+            if count > 500 then return end
+            local td = nil
+            pcall(function() td = obj:get_type_definition() end)
+            while td do
+                for _, f in ipairs(td:get_fields() or {}) do
+                    if count > 500 then return end
+                    local name = f:get_name()
+                    local ok, v = pcall(function() return obj:get_field(name) end)
+                    if ok then
+                        local tv = type(v)
+                        if tv == "number" or tv == "boolean" or tv == "string" then
+                            out.fields[prefix .. name] = v; count = count + 1
+                        elseif tv == "userdata" and v ~= nil then
+                            -- ⭐ record every object field's TYPE -- the switch-interp's
+                            -- Before/Next camera objects' type names ARE the mode names
+                            pcall(function()
+                                out.fields[prefix .. name .. ".__type"] =
+                                    v:get_type_definition():get_full_name()
+                                count = count + 1
+                            end)
+                            if depth > 0 then
+                                pcall(function() snap_obj(v, prefix .. name .. ".", depth - 1) end)
+                            end
+                        end
+                    end
+                end
+                td = td:get_parent_type()
+            end
+        end
+        snap_obj(ctrl, "", 1)
+        -- second root: the CameraManager singleton itself (situation/current-camera bookkeeping
+        -- may live above the controller)
+        pcall(function() snap_obj(cm, "MGR.", 0) end)
+    end)
+    out.count = count
+    return out
+end
+
 -- ⭐ CAMERA WRITER TRACE (2026-08-11, the cling close-up hunt). Runs at PRESENT time
 -- (re.on_frame = the last stage): compares the camera's actual position against what the
 -- loopcam wrote at lateUpdate this frame. A nonzero "stolen_m" = someone re-posed the camera
@@ -25525,12 +25660,14 @@ function griffin_camtrace_tick()
     local now = os.clock()
     local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
         tonumber(S.route3_simple_dive_until) or 0.0)
-    local active = (w + 1.0) > now and w > 0.0
+    local active = (w + 4.0) > now and w > 0.0   -- long tail: film the native cam's full settle
     local st = S.route3_camtrace
     if not active then
         if st and #(st.samples or {}) > 0 then
+            -- second snapshot: the native camera has settled back to normal by now
+            pcall(function() st.snap_settled = griffin_camsnap_capture("settled") end)
             pcall(function() json.dump_file(MOD .. "_camtrace.json", st) end)
-            S.route3_camtrace_status = string.format("camtrace DUMPED: %d samples", #st.samples)
+            S.route3_camtrace_status = string.format("camtrace DUMPED: %d samples + 2 snaps", #st.samples)
             S.route3_camtrace = nil
         end
         return
@@ -25568,6 +25705,12 @@ function griffin_camtrace_tick()
                 if tn then st.cam_components[#st.cam_components + 1] = tn end
             end
         end)
+    end
+    -- first snapshot: ~1s into the node window, while the close-up mode is live (run this
+    -- diagnostic with the loopcam UNTICKED so the native camera actually shows its mode)
+    if st.snap_node == nil and S.route3_node_lock_at ~= nil
+        and now - (tonumber(S.route3_node_lock_at) or now) > 1.0 then
+        pcall(function() st.snap_node = griffin_camsnap_capture("during-closeup") end)
     end
     if now - (tonumber(st.last) or 0.0) < 0.2 then return end
     st.last = now
@@ -29457,9 +29600,12 @@ _G.IrisGriffinBridge = {
         if st.active == id and S.griffin and char_go(S.griffin) then
             return true, "already out"
         end
-        -- summoning a homestead resident inherently calls it back to your side
+        -- ⛔ 08-12 (Aurora): a homestead resident cannot be SUMMONED from afar -- they
+        -- LIVE there now. Visit the homestead and call them back in person ([H]).
         for _, r in ipairs(st.companions) do
-            if r.id == id and r.home then r.home = nil break end
+            if r.id == id and r.home then
+                return false, tostring(r.name or "?") .. " lives at the homestead - visit to bring them back"
+            end
         end
         if S.griffin and char_go(S.griffin) then
             pcall(function() griffin_dismiss() end)
@@ -29537,12 +29683,19 @@ _G.IrisGriffinBridge = {
     stable_call_back = function(id)
         local st = S.route3_stable
         if not (st and st.companions) then return false, "stable not loaded" end
+        -- 08-12 (Aurora): collecting a resident happens IN PERSON, at the plot
+        local here = true
+        pcall(function()
+            local hb = rawget(_G, "IrisHomesteadBox")
+            if hb and hb.can_collect then here = hb.can_collect() == true end
+        end)
+        if not here then return false, "visit the homestead to bring them back" end
         for _, r in ipairs(st.companions) do
             if r.id == id then
                 if not r.home then return false, "not at the homestead" end
                 r.home = nil
                 pcall(function() griffin_stable_write() end)
-                return true, tostring(r.name or "?") .. " returns to the stable"
+                return true, tostring(r.name or "?") .. " returns to your side"
             end
         end
         return false, "unknown companion"
@@ -29557,6 +29710,19 @@ _G.IrisGriffinBridge = {
         if S.mounted == true then return false, "dismount first" end
         local st = S.route3_stable
         if not (st and st.companions) then return false, "stable not loaded" end
+        -- ⛔ 08-12 (the released unicorn: frozen statue, still mountable, and its horse
+        -- identity bled onto TAILS' record through the horse-mount stable sync): HORSE-KIND
+        -- bodies are module-owned (IrisWildHorses/HorseMount) and cannot safely be left
+        -- standing in the world. Until that module grows a release hook, a released
+        -- horse/unicorn DESPAWNS with its record -- the herd takes them back.
+        for _, r in ipairs(st.companions) do
+            if r.id == id and (r.kind == "horse"
+                or tostring(r.species or ""):find("ch299011", 1, true) == 1) then
+                local ok0, why0 = false, nil
+                pcall(function() ok0, why0 = _G.IrisGriffinBridge.stable_release(id) end)
+                return ok0, ok0 and "released - the wild herds take them back" or why0
+            end
+        end
         if S.live_rec_id == id and S.griffin and char_go(S.griffin) then
             local ch = S.griffin
             -- ⛔⛔ 08-11 (Aurora: "the rabbit just became Bugs"): the freed body stayed in
@@ -29591,6 +29757,10 @@ _G.IrisGriffinBridge = {
             S.griffin = nil
             S.griffin_go = nil
             S.live_rec_id = nil
+            -- the released soul's identity must not linger in the globals (the Tails
+            -- drake->doe->horse stamp rode exactly this stale state)
+            S.route3_tamed_species = nil
+            S.route3_tamed_record = nil
             for i, r in ipairs(st.companions) do
                 if r.id == id then table.remove(st.companions, i) break end
             end
@@ -29626,6 +29796,15 @@ _G.IrisGriffinBridge = {
         pcall(function() aa = active_go and active_go:get_address() end)
         pcall(function() ga = go and go:get_address() end)
         return aa ~= nil and ga ~= nil and aa == ga
+    end,
+    -- 08-11 (IrisHomesteadBox): resident bodies register here for the protection net --
+    -- mounts[] membership gives them the relationship hook's UNCONDITIONAL party
+    -- friend-shield (pawns treat the yard's animals as family). Accumulates like every
+    -- mounts entry; the box module despawns bodies, the table just stops mattering.
+    register_resident_body = function(ch)
+        if not ch then return false end
+        pcall(function() mounts[ch] = true end)
+        return true
     end,
     -- 08-11 (IrisFarming produce gate): is this GO the stable-summoned ACTIVE companion's
     -- body? Milk/eggs come only from a bonded summoned animal, never a wild one. GO-address
@@ -29922,6 +30101,20 @@ _G.IrisGriffinBridge = {
         local st = S.route3_stable
         if not (st and st.companions) then return nil end
         local filled = 0
+        -- ⛔ 08-12 ONE-SHOT REPAIR (the unicorn-release identity leak): Tails the DRAKE's
+        -- record got stamped with the released unicorn's horse species via the horse-mount
+        -- stable sync (receipt: the 08-11 stable dump shows Tails = ch257000_00). Restore
+        -- her; the horse-kind release gate prevents recurrence. Self-retiring: once the
+        -- species no longer matches, this never fires again.
+        for _, r in ipairs(st.companions) do
+            if r.name == "Tails" and tostring(r.species) == "ch299011_A_00" then
+                r.species = "ch257000_00"
+                r.kind = nil
+                r.variant = nil
+                filled = filled + 1
+                pcall(function() log.info("[GriffinScout] REPAIR: Tails restored to drake ch257000_00") end)
+            end
+        end
         for _, r in ipairs(st.companions) do
             if type(r.iv) ~= "table" then
                 r.iv = IrisIV.roll(nil)
@@ -35113,6 +35306,12 @@ re.on_draw_ui(function()
                 C.route3_camtrace == true)
             if ctr then save_config() end
             if S.route3_camtrace_status then imgui.text(tostring(S.route3_camtrace_status)) end
+            imgui.text(string.format("cam switches: last=%s vetoed=%d",
+                tostring(S.route3_camswitch_last or "(none seen)"),
+                tonumber(S.route3_camswitch_veto_count) or 0))
+            imgui.text(string.format("cam SETS: last=%s vetoed=%d",
+                tostring(S.route3_camset_last or "(none seen)"),
+                tonumber(S.route3_camset_veto_count) or 0))
             -- pawn ride toggle surfaced here (old UI's checkbox is gone): untick = the pawn
             -- does not board at the next mount -- the solo-flight knocking A/B.
             local pr
