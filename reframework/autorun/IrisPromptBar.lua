@@ -53,13 +53,13 @@ end
 --   advertising an action that is not on offer. Fire-and-forget beats "remember to tidy up",
 --   because the tidy-up is exactly what gets missed.
 local TTL = 1.0       -- generous: the plaque only re-scans every 0.3s
-local slots = {}      -- [owner] = { text = , prio = , dist = , at = }
+local slots = {}      -- [owner] = { text, prio, dist, pos, go, at }
 _G.IrisPrompt = _G.IrisPrompt or {}
-_G.IrisPrompt.set = function(owner, text, prio, dist)
+_G.IrisPrompt.set = function(owner, text, prio, dist, pos, go)
     if not owner then return end
     if text == nil or text == "" then slots[owner] = nil; return end
     slots[owner] = { text = tostring(text), prio = tonumber(prio) or 0,
-                     dist = tonumber(dist) or 1e9, at = os.clock() }
+                     dist = tonumber(dist) or 1e9, pos = pos, go = go, at = os.clock() }
 end
 _G.IrisPrompt.clear = function(owner) if owner then slots[owner] = nil end end
 
@@ -79,7 +79,10 @@ _G.IrisPrompt.winner = function()
         else
             local d = v.dist or 1e9
             if d < bd - 0.3 or (math.abs(d - bd) <= 0.3 and v.prio > bp) then
-                best, bd, bp = owner, math.min(d, bd), v.prio
+                -- Keep the winning entry's actual distance.  Retaining the previous
+                -- entry's smaller distance here could make a later, genuinely nearer
+                -- prompt lose after a priority tie-break changed the winner.
+                best, bd, bp = owner, d, v.prio
             end
         end
     end
@@ -89,6 +92,10 @@ _G.IrisPrompt.owner = _G.IrisPrompt.winner
 _G.IrisPrompt.current = function()
     local w = _G.IrisPrompt.winner()
     return w and slots[w] and slots[w].text or nil
+end
+_G.IrisPrompt.current_entry = function()
+    local w = _G.IrisPrompt.winner()
+    return w, w and slots[w] or nil
 end
 
 -- ⭐⭐ AND STAND DOWN FOR THE GAME'S OWN INTERACT (Aurora: "I tried to claim the sword from
@@ -169,6 +176,110 @@ pcall(function()
     getobj = sdk.find_type_definition("via.gui.Control"):get_method("getObject(System.String)")
 end)
 
+-- Native WORLD prompt bridge. Unlike the retired prompt capture, this owns a stable synthetic
+-- Guid and resolves it through the same two message APIs the farming map-marker implementation
+-- has already field-proven. ui020701 therefore draws the game's real interaction button frame;
+-- no volatile Text object is mutated and no fake captured value-type Guid is involved.
+local WORLD_GUID_TEXT = "17a15b10-2026-4dd2-9a11-000000000001"
+local world = {
+    guid = nil, warned = false, enabled = true,
+    req_ok = false, text_ok = false, text_warned = false, owner = nil,
+}
+pcall(function()
+    local parse = sdk.find_type_definition("System.Guid"):get_method("Parse(System.String)")
+    world.guid = parse and parse:call(nil, WORLD_GUID_TEXT)
+end)
+
+do
+    local function pre(args)
+        local hit = false
+        pcall(function()
+            local g = sdk.to_valuetype(args[2], "System.Guid")
+            hit = g and tostring(g:ToString()):lower() == WORLD_GUID_TEXT
+        end)
+        thread.get_hook_storage().iris_world_prompt = hit
+    end
+    local function post(retval)
+        local out = retval
+        pcall(function()
+            if thread.get_hook_storage().iris_world_prompt ~= true then return end
+            local text = _G.IrisPrompt.current()
+            if text then out = sdk.to_ptr(sdk.create_managed_string(text)) end
+        end)
+        return out
+    end
+    local hooked = 0
+    pcall(function()
+        local td = sdk.find_type_definition("via.gui.message")
+        for _, method in ipairs(td and td:get_methods() or {}) do
+            pcall(function()
+                if method:get_name() ~= "get" then return end
+                local ps = method:get_param_types()
+                if ps and #ps >= 1 and ps[1]:get_full_name() == "System.Guid" then
+                    sdk.hook(method, pre, post); hooked = hooked + 1
+                end
+            end)
+        end
+    end)
+    pcall(function()
+        local td = sdk.find_type_definition("app.MessageManager")
+        local method = td and td:get_method("getMessage(System.Guid)")
+        if method then sdk.hook(method, pre, post); hooked = hooked + 1 end
+    end)
+    _log("native world prompt message bridge armed on " .. tostring(hooked) .. " surface(s)")
+end
+
+local function _world_prompt(owner, entry)
+    if not (world.enabled and entry and entry.pos and world.guid) then return false end
+    world.req_ok, world.text_ok, world.owner = false, false, nil
+    local ok = pcall(function()
+        -- Both GUI and furnished GameObjects can be rebuilt by streaming/save-load. Reacquire
+        -- the guide and use the live Player only as reqDraw's harmless identity anchor; entry.pos
+        -- remains the actual world location of the cookpot/bed/plaque.
+        local gm = sdk.get_managed_singleton("app.GuiManager")
+        local guide = gm and gm:get_field("InteractGuide")
+        if not guide then error("InteractGuide is not live") end
+        local cm = sdk.get_managed_singleton("app.CharacterManager")
+        local player = cm and cm:get_ManualPlayer()
+        local go = player and player:call("get_GameObject")
+        if not go then error("Player GameObject is not live") end
+        local td = sdk.find_type_definition("app.ui020701")
+        local req = td and td:get_method(
+            "reqDraw(via.vec3, System.Guid, via.GameObject, System.Boolean)")
+        if not req then error("ui020701.reqDraw unavailable") end
+        req:call(guide, entry.pos, world.guid, go, false)
+        world.req_ok = true
+
+        -- A synthetic Guid is sufficient for ui020701 to construct the genuine world-prompt
+        -- frame, but this widget does not resolve an unknown Guid through either public message
+        -- API (field result: button glyph present, label blank). This is the same wall the farm
+        -- map tooltip hit. Its proven cure is deliberately narrow: after THE LIVE OWNER has made
+        -- the widget, write only its declared text field, on LateUpdate, and reassert each frame.
+        -- Never cache TxtInteract: ui020701 is rebuilt by streaming and save/load.
+        local txt = guide:get_field("TxtInteract")
+        if not txt then error("InteractGuide.TxtInteract is not live") end
+        txt:call("set_Message", entry.text)
+        world.text_ok = true
+        world.owner = owner
+    end)
+    if not ok and not world.warned then
+        world.warned = true
+        _log("native world prompt request failed; retaining IRIS world-label fallback")
+    end
+    if world.req_ok and not world.text_ok and not world.text_warned then
+        world.text_warned = true
+        _log("native world prompt frame succeeded but TxtInteract label write failed")
+    end
+    return ok
+end
+
+-- Publishers use this only to decide whether a legacy/fake label may be hidden. It reports
+-- success for the CURRENT LateUpdate only; a stale success can never suppress a later fallback.
+_G.IrisPrompt.native_world_ready = function(owner)
+    return world.enabled and world.req_ok and world.text_ok
+        and (owner == nil or world.owner == owner)
+end
+
 local function _panel_text(txt)
     if not getobj then return false end
     local ok = false
@@ -211,11 +322,15 @@ end
 --   ⭐ The general shape of the mistake: an optimisation that introduces a GAP into a
 --   contested resource always loses the contest.
 re.on_application_entry("LateUpdateBehavior", function()
+    -- Never let last frame's success suppress a legacy fallback in this frame.
+    world.req_ok, world.text_ok, world.owner = false, false, nil
     if M.enabled == false then return end
     -- if the GAME is offering its own interact, leave its label alone entirely
     if _G.IrisPrompt.native_busy() then return end
-    local t = _G.IrisPrompt.current()
+    local owner, entry = _G.IrisPrompt.current_entry()
+    local t = entry and entry.text or nil
     if not t then return end
+    _world_prompt(owner, entry)
     local ok = _panel_text(t)
     if not ok and not gui.warned then
         gui.warned = true
@@ -240,6 +355,9 @@ re.on_draw_ui(function()
     if n == 0 then imgui.text("   (no module is offering an action right now)") end
     local c
     c, M.enabled = imgui.checkbox("enabled", M.enabled ~= false)
+    c, world.enabled = imgui.checkbox("native world prompt frame", world.enabled ~= false)
+    imgui.text("world frame: " .. (world.req_ok and "live" or "idle")
+        .. " | label write: " .. (world.text_ok and "ok" or "not yet"))
     local sc, sv = imgui.input_text("panel slot (PNL_R02 = B, PNL_R03 = A)", M.slot)
     if sc and sv ~= "" then M.slot = sv end
     c, M.log = imgui.checkbox("write the log", M.log)

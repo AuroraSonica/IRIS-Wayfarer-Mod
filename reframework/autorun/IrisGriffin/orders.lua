@@ -593,8 +593,13 @@ function griffin_order_tick()
                 if adist > strike + 5.0 then run = true end
             end
             S.route3_attack_running = run
+            local ivspd9 = 1.0   -- 08-12: the SPD gene is real legs in the attack chase too
+            pcall(function()
+                local st9 = _G.IrisIVState
+                if st9 and tonumber(st9.spd) then ivspd9 = tonumber(st9.spd) end
+            end)
             local step = math.min(adist - strike * 0.5,
-                run and (tonumber(C.route3_follow_run_step) or 0.14) or (tonumber(C.route3_follow_walk_step) or 0.06))
+                (run and (tonumber(C.route3_follow_run_step) or 0.14) or (tonumber(C.route3_follow_walk_step) or 0.06)) * ivspd9)
             local nx = (tonumber(agpos.x) or 0.0) + adx / adist * step
             local nz = (tonumber(agpos.z) or 0.0) + adz / adist * step
             local ny = tonumber(agpos.y) or 0.0
@@ -728,8 +733,13 @@ function griffin_order_tick()
         if dist > run_at then run = true end
     end
     S.route3_follow_running = run
+    local ivspd9 = 1.0   -- 08-12: the SPD gene is real legs in the follow -- a fast
+    pcall(function()     -- bloodline visibly keeps up, a slow one plods
+        local st9 = _G.IrisIVState
+        if st9 and tonumber(st9.spd) then ivspd9 = tonumber(st9.spd) end
+    end)
     local step = math.min(dist - gap * 0.5,
-        run and (tonumber(C.route3_follow_run_step) or 0.14) or (tonumber(C.route3_follow_walk_step) or 0.06))
+        (run and (tonumber(C.route3_follow_run_step) or 0.14) or (tonumber(C.route3_follow_walk_step) or 0.06)) * ivspd9)
     local nx = (tonumber(gpos.x) or 0.0) + dx / dist * step
     local nz = (tonumber(gpos.z) or 0.0) + dz / dist * step
     local ny = tonumber(gpos.y) or 0.0

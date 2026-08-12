@@ -64,6 +64,7 @@ local M = {
     --   removes the player's jump for no benefit while stood at a weapon mount.
     block_jump  = false,
     block_dodge = true,       -- ⚠ STAYS: B is dodge/dash, so this collision is the real one
+    face_dot    = 0.34,       -- cos(~70°): do not offer a plaque interaction behind the player
     label_h     = 1.0,        -- metres above the plaque origin
     auto_equip  = true,       -- re-equip the weapon when you take it back
 
@@ -871,6 +872,36 @@ end
 -- Press at a plaque: empty -> hang up whatever you are holding; full -> take it back.
 local IW = { at = 0, target = nil, key_prev = false, pad_prev = false, pad_bit = nil, hooked = false }
 
+-- Cheap per-tick eligibility for the cached scan result. The scene-wide plaque search may be
+-- throttled, but range/facing may not be: otherwise B remains armed briefly after walking or
+-- turning away, exactly when the genuine ui020701 prompt has already disappeared.
+local function _target_live(t)
+    if not (t and t.go) then return false end
+    local live = false
+    pcall(function()
+        if t.go:call("get_Valid") ~= true then return end
+        local pl = _player()
+        local pgo = pl and pl:call("get_GameObject")
+        local ptf = pgo and pgo:call("get_Transform")
+        local pp = pgo and _upos(pgo)
+        local gp = _upos(t.go)
+        if not (ptf and pp and gp) then return end
+        local dx, dy, dz = gp.x - pp.x, gp.y - pp.y, gp.z - pp.z
+        local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d > (M.reach or 3.0) then return end
+        local flat = math.sqrt(dx * dx + dz * dz)
+        if flat >= 0.35 then
+            local q = ptf:call("get_Rotation")
+            local yaw = math.atan(2.0 * (q.w * q.y + q.x * q.z),
+                                  1.0 - 2.0 * (q.y * q.y + q.x * q.x))
+            local dot = (math.sin(yaw) * dx + math.cos(yaw) * dz) / flat
+            if dot < (M.face_dot or 0.34) then return end
+        end
+        t.p, t.d, live = gp, d, true
+    end)
+    return live
+end
+
 -- ⛔ Resolve the pad bit ONCE and LOG if the name does not exist. Never fall through a
 --   fallback chain silently — farming's `_pad_bit` walked past a missing "B" all the way
 --   to RDown, so the prompt advertised one button while another one worked.
@@ -926,11 +957,20 @@ local function _blocked()
 end
 
 local function _iw_scan()
-    if M.prompt == false then IW.target = nil; return end
+    if M.prompt == false then
+        IW.target = nil
+        if _G.IrisPrompt then _G.IrisPrompt.clear("weapon_mount") end
+        return
+    end
+    if IW.target and not _target_live(IW.target) then
+        IW.target = nil
+        if _G.IrisPrompt then _G.IrisPrompt.clear("weapon_mount") end
+    end
     local now = os.clock()
     if now - IW.at < 0.3 then return end
     IW.at = now
     IW.target = _nearest_plaque()
+    if IW.target and not _target_live(IW.target) then IW.target = nil end
 
     -- ⭐ publish the verb so the GAME'S OWN button panel reads "B Mount" / "B Take" instead
     --   of "B Dash" (IrisPromptBar). Priority 20: a plaque is a deliberate walk-up, so it
@@ -942,12 +982,21 @@ local function _iw_scan()
             -- ⭐ publish the DISTANCE too: the arbiter picks the nearest interactable, so a
             --   cookpot a metre closer takes the button instead of both firing.
             local d = IW.target.d or 1e9
+            local wp = nil
+            pcall(function()
+                local tf = IW.target.go and IW.target.go:call("get_Transform")
+                local p = tf and tf:call("get_Position")
+                if p then wp = Vector3f.new(p.x, p.y + (M.label_h or 1.0), p.z) end
+            end)
             if rec then
-                _G.IrisPrompt.set("weapon_mount", "Take", 20, d)
-            elseif _equipped_weapon() then
-                _G.IrisPrompt.set("weapon_mount", "Mount", 20, d)
+                _G.IrisPrompt.set("weapon_mount", "Take " .. tostring(rec.name), 20, d, wp, IW.target.go)
             else
-                _G.IrisPrompt.clear("weapon_mount")
+                local held = _equipped_weapon()
+                if held then
+                    _G.IrisPrompt.set("weapon_mount", "Mount " .. tostring(held.name), 20, d, wp, IW.target.go)
+                else
+                    _G.IrisPrompt.clear("weapon_mount")
+                end
             end
         else
             _G.IrisPrompt.clear("weapon_mount")
@@ -1142,42 +1191,8 @@ re.on_application_entry("UpdateBehavior", function()
     S.at_plaque = (M.block_jump ~= false) and (IW.target ~= nil) or false
 end)
 
-re.on_frame(function()
-    -- the label is a WORLD draw, so it must stand down while a menu is up for exactly the
-    -- same reason the hoe ring does — otherwise "[E / A] Hang up Lifetaker" floats over the
-    -- storage screen. Same instantaneous pause check, not a timed blackout.
-    if _blocked() then return end
-    if not (M.prompt ~= false and IW.target) then return end
-    pcall(function()
-        _load()
-        local k = _key(IW.target.p)
-        local rec = mounts[k]
-        local msg
-        if rec then
-            msg = string.format("[E / %s]  Take %s", M.pad_label, tostring(rec.name))
-        else
-            local w = _equipped_weapon()
-            msg = w and string.format("[E / %s]  Hang up %s", M.pad_label, tostring(w.name))
-                    or "(equip a weapon to hang it here)"
-        end
-        local tf = IW.target.go:call("get_Transform")
-        local p = tf and tf:call("get_Position")          -- RENDER space for world_to_screen
-        if not p then return end
-        -- ⛔ world_to_screen returns ONE vector (sp.x/sp.y), not two values
-        local sp = draw.world_to_screen(Vector3f.new(p.x, p.y + (M.label_h or 1.0), p.z))
-        if not sp then return end
-        -- ⭐ USE THE IRIS FONT (Aurora 08-09: "it looks different to our usual label"). The
-        --   cookpot/bed prompts render through `_G.IrisFont` in amber at size 19, centred by
-        --   backing off half the string width; plain draw.text was the odd one out. Exact
-        --   shape from IrisFarming.lua:4277-4279, including the fallback when the font
-        --   module is absent — F.text returns falsy and draw.text takes over.
-        local F = _G.IrisFont
-        local x, y = sp.x - #msg * 3.5, sp.y
-        if not (F and F.text and F.text(msg, x, y, 0xFFF0D8A0, 19)) then
-            draw.text(msg, x, y, 0xFFF0D8A0)
-        end
-    end)
-end)
+-- No legacy gold world-label fallback here. Once this action was migrated to ui020701, the
+-- fallback became a ghost prompt whenever the native guide correctly withdrew itself.
 
 -- ── job pump: game thread, ONE per tick (the no-lock law) ────────────────────────────
 re.on_application_entry("UpdateBehavior", function()

@@ -1233,29 +1233,32 @@ re.on_application_entry("UpdateBehavior", function()
         return
     end
 
-    -- "press [hotkey] to decorate" - a quiet top-left whisper when you come home (Aurora):
-    -- shows 4s on arrival at a built homestead, re-arms after you leave (>25m)
+    -- Decorate is a HOME MODE, not an object interaction. Keep it out of IrisPromptBar: a
+    -- persistent B prompt swallows the entire homestead and competes with its real props.
+    -- Instead, whisper the configurable keyboard shortcut briefly on arrival. The 35m radius
+    -- matches _open_shop(), so the reminder and the command are valid throughout the homestead.
     if os.clock() - (UI.hint_check or 0) > 1.0 then
         UI.hint_check = os.clock()
         pcall(function()
             local up2 = _pupos()
+            if not (up2 and _G.IrisHomesteadPlots) then return end
             local near_home = false
             for _, pr in ipairs(_G.IrisHomesteadPlots.list()) do
                 if pr.owned ~= false and pr.built ~= false then
                     local dx, dz = (pr.ux or 0) - up2.x, (pr.uz or 0) - up2.z
-                    if dx * dx + dz * dz < 12.0 ^ 2 then near_home = true; break end
+                    if dx * dx + dz * dz < 35.0 ^ 2 then near_home = true; break end
                 end
             end
             if near_home and not UI.hint_shown then
                 UI.hint_shown = true
                 UI.hint_until = os.clock() + 4.0
             elseif not near_home then
-                -- re-arm only once properly AWAY (hysteresis: stepping on the doorstep
-                -- repeatedly shouldn't nag)
+                -- Hysteresis: crossing the plot boundary repeatedly must not nag. Re-arm
+                -- only after the player has properly left the home.
                 local far = true
                 for _, pr in ipairs(_G.IrisHomesteadPlots.list()) do
                     local dx, dz = (pr.ux or 0) - up2.x, (pr.uz or 0) - up2.z
-                    if dx * dx + dz * dz < 25.0 ^ 2 then far = false; break end
+                    if dx * dx + dz * dz < 45.0 ^ 2 then far = false; break end
                 end
                 if far then UI.hint_shown = false end
             end

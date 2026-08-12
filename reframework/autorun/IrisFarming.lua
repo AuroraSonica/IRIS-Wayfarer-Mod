@@ -2587,6 +2587,12 @@ function cookpot.facing(tx, tz)
     local up = _pupos(); if not up then return true end
     return cookpot.facing_d(tx - up.x, tz - up.z)
 end
+function cookpot.live_near()
+    local up, p = _pupos(), cookpot.pos
+    if not (up and p) then return false end
+    local dx, dz = p.x - up.x, p.z - up.z
+    return dx * dx + dz * dz <= 6.25 and cookpot.facing_d(dx, dz)
+end
 -- the live pot GameObject nearest the player, so we can jack its OWN cooking animation.
 -- The saved-furniture path only knows coordinates, so this is how we get a real object.
 function cookpot.find_go()
@@ -3616,15 +3622,25 @@ re.on_application_entry("UpdateBehavior", function()
     --   winner's menu closed. The arbiter (IrisPromptBar) picks the NEAREST interactable, and
     --   the GAME's own interact outranks all of ours. Edges are still consumed above, so a
     --   refused press cannot fire later once we become the winner.
-    local mine = true
+    local mine, prompt_owner = true, nil
     if _G.IrisPrompt then
         if _G.IrisPrompt.native_busy() then mine = false
         else
             local w = _G.IrisPrompt.winner()
-            if w and w ~= "farm_bed" and w ~= "cookpot" then mine = false end
+            prompt_owner = w
+            if w and w ~= "farm_bed" and w ~= "cookpot" and w ~= "farm_animal" then mine = false end
         end
     end
-    if (kb or pad) and mine and os.clock() - (dlg.closed_at or 0) > 0.35 then _tend() end
+    if (kb or pad) and mine and os.clock() - (dlg.closed_at or 0) > 0.35 then
+        -- Execute the action the winning native prompt actually advertised. `_tend()` has a
+        -- historical bed-first precedence which is correct as a fallback, but could otherwise
+        -- show "Collect egg" for the nearer hen and open a bed menu behind it.
+        if prompt_owner == "farm_animal" then _try_animal_produce()
+        elseif prompt_owner == "cookpot" then
+            if cookpot.live_near() then _show_cook_menu()
+            elseif _G.IrisPrompt then _G.IrisPrompt.clear("cookpot") end
+        else _tend() end
+    end
 
     -- refresh the jump gate ONCE per tick, so the native hook only ever reads a cached boolean and
     -- never does a bed scan inside the engine's input pass
@@ -3737,25 +3753,22 @@ re.on_frame(function()
     -- ⛔ settle gate deliberately NOT consulted here - see the ring's note (08-08). A label
     -- cannot hang a load, and gating it here is what blanked the HUD on every menu.
     pcall(function()
-        local F = _G.IrisFont
         local b = _target_bed()
         if not b then return end
         local d = _delta(); if not d then return end
-        local kn = (M.tend_key == 0x45) and "E" or string.format("key %X", M.tend_key or 0)
-        local pad = _pad_label()
-        local verb, col
+        local verb
         if not b.crop then
             if #_cats_with_seed() > 0 then
-                verb, col = "Plant seeds", 0xFFCFF0B0
+                verb = "Plant seeds"
             else
-                verb, col = "Tilled soil - no seed in your pack", 0xFFA0A0A0
+                verb = "Tilled soil - no seed in your pack"
             end
         else
             local st = _bed_state(b)
-            if st and st.ripe then verb, col = "Harvest the " .. st.crop.name, 0xFFB0FFD0
-            elseif st and b.watered_day ~= _today() then verb, col = "Water the " .. st.crop.name, 0xFFF0D8A0
+            if st and st.ripe then verb = "Harvest the " .. st.crop.name
+            elseif st and b.watered_day ~= _today() then verb = "Water the " .. st.crop.name
             elseif st then
-                verb, col = string.format("%s  %d/%d days  (watered)", st.crop.name, b.grown or 0, st.crop.days), 0xFFB8D8B8
+                verb = string.format("%s  %d/%d days  (watered)", st.crop.name, b.grown or 0, st.crop.days)
             end
         end
         if not verb then return end
@@ -3764,9 +3777,9 @@ re.on_frame(function()
         --   the panel has room for a word, not a sentence. Priority 10: ambient, so a
         --   deliberate walk-up like the weapon plaque (20) out-ranks a bed you stand near.
         if _G.IrisPrompt then
-            local short = (not b.crop) and "Sow"
-                or (verb:find("^Harvest") and "Harvest")
-                or (verb:find("^Water") and "Water") or nil
+            local short = (not b.crop and #_cats_with_seed() > 0) and "Plant seeds"
+                or (verb:find("^Harvest") and verb)
+                or (verb:find("^Water") and verb) or nil
             local bd = 1e9
             pcall(function()
                 local up = _pupos()
@@ -3775,17 +3788,20 @@ re.on_frame(function()
                     bd = math.sqrt(dx * dx + dz * dz)
                 end
             end)
-            if short then _G.IrisPrompt.set("farm_bed", short, 10, bd)
-            else _G.IrisPrompt.clear("farm_bed") end
+            if short then
+                local bp = Vector3f.new(b.ux - d.x, b.uy - d.y + (M.prompt_height or 0.9), b.uz - d.z)
+                _G.IrisPrompt.set("farm_bed", short, 10, bd, bp, nil)
+            else
+                _G.IrisPrompt.clear("farm_bed")
+            end
         end
-        -- float it just above the bed, in world space, so it belongs to the thing it describes
-        local sp = draw.world_to_screen(Vector3f.new(b.ux - d.x, b.uy - d.y + (M.prompt_height or 0.9), b.uz - d.z))
-        if not sp then return end
-        local show = (b.crop == nil and #_cats_with_seed() > 0) or (b.crop ~= nil)
-        local txt = show and string.format("[%s / %s]  %s", kn, pad, verb) or verb
-        if not (F and F.text and F.text(txt, sp.x - #txt * 3.5, sp.y, col, 19)) then
-            draw.text(txt, sp.x - #txt * 3.5, sp.y, col)
-        end
+        -- No button action exists for watered crops or empty seed inventories. Do not dress
+        -- informational crop state up as an interaction prompt.
+        local actionable = (not b.crop and #_cats_with_seed() > 0)
+            or verb:find("^Harvest") or verb:find("^Water")
+        if not actionable then return end
+        -- Native ui020701 is the sole action prompt. A legacy fallback lingers for a cached
+        -- scan after the native guide withdraws, producing a false gold prompt out of range.
     end)
 end)
 
@@ -4440,6 +4456,12 @@ re.on_frame(function()
     -- ⛔ settle gate deliberately NOT consulted here - see the ring's note (08-08). A label
     -- cannot hang a load, and gating it here is what blanked the HUD on every menu.
     pcall(function()
+        -- The expensive object search is throttled; this cheap position/facing validation is
+        -- not. Withdraw both the prompt and B action on the first frame after leaving it.
+        if ckp.near and not cookpot.live_near() then
+            ckp.near, cookpot.near_now = false, false
+            if _G.IrisPrompt then _G.IrisPrompt.clear("cookpot") end
+        end
         if os.clock() - ckp.at > 0.3 then
             ckp.at = os.clock()
             local b = _nearest_bed()
@@ -4448,7 +4470,6 @@ re.on_frame(function()
         end
         if not (ckp.near and cookpot.pos) then return end
         local d = _delta(); if not d then return end
-        local kn = (M.tend_key == 0x45) and "E" or string.format("key %X", M.tend_key or 0)
         if _G.IrisPrompt then
             local cd = 1e9
             pcall(function()
@@ -4458,15 +4479,11 @@ re.on_frame(function()
                     cd = math.sqrt(dx * dx + dz * dz)
                 end
             end)
-            _G.IrisPrompt.set("cookpot", "Cook", 15, cd)
+            local cp = Vector3f.new(cookpot.pos.x - d.x, cookpot.pos.y - d.y + 1.1,
+                                    cookpot.pos.z - d.z)
+            _G.IrisPrompt.set("cookpot", "Cook", 15, cd, cp, cookpot.go)
         end
-        local txt = string.format("[%s / %s]  Cook", kn, _pad_label())
-        local sp = draw.world_to_screen(Vector3f.new(cookpot.pos.x - d.x, cookpot.pos.y - d.y + 1.1, cookpot.pos.z - d.z))
-        if not sp then return end
-        local F = _G.IrisFont
-        if not (F and F.text and F.text(txt, sp.x - #txt * 3.5, sp.y, 0xFFF0D8A0, 19)) then
-            draw.text(txt, sp.x - #txt * 3.5, sp.y, 0xFFA0D8F0)
-        end
+        -- No legacy gold label fallback: when ui020701 withdraws, the action is gone too.
     end)
 end)
 
@@ -4502,30 +4519,26 @@ re.on_frame(function()
                                 done = (_ani_days()[key] == today)
                             end
                         end)
-                        anivis.near = { kind = kind, pos = a.pos, done = done }
+                        anivis.near = { kind = kind, pos = a.pos, go = a.go,
+                                        dist = a.dist, done = done }
                         break
                     end
                 end
             end
-            ani.near_now = anivis.near ~= nil
+            ani.near_now = anivis.near ~= nil and anivis.near.done ~= true
         end
         local nr = anivis.near
         if not (nr and M.bed_prompt ~= false) then return end
-        local txt, col
         if nr.done then
-            txt = (nr.kind == "Milk") and "Milked today" or "Egg collected today"
-            col = 0xFFB8B8B8   -- quiet grey: nothing to press
+            if _G.IrisPrompt then _G.IrisPrompt.clear("farm_animal") end
+            return -- no action remains today, so no interaction-shaped label
         else
-            local kn = (M.tend_key == 0x45) and "E" or string.format("key %X", M.tend_key or 0)
-            txt = string.format("[%s / %s]  %s", kn, _pad_label(), nr.kind)
-            col = 0xFFF0D8A0
+            if _G.IrisPrompt then
+                local ap = Vector3f.new(nr.pos.x, nr.pos.y + 1.5, nr.pos.z)
+                _G.IrisPrompt.set("farm_animal", nr.kind, 18, nr.dist or 1e9, ap, nr.go)
+            end
         end
-        local sp = draw.world_to_screen(Vector3f.new(nr.pos.x, nr.pos.y + 1.5, nr.pos.z))
-        if not sp then return end
-        local F = _G.IrisFont
-        if not (F and F.text and F.text(txt, sp.x - #txt * 3.5, sp.y, col, 19)) then
-            draw.text(txt, sp.x - #txt * 3.5, sp.y, 0xFFA0D8F0)
-        end
+        -- Native ui020701 is the sole Milk / Collect egg action prompt.
     end)
 end)
 
@@ -5733,7 +5746,7 @@ re.on_draw_ui(function()
 
     if imgui.tree_node("display / testing") then
         ch, M.ring = imgui.checkbox("ground ring showing where a hoe swing lands (green ok / amber too close)", M.ring)
-        ch, M.bed_prompt = imgui.checkbox("floating prompt over the bed you're stood at ('[E/B] Plant seeds')", M.bed_prompt ~= false)
+        ch, M.bed_prompt = imgui.checkbox("native B prompts for beds, cookpots and animal produce", M.bed_prompt ~= false)
         ch, M.prompt_height = imgui.slider_float("prompt height above bed (m)##pr", M.prompt_height or 0.9, 0.0, 2.5)
         ch, M.hud = imgui.checkbox("on-screen status line (off = the crops speak for themselves)", M.hud)
         local kc, kv = imgui.input_text("DEBUG strike key (VK hex, 0 = off)##k", string.format("%X", M.debug_key or 0))

@@ -188,6 +188,7 @@ local C = {
     -- Blank = auto-pick a joint that actually exists on the HORSE skeleton.
     -- ⛔ Never default to a player joint name like L_Breast: it does not exist here.
     unicorn_efx_joint = "",
+    unicorn_efx_migr3 = false,    -- one-shot: manual->bone-attach migration done
     unicorn_efx_interval = 0.35,  -- re-seat cadence: element 11 ignores every follow
                                   -- mechanism, ONLY a fresh fire re-places it -- so
                                   -- fast re-fires ARE the position lock (07 recipe:
@@ -267,6 +268,20 @@ local function load_config()
     -- the "sparkle keeps moving" complaint -- a 2s-stale world position. Only
     -- the old default is migrated; a hand-picked value survives.
     if C.unicorn_efx_interval == 2.0 then C.unicorn_efx_interval = 0.35 end
+    -- 08-12 field log: auto=false -- Aurora has been in MANUAL slider mode all
+    -- day, where none of the attach fixes apply (stale X/Z offsets at the Hip
+    -- joint = the eternal wander). One-shot: move her to bone-attach mode
+    -- (her joint pick survives; offsets go vertical-only there by design).
+    if not C.unicorn_efx_migr3 then
+        C.unicorn_efx_migr3 = true
+        C.unicorn_efx_auto = true
+        -- 08-12 (Aurora: bone-attach "makes the sparkle disappear"): at the
+        -- Hip joint a 0.4m lift lands INSIDE the back -- the buried-emitter
+        -- law. Start clear of the body; the Lift slider fine-tunes live.
+        if (C.unicorn_efx_lift or 0.4) <= 0.45 then
+            C.unicorn_efx_lift = 0.75
+        end
+    end
     C.unicorn_efx_interval = math.max(0.25, math.min(30.0, C.unicorn_efx_interval))
     -- migration: the old auto-bolt scale ran 1.5-5.0 (line-multiple semantics);
     -- v2 is 0..2 along the actual horn. Old saved values collapse to the tip.
@@ -1063,6 +1078,11 @@ function UNI.spawn_efx(address)
         end
         entry.mp_cleared = cleared > 0
         UNI.efx_mp_debug = string.format("mp cleared on %d effect(s)", cleared)
+        log(string.format(
+            "efx: fired element %s at joint %s (auto=%s, lift=%.2f, %s)",
+            tostring(C.unicorn_efx_index), tostring(entry.joint or "?"),
+            tostring(C.unicorn_efx_auto), C.unicorn_efx_lift or 0.4,
+            UNI.efx_mp_debug))
         if cleared == 0 then
             log("efx: WARNING no effect object found in container -- "
                 .. "MaintainPosition NOT cleared (sparkle will freeze in place)")
@@ -1647,6 +1667,15 @@ end
 -- to pipeline recompute): pre-hook app.HitController.updateDamageHp and
 -- scale the damage BEFORE application. Signature per the griffin dump:
 -- updateDamageHp(DamageInfo, amount, bool) with Damage/FixedDamage fields.
+-- ⛔⛔ 08-12 THE LEXICAL TRAP, CAUGHT IN THE FIELD (perf probe: "attempt to
+-- index a nil value (global 'RP')" from the calcExp hook): RP's table was
+-- declared `local` at ~2576, BELOW these hooks -- so every RP reference in
+-- install_damage_hook compiled as a GLOBAL (nil) lookup. The window arming
+-- and the window checks were writing/reading TWO DIFFERENT TABLES, silently,
+-- inside pcalls, since the bounty was built. Forward-declare the local here;
+-- the definition below fills it.
+local RP
+
 local DMG_HOOK = {installed = false, scaled = 0}
 
 local function install_damage_hook()
@@ -1679,8 +1708,20 @@ local function install_damage_hook()
                         -- damage hook instead: a hit on a unicorn arms
                         -- RP.bounty_until, and the kill's exp award always
                         -- lands inside that window.
-                        if RP.bounty_until
-                            and os.clock() <= RP.bounty_until then
+                        -- 08-12 diag: exp events are kill-rate, so log every
+                        -- dispatch -- if a unicorn kill pays small with no
+                        -- override, this line says whether the call even
+                        -- happened and how the window stood.
+                        local amt = nil
+                        pcall(function()
+                            amt = sdk.to_int64(args[4]) & 0xFFFFFFFF
+                        end)
+                        local live = RP.bounty_until
+                            and os.clock() <= RP.bounty_until
+                        log(string.format(
+                            "exp dispatch: %s amount=%s bounty_window=%s",
+                            mname, tostring(amt), tostring(live)))
+                        if live then
                             RP.bounty_until = nil
                             local amount = math.floor(
                                 C.unicorn_kill_exp or 10000)
@@ -1692,6 +1733,42 @@ local function install_damage_hook()
                 end, function(retval) return retval end)
                 log("bounty hook installed on ExpDispenser." .. mname)
             end
+        end
+        -- 08-12 THE REAL LANE (two field kills paid 11xp with the window
+        -- armed and ZERO "exp dispatch" lines -- the award never touches
+        -- addExpToPlayer/addExpToPawn): calcExp(info, granter, CHARA, player)
+        -- computes the amount, and its third argument IS THE VICTIM. Direct
+        -- identity, no timing window -- override the return for unicorns.
+        local cm = dtd and dtd:get_method(
+            "calcExp(app.HitController.DamageInfo, "
+            .. "app.ExpDispenser.ExpGranter, app.Character, app.Character)")
+        if not cm and dtd then cm = dtd:get_method("calcExp") end
+        if cm then
+            sdk.hook(cm, function(args)
+                RP.calc_exp_unicorn = false
+                pcall(function()
+                    local chara = sdk.to_managed_object(args[5])
+                    local go = chara and chara:call("get_GameObject")
+                    if not go then return end
+                    local rec = REGISTRY[object_address(go)]
+                    if rec and rec.variant == "unicorn" then
+                        RP.calc_exp_unicorn = true
+                    end
+                end)
+            end, function(retval)
+                if RP.calc_exp_unicorn then
+                    RP.calc_exp_unicorn = false
+                    -- 08-12: LISTENER ONLY -- the silent grant + toast pays
+                    -- the bounty now. If this line ever appears, a native
+                    -- lane DOES exist and could replace the toast.
+                    log("bounty: calcExp fired for a unicorn"
+                        .. " (native lane exists -- listener only)")
+                end
+                return retval
+            end)
+            log("bounty hook installed on ExpDispenser.calcExp (victim-aware)")
+        else
+            log("bounty: calcExp method not found")
         end
     end)
     sdk.hook(method, function(args)
@@ -1719,10 +1796,14 @@ local function install_damage_hook()
                     -- inside it is that unicorn's kill.
                     if rec.variant == "unicorn" then
                         RP.bounty_until = os.clock() + 3.0
-                        -- 08-12: unicorns carry REAL native 1000 HP now (the
-                        -- HitContext write on promote) -- scaling their damage
-                        -- as well would double-count to 4000 effective.
-                        base = 250.0
+                        -- 08-12 FINAL: the native max-HP write is WALLED (the
+                        -- context accepts 1000 and reads it back, but
+                        -- get_OriginalMaxHp computes from an unreachable
+                        -- authority -- four verified write lanes, all
+                        -- ignored). So effective 1000 HP comes from THIS
+                        -- scaling (base falls through to C.unicorn_hp above)
+                        -- and the companion HP bar scales its DISPLAY to
+                        -- match. Indistinguishable from native.
                     end
                 end
             end)
@@ -2501,7 +2582,7 @@ end
 -- @60, the Blessing wind-up), 2 = RitualThrust (64 f, the strike -- healing
 -- circle summons here), 3 = Eat (362 f, unicorn ritual + doe graze replacement).
 -- ONE local; methods live on it (the file runs near Lua's 200-local ceiling).
-local RP = {
+RP = {   -- fills the forward declaration above install_damage_hook
     path = "character/ch/ch99_011/horse_ritual_pack.motlist",
     bank = 903,
     holder = nil,
@@ -3678,6 +3759,24 @@ rawset(_G, "__iris_wild_horses_api", {
     is_unicorn = function(game_object)
         return UNI.is_unicorn(game_object) ~= nil
     end,
+    -- 08-12: the EFFECTIVE max HP for display (native max is walled; the
+    -- damage hook divides incoming damage by base/250, so this is the pool
+    -- the creature truly fights with). nil for non-unicorns = bar unchanged.
+    -- the configured unicorn pool, for callers with no live GameObject
+    -- (parked stable records, the summon-flash fallback)
+    unicorn_base_hp = function()
+        return tonumber(C.unicorn_hp) or 1000
+    end,
+    display_max_hp = function(game_object)
+        local want = nil
+        pcall(function()
+            local rec = REGISTRY[object_address(game_object)]
+            if rec and rec.variant == "unicorn" then
+                want = tonumber(rec.base_hp) or tonumber(C.unicorn_hp) or 1000
+            end
+        end)
+        return want
+    end,
     -- JUMP PACK (08-06): bank 902 = horse_jump_pack.motlist, registered on
     -- every live horse by the per-frame tick. Returns nil until the motlist
     -- resource is actually loaded, so callers can fall back gracefully.
@@ -4067,11 +4166,49 @@ function RP.shell_param_count()
     return tonumber(count) or 0
 end
 
+-- 08-12: name every shell in the warmed catalog ONCE per session -- the ring
+-- hunt becomes reading a list instead of blind index-stepping (idx 24 turned
+-- out to be app.HasteSpotShell = the red HASTE zone, discovered only by
+-- component dump). Logs index + every string field on each param.
+function RP.log_shell_catalog()
+    if RP.catalog_logged or not RP.shell_udata then return end
+    RP.catalog_logged = true
+    pcall(function()
+        local count = RP.shell_param_count()
+        log("blessing: shell catalog (" .. tostring(C.blessing_shell_path)
+            .. ") -- " .. count .. " params:")
+        for i = 0, count - 1 do
+            pcall(function()
+                local it = RP.shell_udata.ShellParams._items[i]
+                if not it then return end
+                local bits = {}
+                local td = it:get_type_definition()
+                while td do
+                    for _, f in ipairs(td:get_fields() or {}) do
+                        pcall(function()
+                            if f:get_type():get_full_name() == "System.String" then
+                                local v = it:get_field(f:get_name())
+                                if v and tostring(v) ~= "" then
+                                    bits[#bits + 1] = tostring(v)
+                                end
+                            end
+                        end)
+                    end
+                    td = td:get_parent_type()
+                end
+                log(string.format("  shell %d: %s", i,
+                    (#bits > 0) and table.concat(bits, " | ") or "(no strings)"))
+            end)
+        end
+    end)
+end
+
 function RP.spawn_circle(owner_go, pos, rot)
     if not RP.shell_udata then
         RP.blessing_status = "shell userdata not warmed (arm step 5b)"
         return false
     end
+    RP.log_shell_catalog()
     local ok, err = pcall(function()
         local count = RP.shell_param_count()
         if count <= 0 then error("ShellParams empty") end
@@ -4131,6 +4268,46 @@ function RP.neuter_poll()
                 :call("get_CachedRequestSetCollider"):call("set_Enabled", false)
         end)
         log("blessing: circle shell neutered (decorative)")
+        -- 08-12 TINT EXPERIMENT (Aurora: "can we maybe try a yellowy teal"):
+        -- the ring's red is authored in the shell asset; whether an instance
+        -- is tintable at runtime is unknown. Walk its GameObject's components
+        -- once, log the type list (so we learn what is even there), and try
+        -- every set_Color/set_MainColor/set_EffectColor that answers.
+        pcall(function()
+            local go2 = inst:call("get_GameObject")
+            if not go2 then return end
+            local tf2 = go2:call("get_Transform")
+            local names, tinted = {}, 0
+            local comps = go2:call("get_Components")
+            local n2 = comps and comps:get_size() or 0
+            local teal = nil
+            pcall(function()
+                teal = ValueType.new(sdk.find_type_definition("via.Color"))
+                teal:set_r(120); teal:set_g(230); teal:set_b(200)
+                teal:set_a(255)
+            end)
+            for i2 = 0, n2 - 1 do
+                local cp = comps[i2]
+                local tn2 = "?"
+                pcall(function()
+                    tn2 = cp:get_type_definition():get_full_name()
+                end)
+                names[#names + 1] = tn2
+                if teal then
+                    for _, setter in ipairs({"set_Color", "set_MainColor",
+                                             "set_EffectColor"}) do
+                        pcall(function()
+                            if cp:get_type_definition():get_method(setter) then
+                                cp:call(setter, teal)
+                                tinted = tinted + 1
+                            end
+                        end)
+                    end
+                end
+            end
+            log("blessing: shell components [" .. table.concat(names, ", ")
+                .. "] tint writes: " .. tinted)
+        end)
         RP.shell_req_id, RP.shell_poll_left = nil, nil
         -- ⛔⛔ 08-12 CRASH FIX (the first ridden cast CTD'd 11s after the
         -- strike): this poll wraps the shell INSTANCE + its HitCtrl/collider
@@ -4248,6 +4425,29 @@ function RP.blessing_tick()
         end
     end
     RP.neuter_poll()
+    -- bounty toast: fed per-frame beside the native XP message position
+    if RP.bounty_toast_until then
+        if now < RP.bounty_toast_until then
+            pcall(function()
+                local font = rawget(_G, "IrisFont")
+                if not (font and font.text) then return end
+                local sw, sh = 1920.0, 1080.0
+                local ds = imgui.get_display_size()
+                if ds then
+                    sw = tonumber(ds.x) or sw
+                    sh = tonumber(ds.y) or sh
+                end
+                local amount = math.floor(C.unicorn_kill_exp or 10000)
+                font.text(string.format("+%d XP", amount),
+                    sw * 0.745, sh * 0.175, 0xFFF2E3B8, 24)
+                font.text("Unicorn Felled",
+                    sw * 0.745, sh * 0.175 + 30.0 * (sh / 1080.0),
+                    0xFFB9E8FF, 17)
+            end)
+        else
+            RP.bounty_toast_until = nil
+        end
+    end
     -- heal-over-time zone lives independently of the ritual state machine
     local h = RP.hot
     if h then
@@ -4699,27 +4899,16 @@ re.on_frame(function()
             -- source the loss gauge recomputes from -- write it and the HUD
             -- bar, potions, everything read 1000 natively. The damage hook
             -- drops its unicorn scaling in exchange (no double-counting).
-            -- 08-12: was a fire-once latch; first field test showed the write
-            -- "succeeds" then the bar still reads 250 -- something recomputes
-            -- or reads elsewhere. Now VERIFY through the HUD's own getter
-            -- every 5s and re-assert on mismatch; the log cadence tells us
-            -- whether the engine reverts it (and how often) or never took it.
-            if now >= (entry.next_hp_check or 0) then
-                entry.next_hp_check = now + 5.0
-                pcall(function()
-                    local want = tonumber(C.unicorn_hp) or 1000
-                    local hc = get_component(record.game_object,
-                        "app.HitController")
-                    local read = hc and tonumber(hc:call("get_OriginalMaxHp"))
-                    if not read or read < want - 0.5 then
-                        RP.apply_native_hp(record.game_object, true)
-                    end
-                end)
-            end
+            -- 08-12 FINAL: the native max-HP write is RETIRED (the getter
+            -- computes from an authority no verified lane reaches --
+            -- ctx_prop_after=1000 yet the read stays 250, four lanes tried).
+            -- Effective 1000 HP = the damage-hook scaling; the companion HP
+            -- bar scales its display to match. RP.apply_native_hp kept for
+            -- future spelunking only.
             if not entry.hp_boosted then
                 entry.hp_boosted = true
                 pcall(function()
-                    RP.apply_native_hp(record.game_object)
+                    set_hp(record.game_object, tonumber(C.horse_hp) or 250)
                 end)
             end
             -- Kill bounty flows through the vanilla dispenser hook now (real
@@ -4734,8 +4923,15 @@ re.on_frame(function()
                         -- A dead unicorn keeps no magic: kill the sparkle
                         -- (it lingered at the death spot -- Aurora 08-11).
                         UNI.kill_efx(address)
-                        log("unicorn died -- sparkle killed; bounty rides"
-                            .. " the vanilla kill exp")
+                        -- 08-12 FINAL BOUNTY: five hooked lanes never saw the
+                        -- +11 award (small wild-game exp bypasses ExpDispenser
+                        -- entirely). Ship the PROVEN silent grant (set_Exp +
+                        -- checkLevelUp, fired ok=true in the field) plus our
+                        -- own IrisFont toast beside the native message.
+                        RP.grant_kill_exp()
+                        RP.bounty_toast_until = os.clock() + 3.5
+                        log("unicorn died -- sparkle killed; bounty granted"
+                            .. " silently + toast")
                     end
                 end)
             end

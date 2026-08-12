@@ -23,12 +23,11 @@ the render surface.
 
 local MESH_PATH      = "character/ch/ch53_000/pegasus.mesh"
 local MATERIAL_PATH  = "riftspeak/pegasus/pegasus.mdf2"
-local WARM_GATE      = 15.0  -- seconds of streaming before holders may be built
 local LOGTAG         = "[IrisPegasus] "
 
 local C = { armed = false, use_custom_material = false }
 local R = {
-    res = nil, holder = nil, warm_at = nil, failed = false,
+    res = nil, holder = nil, failed = false,
     mdf_res = nil, mdf_holder = nil,
     status = "disarmed", last = "", swapped = {},
 }
@@ -62,33 +61,32 @@ local function warm()
     if not R.res then
         local ok = pcall(function()
             local res = sdk.create_resource("via.render.MeshResource", MESH_PATH)
-            if res then res:add_ref(); R.res = res; R.warm_at = os.clock() end
+            if res then res:add_ref(); R.res = res end
         end)
         if not ok or not R.res then
             R.failed = true
             R.status = "resource NIL - is IRIS_09_pegasus.pak installed?"
             log(R.status); return false
         end
-        log("pegasus mesh pinned; streaming (" .. WARM_GATE .. "s gate)")
+        log("Pegasus mesh resource pinned")
     end
     if C.use_custom_material and not R.mdf_res then
         local ok = pcall(function()
             local res = sdk.create_resource(
                 "via.render.MeshMaterialResource", MATERIAL_PATH)
-            if res then res:add_ref(); R.mdf_res = res; R.warm_at = os.clock() end
+            if res then res:add_ref(); R.mdf_res = res end
         end)
         if not ok or not R.mdf_res then
             R.failed = true
             R.status = "material resource NIL - install a white-coat package"
             log(R.status); return false
         end
-        log("Pegasus material pinned; streaming (" .. WARM_GATE .. "s gate)")
+        log("Pegasus material resource pinned")
     end
-    local age = os.clock() - (R.warm_at or 0)
-    if age < WARM_GATE then
-        R.status = string.format("streaming %.0fs / %.0fs", age, WARM_GATE)
-        return false
-    end
+    -- create_resource has already resolved the resource path.  The holder is
+    -- the engine-supported lifetime/streaming handle, so build it immediately;
+    -- the old fixed 15-second os.clock gate added latency without providing a
+    -- meaningful readiness signal.
     pcall(function()
         if not valid(R.holder) then
             local h = R.res:create_holder("via.render.MeshResourceHolder")

@@ -497,7 +497,12 @@ function griffin_tamed_tick()
                 local nx = snap_due and want or (cx + (want - cx) * 0.02)
                 if snap_due or math.abs(nx - want) < 0.005 then
                     nx = want
-                    S.route3_scale_target = nil
+                    -- ⛔ 08-12 (tiny Quoth, the "was 1.00" receipts): NEVER retire the
+                    -- target on arrival. The native ScaleMediator stomps bodies back to
+                    -- exactly 1.0 after we stop -- clearing route3_scale_target here left
+                    -- nobody on duty and every companion drifted back to 1.0. The assert
+                    -- stays live for the body's whole life (Wild Blood's own law, and the
+                    -- horse module's 60Hz law -- now the easer's too).
                     S.route3_scale_snap_at = 0.0
                 end
                 tf:call("set_LocalScale", make_vec3(nx, nx, nx))

@@ -247,6 +247,13 @@ local DEFAULT = {
     route3_wilds_rider_pose_speed = 1.0,
     route3_wilds_rider_pose_set = "Full", -- authored neutral ride includes the seated hips/legs
     route3_rider_lock_enabled = false, -- UNSAFE legacy puppet path; native climb must own rider position
+    route3_air_seat = false, -- ⭐ per-SPECIES (profile key): release the native climb in FLIGHT and root-seat
+                             -- the rider instead. Drake ch257 = true via migration; griffin stays false --
+                             -- her native climb is authored for carrying riders and works.
+    route3_air_seat_cam = true, -- seat-owned flight chase camera (the native one has no ride view without a climb)
+    route3_air_seat_cam_dist = 9.0,
+    route3_air_seat_cam_height = 3.0,
+    route3_air_seat_anchor_up = 9.0, -- automatic round-35 anchor raise at drake scale (shake/fade kill)
     route3_rider_lock_write_character = false, -- unsafe diagnostic: logical writes fight climb/camera ownership
     route3_rider_joint_anchor_enabled = false, -- used only by the parked transform-puppet experiment
     route3_rider_anchor_joint = "Neck_1", -- 07-16 field-tuned default: neck seat rides the
@@ -9294,6 +9301,7 @@ griffin_profile_keys = {
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
+    "route3_air_seat",
     "spawn_scale", "route3_landing_height_offset",
     "root_motion_walk", "root_motion_run", "root_motion_idle", "idle_motion",
 }
@@ -9477,6 +9485,14 @@ function griffin_species_profile_apply(key)
     end
     if p.route3_soar_directional == nil then
         p.route3_soar_directional = not key:find("ch257", 1, true)
+        migrated = true
+    end
+    -- ⭐ v12 2026-08-12 AIR SEAT: drake flight releases the native climb (10 instrumented rounds:
+    -- the climb is geometrically unable to hold a rider on ch257 in flight -- grip blinks, abort
+    -- storm, cling camera). nil-guard = idempotent (the v11 lesson: value-matched migrations
+    -- must be era-guarded; nil-backfills can't re-fire).
+    if p.route3_air_seat == nil then
+        p.route3_air_seat = key:find("ch257", 1, true) ~= nil
         migrated = true
     end
     -- ⭐ v11 2026-08-12 REPAIR: v3 re-fired after v10 (its glide==5100 trigger matched v10's
@@ -10918,6 +10934,11 @@ local function dismount_griffin()
     -- round 6b: disarm the onAbortClimb veto BEFORE any teardown -- rejected aborts
     -- during dismount = "she stays glued to the body" (the steady-seat lesson below).
     S.route3_abort_veto_off_until = os.clock() + 3.0
+    -- v12 air seat: the teardown below owns the puppet release; just drop the seat latch
+    -- so the watcher can't fight the dismount (statue law, exit 1 of 3)
+    S.route3_air_seat_on = false
+    S.route3_air_seat_air_since = nil
+    S.route3_air_relatch_check_at = nil
     -- 07-24 IRIS PUPPET SEAT: release the rodeo seat FIRST (it restores
     -- the player body/pose/camera); the rest of this teardown then finds
     -- an ordinary standing player.
@@ -11048,6 +11069,12 @@ local function stop_ride_only(reason)
             ps.dismount()
         end
     end)
+    -- v12 air seat (statue law, exit 2 of 3): drop the latch; the pose_stop below runs
+    -- route3_rider_puppet(false) which restores CC/FSM/think
+    S.route3_air_seat_on = false
+    S.route3_air_seat_air_since = nil
+    S.route3_air_relatch_check_at = nil
+    S.route3_abort_veto_off_until = os.clock() + 3.0
     if route3_quick_burst_active and route3_quick_burst_active() then
         pcall(function() route3_quick_burst_end(tostring(reason or "ride stopped")) end)
     end
@@ -11817,6 +11844,8 @@ function route3_finish_landing(ch, go, ground_y, reason)
     S.ground_y = y
     S.airborne = false
     S.flying = false
+    S.route3_touchdown_at = os.clock()   -- AIR SEAT release signal: a REAL landing happened
+                                         -- (reviewer issue 5: airborne=false alone is NOT touchdown)
     route3_flap_set_root_controllers(true)
     route3_flap_clear_overlay()
     -- CALM-NET AT TOUCHDOWN: landing stops flight_tick + re-enables root controllers, leaving a ~0.8s
@@ -12376,6 +12405,12 @@ end
 _G.component_summary = component_summary
 
 update_player_climb_state = function()
+    -- AIR SEAT (reviewer issue 2): while the flight seat owns the rider the climb is
+    -- deliberately DEAD, but every ride gate keys on this flag -- report seated as climbing.
+    if S.route3_air_seat_on == true then
+        S.player_climb_on_character = true
+        return true
+    end
     local player = get_player()
     local climbing = false
     pcall(function() climbing = player and player:call("get_IsClimbOnCharacter") == true end)
@@ -13379,6 +13414,13 @@ local function route3_seat_transform_drive_tick(ch, go, gpos, x, z, ascend, desc
     -- clobber them back to 1.0. Special moves (quick burst, dives, dogfight) keep their own
     -- tuned trajectories and are deliberately NOT scaled here.
     local pace = math.max(0.1, math.min(2.0, tonumber(C.route3_move_speed_scale) or 1.0))
+    -- ⭐ 08-12 SPD gene = REAL legs (Aurora): the bloodline scales every locomotion step --
+    -- ground walk/run, cruise, soar -- through this one pace scalar. Published for the
+    -- active companion body by the IV publisher.
+    pcall(function()
+        local st9 = _G.IrisIVState
+        if st9 and tonumber(st9.spd) then pace = pace * tonumber(st9.spd) end
+    end)
     local run_pace = pace * math.max(0.1, math.min(2.0, tonumber(C.route3_run_speed_scale) or 1.0))
     local step = math.max(0.0, tonumber(run and C.route3_transform_run_step or C.route3_transform_walk_step) or 0.04)
         * (run and run_pace or pace)
@@ -24533,7 +24575,10 @@ end
 -- AFTER the pose applies the hip; keeps the pose's hip ROTATION (upright), overrides only POSITION.
 function griffin_rider_seat_hold_tick()
     if iris_puppet_seat_active() then return end -- 07-24: puppet seat owns the hip
-    if C.route3_seat_hold_enabled ~= true then return end
+    -- AIR SEAT bypasses the (epona-closure forced-false) C gate: with the climb dead and the
+    -- pin owning the transform, the hip anchor + root-joint facing are exactly what the
+    -- flight seat needs, on the storm-free joint channel this function already uses.
+    if C.route3_seat_hold_enabled ~= true and S.route3_air_seat_on ~= true then return end
     if not (S.mounted == true or S.native_climb_mount == true) then return end
     -- Needs SOMETHING to own the hip, or the live animation rewrites it every frame and
     -- the correction never sticks. The Wilds pose was the only owner in July -- but the
@@ -24545,7 +24590,8 @@ function griffin_rider_seat_hold_tick()
     -- she keeps moving around"). ⛔ Hip-LOCAL writes only -- the transform belongs to
     -- the native climb and writing it is the storm.
     if not (S.route3_wilds_rider_pose_active == true
-        or S.griffin_seat_frozen == true) then return end
+        or S.griffin_seat_frozen == true
+        or S.route3_air_seat_on == true) then return end
     local pgo = char_go(get_player())
     local ptf = pgo and transform_of(pgo)
     local _, ggo = reacquire_griffin()
@@ -25788,6 +25834,7 @@ _G.iris_reqabort_fn = function(args)
         if pca < 0 or sdk.to_int64(args[2]) ~= pca then return nil end
         S.route3_reqabort_player = (tonumber(S.route3_reqabort_player) or 0) + 1
         if S.mounted ~= true or C.route3_reqabort_veto == false then return nil end
+        if S.route3_air_seat_on == true then return nil end   -- air seat: aborts must flow (issue 8)
         if os.clock() < (tonumber(S.route3_abort_veto_off_until) or 0.0) then return nil end
         S.route3_reqabort_veto_count = (tonumber(S.route3_reqabort_veto_count) or 0) + 1
         return sdk.PreHookResult.SKIP_ORIGINAL
@@ -25911,7 +25958,12 @@ function iris_shakeoff_calm_tick()
     -- setter veto failed (field written RAW) -- but a per-frame FIELD write is visible to every
     -- native reader: camera chooser (the close-up), abort logic (the storm), stamina hold (the
     -- ratchet). Count each re-true = the flicker-rate instrument we never had.
+    -- v12 gates (reviewer issues 8/9/15): DRAKE-only (the griffin was silently getting all of
+    -- this -- "griffin untouched" now actually true) and STOOD DOWN while the air seat owns the
+    -- rider (a pinned-true flag with NO live climb feeds the native chooser a lie that can NRE).
     if C.route3_climbfield_pin ~= false
+        and S.route3_mount_is_drake == true
+        and S.route3_air_seat_on ~= true
         and os.clock() >= (tonumber(S.route3_abort_veto_off_until) or 0.0) then
         pcall(function()
             local pl = get_player()
@@ -25930,7 +25982,7 @@ function iris_shakeoff_calm_tick()
     -- blink is the grip solver's tolerance breaking against BONE VELOCITY, so attack the
     -- physics: play the airborne clips slower and the same animation moves the spine under
     -- the threshold. re-trues counter = the live dial readout (blinks/flight vs speed).
-    if S.airborne == true then
+    if S.airborne == true and S.route3_mount_is_drake == true then
         local spd = tonumber(C.route3_air_clip_speed) or 1.0
         if spd < 0.99 then
             pcall(function()
@@ -25942,8 +25994,17 @@ function iris_shakeoff_calm_tick()
     end
     pcall(function()
         local ch = reacquire_griffin()
-        if not ch then S.route3_drake_addr = nil; return end
-        pcall(function() S.route3_drake_addr = ch:get_address() end)   -- feeds the hook's cheap compare
+        if not ch then S.route3_drake_addr = nil; S.route3_mount_is_drake = nil; return end
+        -- v12: species check -- the shakeoff skip / field pin / air-speed are DRAKE mitigations;
+        -- S.route3_drake_addr feeds the updateShakeOff skip hook, so only set it for ch257.
+        local nm = ""
+        pcall(function() nm = tostring(go_name(char_go(ch)) or "") end)
+        S.route3_mount_is_drake = nm:find("ch257", 1, true) ~= nil
+        if S.route3_mount_is_drake then
+            pcall(function() S.route3_drake_addr = ch:get_address() end)   -- feeds the hook's cheap compare
+        else
+            S.route3_drake_addr = nil
+        end
         -- round 8: cache the player's ObjectClimber address for the request-veto hook
         pcall(function()
             local pl = get_player()
@@ -25951,6 +26012,7 @@ function iris_shakeoff_calm_tick()
             S.route3_player_climb_addr = ctrl and ctrl:get_address() or nil
         end)
         if C.route3_shakeoff_suppress == false then return end
+        if S.route3_mount_is_drake ~= true then return end   -- v12: drake mitigation only
         -- observe BEFORE clearing: nonzero reads prove the track really fires on her clips
         local cur = -1
         pcall(function() cur = tonumber(ch:call("get_ShakeOffType")) or -1 end)
@@ -25961,6 +26023,261 @@ function iris_shakeoff_calm_tick()
         pcall(function() ch:call("set_ShakeOffType", 0) end)
         pcall(function() ch:call("set_ForceShakeOffType", 0) end)   -- app.Monster level (pcall-guarded)
     end)
+end
+
+-- ⭐ v12d -- THE LAST TWO RESIDUES, VETOED AT THEIR NAMED FRONT DOORS (2026-08-12).
+-- Camera shake = app.VibrationCameraModifier (a POST-WRITE camera modifier -- why it rode even
+-- our own written camera). Screen fade = app.GuiManager.requestFadeOut/requestFadeDispCore.
+-- Both are refused ONLY while the air seat is live and airborne; counters name the traffic.
+_G.iris_camvib_fn = function(args)
+    local ok, ret = pcall(function()
+        S.route3_camvib_count = (tonumber(S.route3_camvib_count) or 0) + 1
+        if S.route3_air_seat_on == true and C.route3_air_seat_vib_kill ~= false then
+            S.route3_camvib_veto_count = (tonumber(S.route3_camvib_veto_count) or 0) + 1
+            return sdk.PreHookResult.SKIP_ORIGINAL
+        end
+        return nil
+    end)
+    if ok then return ret end
+end
+_G.iris_fade_veto_fn = function(args)
+    local ok, ret = pcall(function()
+        S.route3_fade_req_count = (tonumber(S.route3_fade_req_count) or 0) + 1
+        S.route3_fade_req_last = os.clock()
+        if S.route3_air_seat_on == true and S.airborne == true
+            and C.route3_air_seat_fade_kill ~= false then
+            S.route3_fade_veto_count = (tonumber(S.route3_fade_veto_count) or 0) + 1
+            return sdk.PreHookResult.SKIP_ORIGINAL
+        end
+        return nil
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_CAMVIB_HOOKED == nil then
+    _G.IRIS_CAMVIB_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.VibrationCameraModifier")
+        local m = td and td:get_method("request")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_camvib_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
+end
+if _G.IRIS_FADEVETO_HOOKED == nil then
+    _G.IRIS_FADEVETO_HOOKED = true
+    for _, mn in ipairs({ "requestFadeOut", "requestFadeDispCore" }) do
+        pcall(function()
+            local td = sdk.find_type_definition("app.GuiManager")
+            local m = td and td:get_method(mn)
+            if m then
+                sdk.hook(m, function(args)
+                    local f = _G.iris_fade_veto_fn
+                    if f then return f(args) end
+                end)
+            end
+        end)
+    end
+end
+
+-- ⭐⭐⭐ AIR-PHASE ROOT SEAT (v12, 2026-08-12, work-order build). Ten instrumented rounds proved
+-- the native monster-climb is geometrically unable to hold a rider on the drake in flight (grip
+-- blinks -> cling camera, refused-abort jolts = the knocking, force-drop = fade-to-black). So in
+-- FLIGHT the rider stops being a climber: route3_rider_puppet (July machinery, field-proven on a
+-- flying griffin) + route3_rider_pin_late's flat ROOT seat (S-scoped rigid gate) own her; at
+-- touchdown the puppet releases and the PROVEN latch (griffin_fire_player_climb_latch) restores
+-- the symptom-free ground climb. Per-species via profile key route3_air_seat (drake true).
+function iris_air_seat_engage()
+    if S.route3_air_seat_on == true then return true end
+    if iris_puppet_seat_active() then return false end
+    -- open the abort grace BEFORE the puppet's own climb-abort so no round-6/8 hook resists it
+    S.route3_abort_veto_off_until = os.clock() + 1.0
+    local ok = false
+    pcall(function() ok = route3_rider_puppet(true) end)
+    if ok ~= true then
+        S.route3_air_seat_status = "engage FAILED: puppet refused"
+        return false
+    end
+    -- route3_abort_native_climb (inside the puppet) cleared both ride flags -- re-assert them:
+    -- every input-starve / drive / restart gate keys on these (reviewer issue 2)
+    S.native_climb_mount = true
+    S.player_climb_on_character = true
+    S.route3_air_seat_on = true
+    S.route3_air_seat_t0 = os.clock()
+    S.route3_air_relatch_check_at = nil
+    S.route3_air_relatch_tries = 0
+    -- register the PrepareRendering finishing passes (seat hold = hip anchor + root-joint
+    -- facing) if the pose path hasn't already (same guard, same list -- issue 14: extend,
+    -- never duplicate, the existing apparatus)
+    if S.route3_limbfit_registered ~= true then
+        S.route3_limbfit_registered = true
+        re.on_application_entry("PrepareRendering", function()
+            safe_run("griffin_rider_safe_visual", griffin_rider_safe_visual_tick)
+            safe_run("griffin_rider_seat_hold", griffin_rider_seat_hold_tick)
+            safe_run("griffin_rider_limbfit", griffin_rider_limbfit_apply)
+            safe_run("griffin_rider_hand_magnet", griffin_rider_hand_magnet_apply)
+        end)
+    end
+    S.route3_air_seat_status = "AIR SEAT: climb released, root seat live"
+    status("air seat engaged (flight)")
+    return true
+end
+
+function iris_air_seat_release(reason)
+    if S.route3_air_seat_on ~= true then return end
+    S.route3_air_seat_on = false
+    S.route3_air_seat_air_since = nil
+    S.route3_air_ground_since = nil
+    -- teardown grace: nothing of ours may resist the native transition (issues 8/13)
+    S.route3_abort_veto_off_until = os.clock() + 3.0
+    -- restore the fall reporter BEFORE the puppet release (a grounded rider needs it)
+    if S.route3_air_seat_at_off == true then
+        S.route3_air_seat_at_off = nil
+        pcall(function()
+            local pl = get_player()
+            local at = pl and pl:get_field("<AdjustTerrain>k__BackingField")
+            if at then at:call("setEnable", true) end
+        end)
+    end
+    pcall(function() route3_rider_puppet(false) end)
+    S.route3_air_seat_status = "released: " .. tostring(reason or "?")
+    if S.mounted ~= true then return end
+    -- GROUND RE-LATCH: she is already at the seat position (the pin wrote her there);
+    -- fire the proven latch and schedule a REAL-read verification (issue 13: while seated
+    -- the S-flag lies on purpose, so verify against the live getter only after release)
+    pcall(function()
+        local player = get_player()
+        local _, ggo = reacquire_griffin()
+        if not (player and ggo) then return end
+        S.route3_air_relatch_status = griffin_fire_player_climb_latch(player, ggo)
+    end)
+    S.route3_air_relatch_check_at = os.clock() + 0.8
+    S.route3_air_relatch_tries = 1
+end
+
+function iris_air_seat_tick()
+    local now = os.clock()
+    -- deferred re-latch verification (post-release)
+    if S.route3_air_relatch_check_at ~= nil and now >= S.route3_air_relatch_check_at then
+        S.route3_air_relatch_check_at = nil
+        if S.mounted == true and S.route3_air_seat_on ~= true then
+            local latched = false
+            pcall(function() latched = get_player():call("get_IsClimbOnCharacter") == true end)
+            if latched then
+                S.route3_air_relatch_status = "ground climb re-latched OK"
+            elseif (tonumber(S.route3_air_relatch_tries) or 0) < 2 then
+                S.route3_air_relatch_tries = (tonumber(S.route3_air_relatch_tries) or 0) + 1
+                pcall(function()
+                    local player = get_player()
+                    local _, ggo = reacquire_griffin()
+                    if player and ggo then
+                        S.route3_air_relatch_status = "retry: " .. griffin_fire_player_climb_latch(player, ggo)
+                    end
+                end)
+                S.route3_air_relatch_check_at = now + 0.8
+            else
+                S.route3_air_relatch_status = "RE-LATCH FAILED -- dismount and remount"
+            end
+        end
+    end
+    if C.enabled ~= true then return end
+    if S.route3_air_seat_on == true then
+        -- hard exits first
+        if S.mounted ~= true or S.route3_proxy_ride_active ~= true then
+            iris_air_seat_release("ride ended")
+            return
+        end
+        if S.airborne ~= true then
+            -- reviewer issue 5: airborne=false is NOT touchdown -- several sites flip it
+            -- mid-air (dogfight skid, grab hand-offs). Release only on the REAL landing
+            -- signal (route3_finish_landing stamps route3_touchdown_at), or after the
+            -- flag has stayed down 2s (genuinely grounded some other way).
+            if S.route3_air_ground_since == nil then S.route3_air_ground_since = now end
+            local touched = (tonumber(S.route3_touchdown_at) or 0.0) >= (tonumber(S.route3_air_seat_t0) or 0.0)
+            if touched and now - S.route3_air_ground_since >= 0.3 then
+                iris_air_seat_release("touchdown")
+            elseif now - S.route3_air_ground_since >= 2.0 then
+                iris_air_seat_release("grounded (no landing signal)")
+            end
+            return
+        end
+        S.route3_air_ground_since = nil
+        -- PER-TICK LIFE-SUPPORT (reviewer issue 1: the puppet alone is half a machine --
+        -- these are the pose-tick puppet-branch re-assertions, seat-scoped):
+        if S.route3_rider_puppet_on == true then
+            if griffin_set_player_fsm_enabled(false) then S.route3_rider_fsm_off = true end
+            pcall(griffin_rider_neutral_motion_tick)
+        end
+        -- v12c FALL-DETECTOR KILL (Nick levitate recipe, [[nick-devtools-reusable-recipes]]):
+        -- AdjustTerrain is the player's terrain-snap/fall reporter -- the clean "stop treating
+        -- her as a floating/falling body" switch for the fade-to-black. Re-asserted per tick
+        -- (native re-enables components mid-ride); restored on release + script reset.
+        pcall(function()
+            local pl = get_player()
+            local at = pl and pl:get_field("<AdjustTerrain>k__BackingField")
+            if at then at:call("setEnable", false); S.route3_air_seat_at_off = true end
+        end)
+        -- keep the ride flags asserted against any native/update overwrite (issue 2)
+        S.native_climb_mount = true
+        S.player_climb_on_character = true
+        -- rescue safety net (issue 6): the pin feeds seat_last + fall-kill; we feed the
+        -- recorder so a fired rescue head warps to the SADDLE, never mid-air ground
+        local seat = S.route3_rider_seat_last
+        if type(seat) == "table" then
+            S.route3_air_seat_feed_n = (tonumber(S.route3_air_seat_feed_n) or 0) + 1
+            pcall(function()
+                griffin_seat_feed_recorder(seat.x, seat.y, seat.z, S.route3_air_seat_feed_n % 4 == 0)
+            end)
+        end
+        -- SEAT-OWNED FLIGHT CAMERA (v12b): without a climb the native chooser only has the
+        -- WALKING camera (the close-up Aurora reported). We own the rider, so own the view:
+        -- per-frame chase park behind the seat via the proven look-at writer (camtrace law:
+        -- loopcam-style writes hold to present, stolen_m = 0.00). Stands aside while the
+        -- rise cinematic owns the camera; stops writing the instant the seat releases.
+        if C.route3_air_seat_cam ~= false
+            and (tonumber(S.route3_loopcam_clip_until) or 0.0) <= now then
+            pcall(function()
+                -- ⛔ RENDER SPACE (v12c fix): seat_last is UNIVERSAL -- feeding it raw put the
+                -- camera a tile-offset away from the world (no streaming, no sound, void view).
+                -- The proven caller (loopcam return-park) uses transform_render_pos; so do we.
+                -- v12d: anchor on the DRAKE (drive-owned, perfectly smooth), NOT the rider --
+                -- any native micro-yank on the rider's body was transmitted 1:1 as camera shake.
+                local _, ggo2 = reacquire_griffin()
+                local rp = ggo2 and transform_render_pos(ggo2)
+                if not rp then return end
+                rp = { x = rp.x, y = (tonumber(rp.y) or 0.0) + 2.0, z = rp.z }
+                local yaw2 = tonumber(S.heading_yaw) or 0.0
+                local d = tonumber(C.route3_air_seat_cam_dist) or 9.0
+                local h = tonumber(C.route3_air_seat_cam_height) or 3.0
+                local ax = tonumber(rp.x) or 0.0
+                local ay = (tonumber(rp.y) or 0.0) + 1.5
+                local az = tonumber(rp.z) or 0.0
+                griffin_loopcam_write_lookat(
+                    ax - math.sin(yaw2) * d, ay + h, az - math.cos(yaw2) * d,
+                    ax, ay, az)
+            end)
+        end
+        return
+    end
+    -- ENGAGE side: species-gated, debounced, refused during specials (issue 11)
+    if C.route3_air_seat ~= true then S.route3_air_seat_air_since = nil; return end
+    if not (S.mounted == true and S.route3_proxy_ride_active == true and S.airborne == true) then
+        S.route3_air_seat_air_since = nil
+        return
+    end
+    if S.route3_air_seat_air_since == nil then S.route3_air_seat_air_since = now end
+    if now - S.route3_air_seat_air_since < 0.35 then return end   -- debounce the false-true churn
+    local busy = false
+    pcall(function()
+        busy = griffin_grab_active() or griffin_divebomb_active() or griffin_gustair_active()
+            or griffin_dogfight_active() or route3_quick_burst_active()
+            or (tonumber(S.route3_takeoff_lock_until) or 0.0) > now
+            or S.route3_landing_requested == true
+    end)
+    if busy then return end
+    iris_air_seat_engage()
 end
 
 -- place the camera at (tx,ty,tz) looking at (ax,ay,az); returns false if degenerate/no camera.
@@ -26477,8 +26794,10 @@ function route3_rider_pin_late()
         if not (okA or okT) then S.route3_txi_live = false end
     end
     local yaw = S.heading_yaw or yaw_from_transform(go) or 0.0
-    local rigid = C.route3_rider_lock_enabled == true
-        and (S.route3_wilds_rider_pose_active == true or C.route3_wilds_rider_pose_enabled == true)
+    -- AIR SEAT: the flight seat IS the rigid pin, S-scoped (no config flags = no leak class).
+    local rigid = S.route3_air_seat_on == true
+        or (C.route3_rider_lock_enabled == true
+            and (S.route3_wilds_rider_pose_active == true or C.route3_wilds_rider_pose_enabled == true))
     if rigid then
         local fine_x = tonumber(C.route3_rider_lock_offset_x) or 0.0
         local fine_y = tonumber(C.route3_rider_lock_offset_y) or 0.0
@@ -26488,7 +26807,9 @@ function route3_rider_pin_late()
         local base_z = tonumber(C.route3_seat_offset_z) or 1.6
         local yaw_deg = tonumber(C.route3_rider_lock_yaw_deg) or 0.0
         local seat_pos, anchor_name = nil, "actor root"
-        if C.route3_rider_joint_anchor_enabled ~= false then
+        -- AIR SEAT rides the FLAT ROOT seat, never the joint weld: the root is OUR smooth
+        -- drive-owned frame; the spine joints are exactly the whipping surface we left.
+        if C.route3_rider_joint_anchor_enabled ~= false and S.route3_air_seat_on ~= true then
             anchor_name = tostring(C.route3_rider_anchor_joint or C.route3_seat_joint or "Spine_2")
             local gtf = transform_of(go)
             local joint = gtf and managed_call(gtf, "getJointByName", anchor_name) or nil
@@ -26854,6 +27175,12 @@ function route3_rider_pin_late()
             local lup_target = tonumber(C.route3_rider_logic_anchor_up) or 0.0
             if S.airborne == true then
                 lup_target = tonumber(C.route3_rider_logic_anchor_air) or (lup_target + 2.5)
+                -- v12c AIR SEAT: round-35's anchor raise at DRAKE scale, automatic. The +2.5m
+                -- griffin value sits inside the drake's body volume -> flap shake events fire
+                -- point-blank (the violent camera shake) + proximity/fall feed the fade.
+                if S.route3_air_seat_on == true then
+                    lup_target = math.max(lup_target, tonumber(C.route3_air_seat_anchor_up) or 9.0)
+                end
             end
             local lup = tonumber(S.route3_rider_lup) or lup_target
             lup = lup + (lup_target - lup) * 0.05
@@ -29788,7 +30115,10 @@ IrisIV.mults = function(rec)
     return {
         atk  = 1.0 + (tonumber(iv.atk) or 0) / 30.0 * 0.5,
         def  = 1.0 - (tonumber(iv.def) or 0) / 30.0 * 0.25,
-        hp   = 1.0 - (tonumber(iv.hp)  or 0) / 30.0 * 0.15,
+        -- 08-12 (Aurora: "HP needs to be a REAL stat"): the HP gene is a POOL multiplier
+        -- now -- up to +50% max HP at gene 30, written to the body once per summon (the
+        -- publisher below) -- no longer a hidden second damage reduction
+        hp   = 1.0 + (tonumber(iv.hp)  or 0) / 30.0 * 0.5,
         spd  = 1.0 + (tonumber(iv.spd) or 0) / 30.0 * 0.10,
         -- 08-11 (Aurora: "I want people to NOTICE a large or small creature"): 0.86..1.15,
         -- gene 15 = species-true 1.0. Applied at the scale CHOKE POINTS only (the register
@@ -29872,7 +30202,12 @@ IrisIV.install = function()
                 if st.atk and st.atk ~= 1.0 then
                     pcall(function()
                         local d = tonumber(di:get_field("Damage"))
-                        if d and d > 0 then di:set_field("Damage", d * st.atk + 0.0) end
+                        if d and d > 0 then
+                            di:set_field("Damage", d * st.atk + 0.0)
+                            -- 08-12 receipts: the bloodline PROVES itself in the diag json
+                            _G.IrisIVAtkHits = (tonumber(_G.IrisIVAtkHits) or 0) + 1
+                            _G.IrisIVLastAtk = string.format("%.0f -> %.0f (x%.2f)", d, d * st.atk, st.atk)
+                        end
                     end)
                 end
                 return
@@ -29885,7 +30220,11 @@ IrisIV.install = function()
             if daddr and daddr == st.addr and st.taken and st.taken ~= 1.0 then
                 pcall(function()
                     local d = tonumber(di:get_field("Damage"))
-                    if d and d > 0 then di:set_field("Damage", d * st.taken + 0.0) end
+                    if d and d > 0 then
+                        di:set_field("Damage", d * st.taken + 0.0)
+                        _G.IrisIVDefHits = (tonumber(_G.IrisIVDefHits) or 0) + 1
+                        _G.IrisIVLastDef = string.format("%.0f -> %.0f (x%.2f)", d, d * st.taken, st.taken)
+                    end
                 end)
             end
         end, function(r) return r end)
@@ -29907,12 +30246,113 @@ re.on_frame(function()
         local addr = nil
         pcall(function() addr = ago and ago:get_address() end)
         if m and addr then
-            _G.IrisIVState = { addr = addr, atk = m.atk, taken = m.def * m.hp, luck = m.luck }
+            -- taken = DEF alone now (HP left the reduction business for the pool business);
+            -- spd rides the state so the movement drives can read it at step time
+            _G.IrisIVState = { addr = addr, atk = m.atk, taken = m.def, spd = m.spd, luck = m.luck }
             -- PACE, once per body: applied at summon, not re-asserted (parks/rides own
             -- PlaySpeed mid-scene and restore 1.0 -- fighting them froze poses before)
             if IrisIV.spd_addr ~= addr and ch and m.spd and m.spd ~= 1.0 then
                 IrisIV.spd_addr = addr
                 pcall(function() ch:call("get_Motion"):call("set_PlaySpeed", m.spd) end)
+            end
+            -- ⭐ 08-12 REAL HP POOL (Aurora: "HP and speed need to be real stats"): once per
+            -- body, max HP = record BASE max x the gene. The base is stamped ONCE per record
+            -- so re-summons never compound. Current HP is untouched -- the pool grows and
+            -- stable rest fills it. Readback decides took/refused; the log carries receipts.
+            if IrisIV.hpmax_addr ~= addr and ch and m.hp and m.hp > 1.001 then
+                if IrisIV.hpmax_try_addr ~= addr then
+                    IrisIV.hpmax_try_addr = addr; IrisIV.hpmax_tries = 0
+                end
+                IrisIV.hpmax_tries = (IrisIV.hpmax_tries or 0) + 1
+                local hc9 = nil
+                pcall(function() hc9 = griffin_target_hit_controller(ch) end)
+                local cur9 = hc9 and tonumber(griffin_hp_max_from_component(hc9)) or nil
+                if hc9 and cur9 and cur9 > 0 then
+                    if not tonumber(rec.hp_base_max) then
+                        rec.hp_base_max = cur9
+                        pcall(function() griffin_stable_write() end)
+                    end
+                    -- 08-12 (Quoth 1/1): CRITTERS SHIP WITH 1 MAX HP -- multiplying a base
+                    -- of 1 is arithmetic on nothing. The VIRTUAL POOL (the backlog design):
+                    -- a critter chassis gets a floor of 25 before the gene applies -- a
+                    -- gene-30 crow reaches ~37, a runt ~25. Big bodies keep their true base.
+                    local base9 = tonumber(rec.hp_base_max) or cur9
+                    local virtual9 = base9 <= 2.0
+                    if virtual9 then base9 = 25.0 end
+                    local want9 = math.floor(base9 * m.hp + 0.5)
+                    if math.abs(cur9 - want9) <= 0.6 then
+                        IrisIV.hpmax_addr = addr   -- already effective
+                    else
+                        -- 08-12 round 2 (the red "invalid field <MaxHitPoint>" + "refused"
+                        -- receipts): the DUMP names the real store -- app.HitControllerContext
+                        -- (the HitController's HitContext field) with set_OriginalMaxHpProp +
+                        -- set_ReducedMaxHpProp. BOTH must move: Reduced is DD2's loss-gauge
+                        -- max -- Original alone shows a greyed dead zone on the bar.
+                        -- 08-12 round 3 -- THE REGION DOOR (diag receipt: the context HELD 28
+                        -- while the getter said 1): max HP is REGION data -- the root region
+                        -- (no 0) owns the number the getter reports. The dump's setter even
+                        -- carries an isSetHpToMax flag: critters (1/1 by chassis, always
+                        -- "full" or dead) fill straight up to their new virtual pool.
+                        pcall(function()
+                            hc9:call("setRegionOriginalMaxHp(System.Single, System.Int32, System.Boolean)",
+                                want9 + 0.0, 0, virtual9 == true)
+                        end)
+                        local ctx9 = nil
+                        pcall(function() ctx9 = hc9:get_field("<HitContext>k__BackingField") end)
+                        if ctx9 == nil then pcall(function() ctx9 = hc9:call("get_HitContext") end) end
+                        if ctx9 then
+                            pcall(function() ctx9:call("set_OriginalMaxHpProp(System.Single)", want9 + 0.0) end)
+                            pcall(function() ctx9:call("set_ReducedMaxHpProp(System.Single)", want9 + 0.0) end)
+                        end
+                        local after9 = tonumber(griffin_hp_max_from_component(hc9))
+                        if ctx9 and not (after9 and math.abs(after9 - want9) <= 0.6) then
+                            -- plain PUBLIC fields on the context (dump-verified names, no
+                            -- backing-field guessing this time)
+                            pcall(function() ctx9:set_field("OriginalMaxHp", want9 + 0.0) end)
+                            pcall(function() ctx9:set_field("ReducedMaxHp", want9 + 0.0) end)
+                            after9 = tonumber(griffin_hp_max_from_component(hc9))
+                        end
+                        if after9 and math.abs(after9 - want9) <= 0.6 then
+                            IrisIV.hpmax_addr = addr
+                            -- the virtual jump (1 -> ~25+): restore current HP to the same
+                            -- FRACTION it held of the old pool (full stays full), and update
+                            -- the summon handover's clamp so it doesn't drag it back to 1
+                            if virtual9 then
+                                local frac9 = 1.0
+                                pcall(function()
+                                    local h9 = tonumber(hc9:call("get_Hp"))
+                                    if h9 and cur9 > 0 then frac9 = math.max(0.0, math.min(1.0, h9 / cur9)) end
+                                end)
+                                local nh9 = math.max(1.0, want9 * frac9)
+                                pcall(function() griffin_downed_set_hp(hc9, nh9) end)
+                                pcall(function()
+                                    local q9 = S.stable_hp_restore
+                                    if type(q9) == "table" and q9.ch == ch then q9.want = nh9 end
+                                end)
+                            end
+                            pcall(function() log.info(string.format(
+                                "[IrisIV] HP POOL took: base %.0f x %.2f -> %.0f%s", base9, m.hp, after9,
+                                virtual9 and " (virtual critter pool)" or "")) end)
+                        elseif IrisIV.hpmax_tries >= 4 then
+                            IrisIV.hpmax_addr = addr   -- stop retrying; the surface refused
+                            -- 08-12 STAGE DIAGNOSTICS (round 3 needs receipts, not a third
+                            -- guess): which link lied -- no context, an ignored write, or a
+                            -- getter that reads a DIFFERENT store than the context?
+                            local ctxs9 = "no-ctx"
+                            pcall(function()
+                                if ctx9 then
+                                    local cv9 = nil
+                                    pcall(function() cv9 = tonumber(ctx9:call("get_OriginalMaxHpProp")) end)
+                                    if cv9 == nil then pcall(function() cv9 = tonumber(ctx9:get_field("OriginalMaxHp")) end) end
+                                    ctxs9 = "ctx.OriginalMaxHp=" .. tostring(cv9)
+                                end
+                            end)
+                            pcall(function() log.info(string.format(
+                                "[IrisIV] HP POOL refused: want %.0f, hc getter still %.0f, %s (a context that HOLDS the want while the getter disagrees = the getter derives from character params, next surface)",
+                                want9, tonumber(after9) or -1, ctxs9)) end)
+                        end
+                    end
+                end
             end
         else
             _G.IrisIVState = nil
@@ -29954,7 +30394,9 @@ _G.IrisGriffinBridge = {
         for _, r in ipairs(st.companions) do
             local label = nil
             pcall(function()
-                label = (r.kind == "horse" and "Horse") or iris_type_name(r.species)
+                label = (r.variant == "unicorn" and "Unicorn")
+                    or (r.kind == "horse" and "Horse")
+                    or iris_type_name(r.species)
             end)
             if not label or label == "" then
                 label = tostring(r.species or "?"):match("ch%d+") or "?"
@@ -29986,6 +30428,20 @@ _G.IrisGriffinBridge = {
                 local since9 = tonumber(r.hp_rest_at) or tonumber(r.away_since)
                 local rate9 = math.max(0.0, tonumber(C.route3_stable_regen_hp_per_sec) or 1.0)
                 hp9 = math.min(hpmax9, math.max(0.0, hp9) + math.max(0, os.time() - since9) * rate9)
+            end
+            -- 08-12 unicorn DISPLAY pool: same scaling as the companion bar
+            -- (native max is walled; the damage hook makes base_hp effective)
+            if r.variant == "unicorn" and hp9 and hpmax9 and hpmax9 > 0 then
+                local want9 = 1000
+                pcall(function()
+                    local api9 = rawget(_G, "__iris_wild_horses_api")
+                    want9 = (api9 and api9.unicorn_base_hp
+                        and api9.unicorn_base_hp()) or want9
+                end)
+                if want9 > hpmax9 then
+                    hp9 = hp9 * (want9 / hpmax9)
+                    hpmax9 = want9
+                end
             end
             out[#out + 1] = {
                 id = r.id, name = r.name, gender = r.gender, label = label,
@@ -34131,8 +34587,36 @@ function iris_companion_hp_tick()
                 clamp = tostring(rawget(_G, "IrisClampDbg") or "none"),
                 fallback_hits = tonumber(rawget(_G, "IrisFallbackDamageHits")) or 0,
                 fallback_last = tostring(rawget(_G, "IrisFallbackDamageLast") or "none"),
+                -- 08-12 IV receipts: the bloodline's actual fingerprints on the pipeline
+                iv_atk_hits = tonumber(rawget(_G, "IrisIVAtkHits")) or 0,
+                iv_last_atk = tostring(rawget(_G, "IrisIVLastAtk") or "none"),
+                iv_def_hits = tonumber(rawget(_G, "IrisIVDefHits")) or 0,
+                iv_last_def = tostring(rawget(_G, "IrisIVLastDef") or "none"),
                 body_address = tostring(addr), hp_source_address = tostring(hca),
             })
+        end
+    end)
+    -- 08-12 UNICORN DISPLAY HP: the native max-HP write is walled (the
+    -- engine computes max from an unreachable authority), but the wild-horses
+    -- damage hook already makes a unicorn EFFECTIVELY base_hp (incoming
+    -- damage x native/base). The bar scales its numbers by that same factor:
+    -- identical fraction, denominator = the true effective pool. To the
+    -- player this IS 1000 HP.
+    pcall(function()
+        local api = rawget(_G, "__iris_wild_horses_api")
+        local want = api and api.display_max_hp and api.display_max_hp(go)
+        if not want then
+            -- the registry needs ~a second after summon to stamp the variant
+            -- (the momentary "250" flash) -- the STABLE RECORD already knows
+            local r0 = griffin_stable_live_rec()
+            if type(r0) == "table" and r0.variant == "unicorn" then
+                want = (api and api.unicorn_base_hp and api.unicorn_base_hp())
+                    or 1000
+            end
+        end
+        if want and want > hpmax then
+            local k = want / hpmax
+            hp, hpmax = hp * k, want
         end
     end)
     _G.IrisMountHUD = {
@@ -34654,6 +35138,7 @@ re.on_frame(function()
     safe_run("griffin_kbcapture_tick", griffin_kbcapture_tick)
     safe_run("route3_rise_tick", route3_rise_tick)
     safe_run("iris_shakeoff_calm_tick", iris_shakeoff_calm_tick)
+    safe_run("iris_air_seat_tick", iris_air_seat_tick)
     -- ⛔ MUST run before route3_rise_tick / the flight drive: it owns the standdown window.
     safe_run("griffin_jointprobe_tick", griffin_jointprobe_tick)
     safe_run("route3_rise_fc_lift_tick", route3_rise_fc_lift_tick)
@@ -34830,40 +35315,30 @@ re.on_draw_ui(function()
         -- Everything the close-cam/knocking bisect needs, in one box. Both checkboxes are
         -- the SAME variables as the ones buried in the loop-camera tree, just surfaced.
         if imgui.tree_node("🐉 DRAKE TESTING (camera/knocking bisect)##c_drktest") then
-            imgui.text_colored("ROUND 10: SLOW THE WINGS. Drag speed to 0.5, fly, watch re-trues.", 0xFF80D0FF)
-            local dks
-            dks, C.route3_air_clip_speed = imgui.drag_float(
-                "air animation speed (1.0 = normal)##c_drk_airspeed",
-                tonumber(C.route3_air_clip_speed) or 1.0, 0.01, 0.3, 1.0)
-            if dks then save_config() end
-            imgui.text(string.format("climb-flag re-trues=%d  (blinks caught -- lower = calmer grip)",
-                tonumber(S.route3_climbfield_retrues) or 0))
-            local dkp
-            dkp, C.route3_climbfield_pin = imgui.checkbox(
-                "PIN the climb flag TRUE while mounted (field write)##c_drk_fieldpin",
-                C.route3_climbfield_pin ~= false)
-            if dkp then save_config() end
-            local dkv
-            dkv, C.route3_reqabort_veto = imgui.checkbox(
-                "REFUSE climb-abort requests on the rider##c_drk_reqabort",
-                C.route3_reqabort_veto ~= false)
-            if dkv then save_config() end
-            imgui.text(string.format("abort REQUESTS=%d (player=%d REFUSED=%d)",
-                tonumber(S.route3_reqabort_count) or 0, tonumber(S.route3_reqabort_player) or 0,
-                tonumber(S.route3_reqabort_veto_count) or 0))
-            imgui.text(string.format("abort executions=%d (player=%d other=%d)",
-                tonumber(S.route3_onabort_count) or 0, tonumber(S.route3_onabort_player) or 0,
-                tonumber(S.route3_onabort_other) or 0))
-            if type(S.route3_onabort_names) == "table" then
-                local parts = {}
-                for nm, n in pairs(S.route3_onabort_names) do parts[#parts + 1] = { nm, n } end
-                table.sort(parts, function(a, b) return a[2] > b[2] end)
-                local line = ""
-                for i = 1, math.min(3, #parts) do
-                    line = line .. (i > 1 and "  " or "") .. tostring(parts[i][1]) .. "=" .. tostring(parts[i][2])
-                end
-                if line ~= "" then imgui.text("other aborters: " .. line) end
-            end
+            imgui.text_colored("AIR SEAT: in flight you are not a climber -- the cling mode can't engage.", 0xFF80D0FF)
+            local dkas
+            dkas, C.route3_air_seat = imgui.checkbox(
+                "AIR SEAT (the drake flight fix)##c_drk_airseat", C.route3_air_seat == true)
+            if dkas then save_config() end
+            imgui.text(string.format("seat: %s | relatch: %s",
+                tostring(S.route3_air_seat_status or (S.route3_air_seat_on == true and "ON" or "off")),
+                tostring(S.route3_air_relatch_status or "-")))
+            imgui.text(string.format("shakes vetoed=%d/%d   fades vetoed=%d/%d",
+                tonumber(S.route3_camvib_veto_count) or 0, tonumber(S.route3_camvib_count) or 0,
+                tonumber(S.route3_fade_veto_count) or 0, tonumber(S.route3_fade_req_count) or 0))
+            local dkc1, dkc2, dkc3
+            dkc1, C.route3_air_seat_cam = imgui.checkbox(
+                "flight camera (untick = the game's default view)##c_drk_seatcam",
+                C.route3_air_seat_cam ~= false)
+            if dkc1 then save_config() end
+            dkc2, C.route3_air_seat_cam_dist = imgui.drag_float(
+                "camera distance##c_drk_seatcamdist",
+                tonumber(C.route3_air_seat_cam_dist) or 9.0, 0.1, 3.0, 30.0)
+            if dkc2 then save_config() end
+            dkc3, C.route3_air_seat_cam_height = imgui.drag_float(
+                "camera height##c_drk_seatcamh",
+                tonumber(C.route3_air_seat_cam_height) or 3.0, 0.1, 0.0, 15.0)
+            if dkc3 then save_config() end
             local dk1, dk2
             dk1, C.route3_loopcam = imgui.checkbox(
                 "cinematic camera on ascend/descend##c_drk_loopcam", C.route3_loopcam ~= false)
@@ -35969,6 +36444,17 @@ re.on_script_reset(function()
     S.route3_txi_live = false
     S.route3_our_write = false
     S.route3_rider_pose_gate_until = nil
+    -- v12 air seat (statue law, exit 3 of 3): drop the latch and release the puppet
+    -- explicitly -- a reset mid-flight must never strand an FSM-off rider
+    S.route3_air_seat_on = false
+    S.route3_air_seat_air_since = nil
+    S.route3_air_relatch_check_at = nil
+    pcall(function()
+        local pl = get_player()
+        local at = pl and pl:get_field("<AdjustTerrain>k__BackingField")
+        if at then at:call("setEnable", true) end
+    end)
+    pcall(function() route3_rider_puppet(false) end)
     -- ROUND-56: never orphan a spawned saddle across a reset (the S ref would be
     -- lost and the stool left welded in the world)
     pcall(function() griffin_saddle_despawn() end)

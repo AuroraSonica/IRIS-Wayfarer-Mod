@@ -1142,7 +1142,7 @@ re.on_draw_ui(function()
         else
             local HL = _G.IrisHomeLife.cfg
             c, HL.enabled = imgui.checkbox("enabled##ihs_hl", HL.enabled ~= false)
-            c, HL.prompt  = imgui.checkbox("show the [E / A] label##ihs_hl", HL.prompt ~= false)
+    c, HL.prompt  = imgui.checkbox("show the native B prompt##ihs_hl", HL.prompt ~= false)
             c, HL.reach   = imgui.slider_float("reach (m)##ihs_hl", HL.reach or 1.9, 0.8, 4.0)
             -- the chair family does not carry an authored sit-down clip, so the jack never
             -- walks her onto the seat: we deliver her there ourselves. Which way a given

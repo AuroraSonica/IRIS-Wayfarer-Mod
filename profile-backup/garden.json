@@ -89,6 +89,7 @@
             "yaw": -90.0
         },
         {
+            "crop": "apple",
             "dry": 0,
             "grown": 0,
             "lift": 0.0,

@@ -16,6 +16,28 @@
 
 local ok_spawn, SpawnRequest = pcall(require, "EnemySpawner/spawnRequest")
 
+-- ⛔ 08-12 (chicken named Mootilda): the reacquire's once-flag lived on B, which PERSISTS
+-- across script resets -- so the reacquire ran once per game session, not once per load,
+-- and every later reset fell through to blind order-binding. A FILE-LOCAL genuinely
+-- resets on every reload; that is the whole point of it.
+local reacquired_this_load = false
+
+-- ⭐ 08-12 (Aurora: "despawn them BEFORE the reset -- can we detect that?"): yes --
+-- re.on_script_reset fires as the scripts tear down, while the spawner's managed
+-- wrappers are still ALIVE and can really delete their bodies. Clean exit, clean
+-- re-entry: the sweep respawns everyone fresh on the next approach. The reacquire
+-- below survives as the safety net for paths that never fire this (a crash kills
+-- the bodies with the game anyway).
+re.on_script_reset(function()
+    pcall(function()
+        if B.spawner then B.spawner:deleteAll() end
+        B.bodies = {}
+        B.addrs = {}
+        B.near = false
+        log.info("[IrisHomesteadBox] script reset detected - residents despawned cleanly")
+    end)
+end)
+
 local CFG = "IrisHomesteadBox.json"
 local C = {
     enabled = true,
@@ -191,24 +213,43 @@ local function spawn_resident(rec, ax, ay, az, slot)
     end
     B.spawner = B.spawner or SpawnRequest:new()
     -- placement: a deterministic ring slot per resident (stable spots, no pile-ups)
-    local ang = (slot * 2.399963)   -- golden angle: spreads any count evenly
-    local rad = (tonumber(C.ring_min) or 4.0)
-        + (slot % 3) * ((tonumber(C.ring_max) or 12.0) - (tonumber(C.ring_min) or 4.0)) / 3.0
     -- ⛔⛔ 08-12 FINAL: `requestAddInstances` takes **UNIVERSAL** positions -- proven by
     -- Drac landing at exactly (my render point re-read as universal): body at
     -- (-372, 15, 1160) = my (-118, 15, 12) shifted by the player's 256/-1152 offsets,
     -- match to the metre. The plot anchor is ALREADY universal: feed it RAW. (The old
     -- "spawner speaks render" note was a different API surface -- law sharpened.)
-    local ux = ax + math.sin(ang) * rad
-    local uz = az + math.cos(ang) * rad
+    -- ⭐ 08-12 SAFE FLOOR (Mootilda in the stream below the cliff edge): the ring was
+    -- terrain-blind. Every candidate is GROUND-PROBED (route3_cast_ground_below: x/z
+    -- render in, universal contact y out); a floor >2m below the anchor is a cliff
+    -- edge or water -- walk the golden angle to the next candidate. The accepted spot
+    -- also fixes Y to just above the TRUE floor (better than the old blind +2.5).
+    local ux, uz, uy = nil, nil, ay + 2.5
+    local cast9 = rawget(_G, "route3_cast_ground_below")
+    for try9 = 0, 7 do
+        local a9 = ((slot + try9 * 11) * 2.399963)
+        local r9 = (tonumber(C.ring_min) or 4.0)
+            + ((slot + try9) % 3) * ((tonumber(C.ring_max) or 12.0) - (tonumber(C.ring_min) or 4.0)) / 3.0
+        local cx9 = ax + math.sin(a9) * r9
+        local cz9 = az + math.cos(a9) * r9
+        if type(cast9) ~= "function" then ux, uz = cx9, cz9 break end
+        local rx9, _, rz9 = render_point_near(cx9, ay, cz9)
+        local hit9 = nil
+        if rx9 then pcall(function() hit9 = cast9(rx9, ay + 3.0, rz9) end) end
+        local hy9 = hit9 and tonumber(hit9.y) or nil
+        if hy9 and (ay - hy9) < 2.0 and (hy9 - ay) < 3.0 then
+            ux, uz, uy = cx9, cz9, hy9 + 1.2
+            break
+        end
+        pcall(function() log.info(string.format(
+            "[IrisHomesteadBox] ring candidate %d rejected for %s (floor dy=%s)",
+            try9, tostring(rec.name), hy9 and string.format("%.1f", hy9 - ay) or "no hit")) end)
+        if try9 == 7 and not ux then ux, uz = cx9, cz9 end   -- every probe failed: last spot, blind Y
+    end
     pcall(function()
         log.info(string.format("[IrisHomesteadBox] spawn point %s: UNIVERSAL(%.1f, %.1f, %.1f)",
-            tostring(rec.name), ux, ay, uz))
+            tostring(rec.name), ux, uy, uz))
     end)
-    -- +2.5: the anchor Y is measured AT THE DEED SIGN; on sloped plots a ring spot can
-    -- sit higher, and a surface-height spawn buries the body (Aurora heard Drac singing
-    -- underground). Drop-in from above -- the engine settles bodies onto the ground.
-    local pos = make_position(ux, ay + 2.5, uz)      -- via.Position doubles, UNIVERSAL, raw
+    local pos = make_position(ux, uy, uz)            -- via.Position doubles, UNIVERSAL, raw
     local rot = make_quat_identity()                 -- rot is a QUATERNION (the doe-spawn recipe)
     -- scale: species-true base x the resident's own size gene (the ONE calculator)
     local sc = 1.0
@@ -243,11 +284,28 @@ local function spawn_resident(rec, ax, ay, az, slot)
     end
     local ok = pcall(function() B.spawner:requestAddInstances(code, pos, rot, cfg, 1) end)
     if ok then
-        B.bodies[rec.id] = { addr = nil, name = rec.name, code = code, at = os.clock() }
+        B.bodies[rec.id] = { addr = nil, name = rec.name, code = code, at = os.clock(),
+            want = { x = ux, y = uy, z = uz } }   -- the probed safe spot (the river check reads it)
         pcall(function() log.info("[IrisHomesteadBox] resident spawning: " .. tostring(rec.name)
             .. " (" .. tostring(code) .. ") scale " .. string.format("%.2f", sc)) end)
     end
     return ok
+end
+
+-- ⛔ 08-12 (Clucky: killed at her own homestead for +6 XP): residents had NO protection --
+-- the party friend-shield only shapes pawn TARGETING, not the player's sword. The ritual
+-- shield recipe (IrisTaming's set_immunity, replicated): the body's HitController refuses
+-- all damage and drops its hit collision. Applied at settle + re-asserted every few
+-- seconds (world streaming can rebuild components under a standing body).
+local function resident_shield(ch)
+    pcall(function()
+        local go = ch and ch:call("get_GameObject")
+        local hc = go and go:call("getComponent(System.Type)", sdk.typeof("app.HitController"))
+        if not hc then return end
+        for _, sig in ipairs({ "set_IsDamageZero", "set_IsIgnoreDamageHit", "set_DamageCollisionOff" }) do
+            pcall(function() hc:call(sig, true) end)
+        end
+    end)
 end
 
 local function adopt_new_instances()
@@ -288,17 +346,30 @@ local function adopt_new_instances()
             local addr = nil
             pcall(function() addr = go and go:get_address() end)
             if addr and not B.addrs[addr] then
-                local slot = table.remove(unbound, 1)
-                if not slot then break end
+                -- ⛔ 08-12 (the name swap): binding by ORDER alone crossed a hen onto an ox
+                -- record. The species band must agree -- an instance only binds to a slot
+                -- whose requested code shares its band.
+                local iband = tostring(go and go:call("get_Name") or ""):match("ch%d+")
+                local slot = nil
+                for ui = 1, #unbound do
+                    if tostring(unbound[ui].e.code or ""):match("ch%d+") == iband then
+                        slot = table.remove(unbound, ui)
+                        break
+                    end
+                end
+                if not slot then goto next_instance end
                 slot.e.addr = addr
+                slot.e.ch = ch   -- kept for the shield heartbeat
                 slot.e.verify_at = os.clock() + 3.0   -- position read-back receipt (below)
                 B.addrs[addr] = slot.id
+                resident_shield(ch)
                 pcall(function()
                     local b = bridge()
                     if b and b.register_resident_body then b.register_resident_body(ch) end
                 end)
                 pcall(function() log.info("[IrisHomesteadBox] resident settled: " .. tostring(slot.e.name)) end)
             end
+            ::next_instance::
         end
     end)
 end
@@ -345,6 +416,13 @@ re.on_frame(function()
         local ax, ay, az = plot_anchor(p)
         local d = math.sqrt(best_d2 or 1e12)
         -- receipts (the missing-bat lesson: a silent sweep cannot be diagnosed) --
+        -- the shield heartbeat: never let a resident stand unshielded for long
+        if (tonumber(B.shield_at) or 0.0) < now then
+            B.shield_at = now + 3.0
+            for _, e in pairs(B.bodies) do
+                if e.ch then resident_shield(e.ch) end
+            end
+        end
         -- 10s heartbeat naming the plot, the distance, and the roster
         if (tonumber(B.dbg_at) or 0.0) < now then
             B.dbg_at = now + 10.0
@@ -368,6 +446,95 @@ re.on_frame(function()
         pcall(function() paused = type(griffin_world_paused) == "function" and griffin_world_paused() == true end)
         if paused then return end
         local rows = home_rows()
+        -- ⛔ 08-12 (THREE Mootildas): a script reset invalidates the old managed wrappers --
+        -- body resolution failed, the module concluded "no bodies" and spawned fresh while
+        -- the orphans grazed on. THE REACQUIRE (the tamed-creature detection, ported): once
+        -- per load, scan the scene near the plot, RE-BIND band-matching bodies to their
+        -- records, and purge true surplus (unshield + WARP off the farm -- the eviction
+        -- law: never destroy).
+        if not reacquired_this_load then
+            reacquired_this_load = true
+            pcall(function()
+                B.addrs = {}
+                for _, e0 in pairs(B.bodies) do e0.addr = nil; e0.ch = nil end
+                local comp_addr = nil
+                pcall(function()
+                    local b0 = bridge()
+                    local gch0 = b0 and b0.griffin and b0.griffin()
+                    local go0 = gch0 and gch0:call("get_GameObject")
+                    comp_addr = go0 and go0:get_address()
+                end)
+                local sm0 = sdk.get_native_singleton("via.SceneManager")
+                local smt0 = sdk.find_type_definition("via.SceneManager")
+                local scene0 = sm0 and sdk.call_native_func(sm0, smt0, "get_CurrentScene")
+                local comps0 = scene0 and scene0:call("findComponents(System.Type)", sdk.typeof("app.Character"))
+                local n0 = 0
+                pcall(function() n0 = comps0:call("get_Length") or 0 end)
+                if n0 == 0 then pcall(function() n0 = comps0:get_size() or 0 end) end
+                local strays = {}
+                for i0 = 0, (tonumber(n0) or 0) - 1 do
+                    pcall(function()
+                        local ch0 = comps0:call("get_Item", i0) or comps0[i0]
+                        local go0 = ch0 and ch0:call("get_GameObject")
+                        if not go0 then return end
+                        local addr0 = go0:get_address()
+                        if addr0 == comp_addr then return end
+                        local band0 = tostring(go0:call("get_Name") or ""):match("ch%d+")
+                        if not (band0 and DOCILE[band0]) then return end
+                        local u0 = go0:call("get_Transform"):call("get_UniversalPosition")
+                        local dx0, dz0 = u0.x - ax, u0.z - az
+                        if dx0 * dx0 + dz0 * dz0 > 35.0 * 35.0 then return end
+                        strays[#strays + 1] = { ch = ch0, go = go0, addr = addr0, band = band0 }
+                    end)
+                end
+                for _, r0 in ipairs(rows) do
+                    if not (B.bodies[r0.id] and B.bodies[r0.id].addr) then
+                        local rband0 = tostring(r0.species or ""):match("ch%d+")
+                        for si0, s0 in ipairs(strays) do
+                            if s0 and s0.band == rband0 then
+                                B.bodies[r0.id] = B.bodies[r0.id] or { name = r0.name, at = os.clock() }
+                                local e0 = B.bodies[r0.id]
+                                e0.addr = s0.addr; e0.ch = s0.ch
+                                B.addrs[s0.addr] = r0.id
+                                resident_shield(s0.ch)
+                                pcall(function()
+                                    local b0 = bridge()
+                                    if b0 and b0.register_resident_body then b0.register_resident_body(s0.ch) end
+                                end)
+                                strays[si0] = false
+                                pcall(function() log.info("[IrisHomesteadBox] REACQUIRED "
+                                    .. tostring(r0.name) .. " after reload (no duplicate spawned)") end)
+                                break
+                            end
+                        end
+                    end
+                end
+                for _, s0 in ipairs(strays) do
+                    if s0 then
+                        pcall(function()
+                            local hc0 = s0.go:call("getComponent(System.Type)", sdk.typeof("app.HitController"))
+                            if hc0 then
+                                for _, sig0 in ipairs({ "set_IsDamageZero", "set_IsIgnoreDamageHit", "set_DamageCollisionOff" }) do
+                                    pcall(function() hc0:call(sig0, false) end)
+                                end
+                            end
+                            -- warp target ground-probed when the rig allows; wild again, elsewhere
+                            local wx0, wz0 = ax + 120.0, az + 120.0
+                            local wy0 = ay + 10.0
+                            pcall(function()
+                                local cast0 = rawget(_G, "route3_cast_ground_below")
+                                local rx0, _, rz0 = render_point_near(wx0, ay, wz0)
+                                local hit0 = cast0 and rx0 and cast0(rx0, ay + 30.0, rz0) or nil
+                                if hit0 and tonumber(hit0.y) then wy0 = tonumber(hit0.y) + 1.5 end
+                            end)
+                            s0.go:call("get_Transform"):call("set_UniversalPosition", make_position(wx0, wy0, wz0))
+                            log.info("[IrisHomesteadBox] surplus " .. tostring(s0.band)
+                                .. " unshielded + warped off the farm (the duplication purge)")
+                        end)
+                    end
+                end
+            end)
+        end
         -- spawn missing residents (deterministic slot per row order)
         local n = 0
         for i, r in ipairs(rows) do
@@ -412,6 +579,36 @@ re.on_frame(function()
                     log.info(string.format(
                         "[IrisHomesteadBox] READBACK %s: render(%.1f, %.1f, %.1f) universal(%.1f, %.1f, %.1f) d_universal=%.1fm",
                         tostring(e.name), r.x, r.y, r.z, u.x, u.y, u.z, d))
+                    -- ⛔ 08-12 (Mootilda IN THE RIVER despite a safe-floor request): big-agent
+                    -- spawns SNAP TO THEIR OWN NAVMESH -- the ox-sized navmesh on this
+                    -- riverside plot lives on the bank below, so the engine relocated her
+                    -- ~8m down and 5m sideways, ignoring our Y entirely. Post-settle
+                    -- correction: warp the body back to the probed spot and CUT its
+                    -- MonsterNavigationController (the yoke's census law: that component IS
+                    -- the transform's driver) so the engine cannot walk it back down. She
+                    -- stands and idles at the plot; the roam leash is slice 3's business.
+                    if e.want and u and tonumber(u.y) < (tonumber(e.want.y) or 0.0) - 2.5 then
+                        pcall(function()
+                            tr:call("set_UniversalPosition",
+                                make_position(e.want.x, e.want.y + 0.4, e.want.z))
+                        end)
+                        pcall(function()
+                            local ch9 = nil
+                            for i = 1, #B.spawner.instances do
+                                local inst = B.spawner.instances[i]
+                                local c9 = inst.instance and inst.instance:get_Chara()
+                                local g9 = c9 and c9:call("get_GameObject")
+                                if g9 and g9:get_address() == e.addr then ch9 = c9 break end
+                            end
+                            local g9 = ch9 and ch9:call("get_GameObject")
+                            local mn9 = g9 and g9:call("getComponent(System.Type)", sdk.typeof("app.MonsterNavigationController"))
+                            if mn9 then mn9:call("set_Enabled", false) end
+                        end)
+                        e.parked = true
+                        pcall(function() log.info(string.format(
+                            "[IrisHomesteadBox] %s settled %.1fm BELOW the safe spot (navmesh pulled it down) - warped home and PARKED (nav muscle cut)",
+                            tostring(e.name), (tonumber(e.want.y) or 0.0) - tonumber(u.y))) end)
+                    end
                 end)
             end
         end

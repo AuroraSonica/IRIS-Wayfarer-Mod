@@ -1,7 +1,7 @@
 -- ═════════════════════════════════════════════════════════════════════════════════════
 -- IrisHomeLife.lua — the house comes alive.
 --
--- Walk up to a chair you placed and a label says "[E / A]  Sit". Press it and you sit
+-- Walk up to a usable furnishing and the native world guide says "B Sit". Press it and you sit
 -- in it properly. Beds, benches, camp seats, bells, work stations — all the same code.
 --
 -- ⭐ WHY THIS IS CHEAP, AND WHY THE TAVERN SCENE WAS NOT:
@@ -55,7 +55,7 @@ local M = {
     -- cookpot jack is the culprit; if it stops entirely, this was.
     enabled       = false,
     key           = 0x45,        -- E, matching IrisFarming's tend key
-    pad_a         = true,        -- pad face-down (A / cross) also acts
+    pad_a         = true,        -- legacy setting name; now means native interact B / circle
     -- ⛔ OFF 08-09 (Aurora: "disable the jump suppression on all the interactables now that we
     --   use B instead of A"). This module's own key is E/pad-A, but the whole suite moved to B,
     --   so suppressing jump here just costs the player a control for nothing.
@@ -1483,7 +1483,7 @@ local function _pad_bits()
     return b
 end
 
--- Resolve the face-down (A / cross) bit from the type's own static fields once. The
+-- Resolve the native interact B / circle bit from the type's own static fields once. The
 -- GamePadButton values are not safe to hardcode, and `sdk.enum` is not a REFramework
 -- API — td:get_fields() + f:get_data(nil) is the route this codebase already uses.
 local function _pad_a_bit()
@@ -1492,12 +1492,12 @@ local function _pad_a_bit()
     pcall(function()
         local td = sdk.find_type_definition("via.hid.GamePadButton")
         for _, f in ipairs(td:get_fields()) do
-            if f:get_name() == "RDown" and f:is_static() then
+            if (f:get_name() == "Cancel" or f:get_name() == "RRight") and f:is_static() then
                 pad.bit = math.floor(tonumber(f:get_data(nil)) or 0)
             end
         end
     end)
-    _log(string.format("pad A (RDown) bit = 0x%X%s", pad.bit,
+    _log(string.format("pad B (Cancel/RRight) bit = 0x%X%s", pad.bit,
         (pad.bit == 0) and "  <- NOT RESOLVED, pad input is dead" or ""))
     return pad.bit
 end
@@ -1876,8 +1876,17 @@ re.on_frame(function()
         jump_block.on = (M.block_jump == true) and (e ~= nil)
         if not e then return end
 
+        local mine = true
+        if _G.IrisPrompt then
+            if _G.IrisPrompt.native_busy() then mine = false
+            else
+                local w = _G.IrisPrompt.winner()
+                if w and w ~= "home_life" then mine = false end
+            end
+        end
+
         -- one press arms a request; _try_pending keeps offering it for a beat (see above)
-        if act then pend = { e = e, until_at = os.clock() + (M.retry_secs or 1.2) } end
+        if act and mine then pend = { e = e, until_at = os.clock() + (M.retry_secs or 1.2) } end
     end)
 end)
 
@@ -1903,10 +1912,19 @@ re.on_frame(function()
             if not (e and e.verb) then return end
             gp = _pos(e.go)
             local kn = (M.key == 0x45) and "E" or string.format("key %X", M.key or 0)
-            txt = string.format("[%s / A]  %s", kn, e.verb)
+            txt = string.format("[%s / B]  %s", kn, e.verb)
             col = 0xFFF0D8A0                    -- the warm IRIS prompt gold
+            if gp and _G.IrisPrompt then
+                local pp = _pos(_char_go(_player()))
+                local dd = pp and math.sqrt((gp.x - pp.x) ^ 2 + (gp.z - pp.z) ^ 2) or 1e9
+                local hp = Vector3f.new(gp.x, gp.y + (M.prompt_height or 1.0), gp.z)
+                _G.IrisPrompt.set("home_life", e.verb, 16, dd, hp, e.go)
+            end
+            return -- ui020701 is the sole action prompt; do not resurrect the gold fallback
         end
         if not gp then return end
+        if _G.IrisPrompt and _G.IrisPrompt.native_world_ready
+            and _G.IrisPrompt.native_world_ready("home_life") then return end
         local sp = draw.world_to_screen(
             Vector3f.new(gp.x, gp.y + (M.prompt_height or 1.0), gp.z))
         if not sp then return end
@@ -1993,7 +2011,7 @@ re.on_draw_ui(function()
     imgui.text("")
     -- the RISKY path, off by default
     c, M.enabled = imgui.checkbox("JACK path (experimental - can lock your controls)", M.enabled ~= false)
-    c, M.prompt  = imgui.checkbox("show the [E / A] label", M.prompt ~= false)
+    c, M.prompt  = imgui.checkbox("show the native B prompt", M.prompt ~= false)
     c, M.proxy_seat = imgui.checkbox("chairs: jack a spawned gm80_166 invisible seat", M.proxy_seat ~= false)
     c, M.seat_flip  = imgui.checkbox("flip seat facing", M.seat_flip == true)
     c, M.block_jump = imgui.checkbox("suppress jump while a prompt is up", M.block_jump ~= false)

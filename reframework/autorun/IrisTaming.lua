@@ -6504,6 +6504,18 @@ re.on_application_entry("UpdateBehavior", function()
         -- (all IRIS context prompts standardise on B). B is not Jump, so
         -- the old jump suppression is gone with it.
         S.wyrm_offer_go = go9
+        -- Share the same native ui020701 prompt used by farming and weapon plaques. Position is
+        -- already render-space here; priority 25 keeps the deliberate rite above ambient farm
+        -- actions if the companion happens to stand beside them.
+        pcall(function()
+            if _G.IrisPrompt then
+                local wp9 = go9:call("get_Transform"):call("get_Position")
+                if wp9 then
+                    local prompt9 = Vector3f.new(wp9.x, wp9.y + 1.4, wp9.z)
+                    _G.IrisPrompt.set("wyrm_rite", "Wyrm's Rite", 25, dd9, prompt9, go9)
+                end
+            end
+        end)
         local pressed9 = false
         pcall(function()
             local kb9 = iris_kb(math.floor(tonumber(C.wyrm_rite_key) or 0x45))  -- E
@@ -6522,7 +6534,15 @@ re.on_application_entry("UpdateBehavior", function()
             pressed9 = down9 and not S.wyrm_rite_latch
             S.wyrm_rite_latch = down9
         end)
-        if pressed9 then
+        local mine9 = true
+        if _G.IrisPrompt then
+            if _G.IrisPrompt.native_busy() then mine9 = false
+            else
+                local win9 = _G.IrisPrompt.winner()
+                if win9 and win9 ~= "wyrm_rite" then mine9 = false end
+            end
+        end
+        if pressed9 and mine9 then
             -- 08-08 (Aurora: the one-line prompt stretched across the
             -- screen) -- hard newlines keep it a tidy block. Use the
             -- companion's NAME (bridge companion_info().name), NOT the raw
@@ -11816,6 +11836,19 @@ _G.IrisTaming.forget_pet = function(addr)
 end
 -- ONE switch for every plate, taming-side checkbox: the probe asks before drawing its own
 _G.IrisTaming.nameplates_on = function() return C.companion_nameplate ~= false end
+-- 08-12 (Wild Blood must never touch a pet): is this GO address one of the taming-side
+-- pets? Takes the GAMEOBJECT address (named _body to keep the address-class law visible).
+_G.IrisTaming.is_pet_body = function(go_addr)
+    if not go_addr then return false end
+    local hit = false
+    pcall(function()
+        for kch in pairs(S.tamed or {}) do
+            local g = char_go(kch)
+            if g and g:get_address() == go_addr then hit = true; break end
+        end
+    end)
+    return hit
+end
 -- GRIP AID: the probe's climb-stamina hold extends to WILD GRIFFINS while this is on
 -- (ride the commuter to its nest without falling out of the sky)
 _G.IrisTaming.grip_aid_on = function() return C.grip_aid == true end
@@ -12247,11 +12280,8 @@ re.on_frame(function()
         -- label + jump gate silently never ran ("nothing changed").
         -- Plain truthy check instead (matches the quarry marker above).
         S.wyrm_jump_gate = nil
-        if S.wyrm_offer_go
-            and not (S.wyrm_dlg and S.wyrm_dlg.open) then
-            draw_marker(S.wyrm_offer_go,
-                "[E/B] Wyrm's Rite (3 crystals -> mount)", 0xFFFF9060)
-        end
+        -- Wyrm's Rite now uses ui020701 exclusively. The old marker could outlive the native
+        -- guide by a frame/scan interval and advertise an action after eligibility had ended.
         -- 08-12 round 11 (Aurora: "the ox isn't being marked like it normally does"):
         -- the courted ox wears the same marker every other tame wears -- species + gender
         -- glyph, the gender being the individual's own roll (the one the seal will lock)

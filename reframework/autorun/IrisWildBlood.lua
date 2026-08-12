@@ -50,6 +50,29 @@ W.count = W.count or 0
 
 -- the tame carry: GriffinRideProbe calls take(go_addr) at the pact; returns the iv and
 -- retires the entry so this module stops touching a body the stable now owns
+-- 08-12: ONE ownership question, asked at entry AND at every re-assert -- the active
+-- companion, a homestead resident, or a taming-side pet is NEVER Wild Blood's to scale.
+-- (The old check was active-companion only and entry-only: one race at script reset and
+-- a companion joined the ledger forever -- the scale war behind tiny Quoth.)
+local function owned_elsewhere(go, addr)
+    local owned = false
+    pcall(function()
+        local b = rawget(_G, "IrisGriffinBridge")
+        if b and b.is_companion_body and b.is_companion_body(go) == true then owned = true end
+    end)
+    if owned then return true end
+    pcall(function()
+        local hb = rawget(_G, "IrisHomesteadBox")
+        if hb and hb.is_resident and hb.is_resident(addr) then owned = true end
+    end)
+    if owned then return true end
+    pcall(function()
+        local t = rawget(_G, "IrisTaming")
+        if t and t.is_pet_body and t.is_pet_body(addr) then owned = true end
+    end)
+    return owned
+end
+
 W.take = function(addr)
     local e = addr and W.led[addr]
     if not e then return nil end
@@ -125,7 +148,7 @@ re.on_frame(function()
                     local dead = false
                     pcall(function() dead = ch:call("get_IsDead") == true end)
                     if dead then return end
-                    if b and b.is_companion_body and b.is_companion_body(go) == true then return end
+                    if owned_elsewhere(go, addr) then return end
                     local cur = tr:call("get_LocalScale")
                     local cx = tonumber(cur and cur.x) or 1.0
                     if cx < 0.85 or cx > 1.15 then return end
@@ -142,10 +165,13 @@ re.on_frame(function()
                     end
                 end
                 -- gentle re-assert (ScaleMediator stomps one-shots on some species);
-                -- the companion check repeats here so a mid-session tame stops us
-                if b and b.is_companion_body and b.is_companion_body(go) == true then
+                -- the FULL ownership check repeats here -- a mid-session tame, a resident
+                -- settling, or a pet joining the roster all stop us on the next pass
+                if owned_elsewhere(go, addr) then
                     W.led[addr] = nil
                     W.count = math.max(0, W.count - 1)
+                    pcall(function() log.info("[IrisWildBlood] " .. tostring(e.name or "?")
+                        .. " belongs to the stable/homestead now - gene entry released") end)
                     return
                 end
                 local cur = tr:call("get_LocalScale")
