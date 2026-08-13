@@ -136,9 +136,15 @@ do
         { file = "IRIS/forge_house_einis.json", label = "Eini's ivy + door (dressing)" },
         -- Aurora's 2026-08-12 farm-outbuilding captures (KIT DIFF + COMPOSITE GROUPS at the
         -- Vermund farm): composite-only structural kits, gen_farm_outbuildings.py
-        { file = "IRIS/forge_house_ox_stable.json", label = "OUTBUILDING: Ox Stable (open timber)" },
-        { file = "IRIS/forge_house_hay_barn.json", label = "OUTBUILDING: Hay Barn (timber)" },
-        { file = "IRIS/forge_house_field_shelter.json", label = "OUTBUILDING: Field Shelter (gabled)" },
+        -- ⭐ 08-12 OUTBUILDINGS ENGINE: `ob` = the player-buildable contract (stable machine
+        -- key + draft material costs; a `timber`/`stone` field in the kit json overrides).
+        -- These rows feed _G.IrisForge.kits() for the Homestead Screen's Build tab.
+        { file = "IRIS/forge_house_ox_stable.json", label = "OUTBUILDING: Ox Stable (open timber)",
+            ob = { key = "ox_stable", name = "Ox Stable", timber = 25, stone = 0 } },
+        { file = "IRIS/forge_house_hay_barn.json", label = "OUTBUILDING: Hay Barn (timber)",
+            ob = { key = "hay_barn", name = "Hay Barn", timber = 40, stone = 10 } },
+        { file = "IRIS/forge_house_field_shelter.json", label = "OUTBUILDING: Field Shelter (gabled)",
+            ob = { key = "field_shelter", name = "Field Shelter", timber = 15, stone = 0 } },
         -- Aurora's 2026-08-12 CITY expedition (Vernworth + Battahl + Eini re-capture with
         -- the DepthOcc layer). v1 selections - iterate on test-build screenshots.
         { file = "IRIS/forge_house_vernworth_mansion.json", label = "CITY: Vernworth Mansion (231 pieces - heavy build)" },
@@ -157,9 +163,19 @@ do
                     SPECS[#SPECS + 1] = s
                 end
             end
-            HOUSES[#HOUSES + 1] = { key = h.name or hf.file,
-                                    label = hf.label .. " (" .. #h.placements .. " pieces)",
-                                    placements = h.placements }
+            local row = { key = h.name or hf.file,
+                          label = hf.label .. " (" .. #h.placements .. " pieces)",
+                          placements = h.placements }
+            if type(hf.ob) == "table" then
+                -- buildable outbuilding: stable key + costs (kit json fields override drafts)
+                row.ob = {
+                    key = hf.ob.key,
+                    label = hf.ob.name or hf.ob.key,
+                    timber = tonumber(h.timber) or hf.ob.timber or 0,
+                    stone = tonumber(h.stone) or hf.ob.stone or 0,
+                }
+            end
+            HOUSES[#HOUSES + 1] = row
         end
     end
 end
@@ -452,8 +468,12 @@ local function _ab_test()
 end
 
 -- ── build (instantiate the 12 placements from the held prefabs) ─────────────────────────
-local function _build(placements, override)
+-- ⭐ 08-12 MULTI-BUILDING: `tag` names the building ("house" = the main house, an
+-- outbuilding site key otherwise). The already-stands guard is PER TAG - a stable can
+-- rise beside a standing house; a second stable on the same site cannot.
+local function _build(placements, override, tag)
     placements = placements or PLACEMENTS
+    tag = tag or "house"
     -- only the specs THIS house uses need to be loaded
     local need = {}
     for _, p in ipairs(placements) do need[p.id] = true end
@@ -461,14 +481,22 @@ local function _build(placements, override)
     for id in pairs(need) do if not loaded[id] then missing = missing + 1 end end
     if missing > 0 then M.last = missing .. " prefabs not loaded yet - LOAD ALL first"; return end
     local standing = 0   -- terrace tiles don't count: the house is SUPPOSED to build on them
-    for _, r in ipairs(instances) do if not r.ter then standing = standing + 1 end end
-    if standing > 0 then M.last = "a cottage already stands - DESPAWN first"; return end
+    for _, r in ipairs(instances) do
+        if not r.ter and (r.tag or "house") == tag then standing = standing + 1 end
+    end
+    if standing > 0 then
+        M.last = (tag == "house") and "a cottage already stands - DESPAWN first"
+            or ("'" .. tag .. "' already stands - despawn it first")
+        return
+    end
     local anchor, theta
     if override then
         -- PLOT MODE: anchor handed in by IrisPlotPad (render space = pad centre + top). house_yaw
-        -- slider still fine-tunes on top of the pad's facing.
-        anchor = { x = override.x, y = override.y + (M.build_y or 0), z = override.z }
-        theta = math.rad((override.yaw or 0) + M.house_yaw)
+        -- slider still fine-tunes on top of the pad's facing. ⭐ override.raw = an outbuilding
+        -- site: the anchor is EXACT - no slider residue, however the panel is set.
+        anchor = { x = override.x,
+            y = override.y + (override.raw and 0 or (M.build_y or 0)), z = override.z }
+        theta = math.rad((override.yaw or 0) + (override.raw and 0 or M.house_yaw))
     else
         local tf = _player_tf()
         if not tf then M.last = "no player"; return end
@@ -484,26 +512,27 @@ local function _build(placements, override)
         anchor = { x = rp.x + fx * M.dist, y = rp.y + (M.build_y or 0), z = rp.z + fz * M.dist }
         theta = math.rad(M.house_yaw)
     end
-    if M.ter_top then
-        -- a terrace stands: the house belongs on ITS surface, not on the dirt below
+    if M.ter_top and tag == "house" then
+        -- a terrace stands: the HOUSE belongs on ITS surface - outbuildings site on their
+        -- own ground and must never be hijacked onto the house's terrace top
         anchor.y = M.ter_top + (M.build_y or 0)
         _log(string.format("BUILD anchored to TERRACE walk surface y=%.2f", anchor.y))
     end
-    cur_build = { placements = placements }
+    cur_build = { placements = placements, tag = tag }
     for _, p in ipairs(placements) do
         if excluded[p.id] then
             -- curated out (scenery, not house) - skipped entirely
         elseif p.spline then
             -- baked tile-frame geometry: common spawn point + sliders, identity rot, NO house yaw
             build_queue[#build_queue + 1] = {
-                id = p.id, spline = true,
+                id = p.id, spline = true, tag = tag,
                 pos = { x = anchor.x + M.sp_x, y = anchor.y + M.sp_y, z = anchor.z + M.sp_z },
                 rot = { x = 0, y = 0, z = 0, w = 1 },
             }
         else
             local o = _yaw_offset(theta, p.off)
             build_queue[#build_queue + 1] = {
-                id = p.id,
+                id = p.id, tag = tag,
                 pos = { x = anchor.x + o.x, y = anchor.y + o.y, z = anchor.z + o.z },
                 rot = _yaw_compose(theta, p.rot),
             }
@@ -534,8 +563,10 @@ local function _build_on_plot()
     if not (plot and plot.live) then
         M.last = "no IRIS plot down - lay a PLOT PAD first (IRIS PLOT PAD panel)"; return
     end
-    local standing = 0   -- terrace tiles don't count: the house is SUPPOSED to build on them
-    for _, r in ipairs(instances) do if not r.ter then standing = standing + 1 end end
+    local standing = 0   -- terrace tiles don't count; outbuildings don't either (per-tag law)
+    for _, r in ipairs(instances) do
+        if not r.ter and (r.tag or "house") == "house" then standing = standing + 1 end
+    end
     if standing > 0 then M.last = "a house already stands - DESPAWN first"; return end
     local house = _plot_house()
     local placements = house.placements or PLACEMENTS
@@ -1810,7 +1841,17 @@ local function _forge_world_paused()
     return paused
 end
 re.on_application_entry("UpdateBehavior", function()
-    if _forge_world_paused() then forge_pause_grace = os.clock() + 3.0; return end
+    if _forge_world_paused() then
+        -- ⭐ 08-12 SITING-PREVIEW EXCEPTION (Aurora: the ghost must behave like decorate,
+        -- world paused): the ghost is born on THIS assembly line, so while footprint mode
+        -- is live the pump keeps running under the menu pause. Inert prefab renderables
+        -- only - the furnish module's paused gimmick spawns are the proven precedent.
+        -- Every other pause (game menu, photo mode) still halts the forge as before.
+        if _G.IrisFurnishFootprint ~= true then
+            forge_pause_grace = os.clock() + 3.0
+            return
+        end
+    end
     if os.clock() < forge_pause_grace then return end
     -- ⛔⭐ BOOT WARMER (2026-07-22, THIRD mid-load crash even at gentle pace): the first build of
     -- every boot cold-streams all ~36 piece pfbs against the area load - EffectManager.doUpdate AVs
@@ -2086,7 +2127,7 @@ re.on_application_entry("UpdateBehavior", function()
     if plot_build_pending and not load_active and #load_queue == 0 then
         local pend = plot_build_pending
         plot_build_pending = nil
-        _build(pend.placements, pend.anchor)
+        _build(pend.placements, pend.anchor, pend.tag)
     end
 
     -- deferred fence-audition spawns: their prefab finished loading -> instantiate
@@ -2107,14 +2148,20 @@ re.on_application_entry("UpdateBehavior", function()
             if inst then
                 pcall(function() inst = inst:add_ref() end)
                 -- distinctive name -> a post-reset session can DETECT the standing house and adopt
-                -- it instead of building a duplicate (homestead _zombie_house_standing)
-                pcall(function() inst:call("set_Name", "IrisHouse_" .. b.id) end)
+                -- it instead of building a duplicate (homestead _zombie_house_standing).
+                -- ⭐ 08-12: OUTBUILDING pieces wear IrisOB_<tag>__<id> so the house's identity
+                -- chain (zombie lists, adopt sub(11)) stays byte-for-byte untouched.
+                local btag = b.tag or "house"
+                pcall(function()
+                    inst:call("set_Name", (btag == "house") and ("IrisHouse_" .. b.id)
+                        or ("IrisOB_" .. btag .. "__" .. b.id))
+                end)
                 if not M._logged_iname then
                     M._logged_iname = true
                     local nm = "?"; pcall(function() nm = inst:call("get_Name") end)
                     _log("instance name check: " .. tostring(nm))
                 end
-                instances[#instances + 1] = { go = inst, id = b.id, ter = b.ter }
+                instances[#instances + 1] = { go = inst, id = b.id, ter = b.ter, tag = b.tag }
                 if not M.visual_first_at then
                     M.visual_first_at = os.clock()
                     _log(string.format("VISUAL FIRST after %.2fs", M.build_requested_at and (M.visual_first_at - M.build_requested_at) or 0))
@@ -2130,8 +2177,10 @@ re.on_application_entry("UpdateBehavior", function()
                 if #build_queue == 0 then
                     M.last = "COTTAGE BUILT: " .. #instances .. " prefab pieces - go look at it (and walk into a wall!)"
                     _log(string.format("VISUAL COMPLETE after %.2fs", M.build_requested_at and (os.clock() - M.build_requested_at) or 0))
-                    -- floaters-to-terrain pass, deferred so streaming/rot passes settle first
-                    if M.ground_reach then M.gr_pass_at = os.clock() + 3.0 end
+                    -- floaters-to-terrain pass, deferred so streaming/rot passes settle first.
+                    -- ⛔ never for a SITING PREVIEW: stretching ghost pieces while the player
+                    -- drives them would fight preview_move every frame
+                    if M.ground_reach and btag ~= "obpreview" then M.gr_pass_at = os.clock() + 3.0 end
                 end
             else
                 _log("INSTANTIATE FAILED " .. b.id)
@@ -2168,6 +2217,14 @@ _G.IrisForge = {
                         pcall(function() go = go:add_ref() end)
                         instances[#instances + 1] = { go = go, id = nm:sub(11) }
                         n = n + 1
+                    elseif nm and nm:sub(1, 7) == "IrisOB_" then
+                        -- ⭐ 08-12: outbuilding survivor - IrisOB_<tag>__<id>
+                        local tag9, id9 = tostring(nm:sub(8)):match("^(.-)__(.+)$")
+                        if tag9 and id9 then
+                            pcall(function() go = go:add_ref() end)
+                            instances[#instances + 1] = { go = go, id = id9, tag = tag9 }
+                            n = n + 1
+                        end
                     end
                 end)
             end
@@ -2186,22 +2243,46 @@ _G.IrisForge = {
     -- clear the HOUSE only: terrace tiles survive so homestead's re-spawn ritual (despawn old,
     -- build fresh) doesn't eat the pad the house is about to land on
     despawn_house = function()
+        -- ⭐ 08-12: HOUSE pieces only - terrace survives AND every outbuilding survives
+        -- (the reviewer's blocker: the homestead rebuild ritual must not eat the barn)
         local n = 0
         for i = #instances, 1, -1 do
-            if not instances[i].ter then
+            if not instances[i].ter and (instances[i].tag or "house") == "house" then
                 pcall(function() instances[i].go:call("destroy", instances[i].go) end)
                 pcall(function() instances[i].go:release() end)
                 table.remove(instances, i); n = n + 1
             end
         end
-        _log("DESPAWN HOUSE-ONLY: " .. n .. " pieces (terrace kept)")
+        _log("DESPAWN HOUSE-ONLY: " .. n .. " pieces (terrace + outbuildings kept)")
+        return n
+    end,
+    -- ⭐ 08-12 OUTBUILDINGS: tear down ONE tagged building; the house never notices
+    despawn_tag   = function(tag)
+        if not tag or tag == "house" then return 0 end
+        local n = 0
+        for i = #instances, 1, -1 do
+            if instances[i].tag == tag then
+                pcall(function() instances[i].go:call("destroy", instances[i].go) end)
+                pcall(function() instances[i].go:release() end)
+                table.remove(instances, i); n = n + 1
+            end
+        end
+        _log("DESPAWN TAG '" .. tostring(tag) .. "': " .. n .. " pieces")
+        return n
+    end,
+    tag_count     = function(tag)
+        local n = 0
+        for _, r in ipairs(instances) do if (r.tag or "house") == (tag or "house") and not r.ter then n = n + 1 end end
         return n
     end,
     status        = function()
         local hn = 0
         for _, r in ipairs(instances) do if not r.ter then hn = hn + 1 end end
         return { instances = #instances, house = hn,
-            building = (#build_queue > 0 or plot_build_pending ~= nil), last = M.last }
+            building = (#build_queue > 0 or plot_build_pending ~= nil),
+            building_tag = (plot_build_pending and (plot_build_pending.tag or "house"))
+                or ((#build_queue > 0) and cur_build and cur_build.tag) or nil,
+            last = M.last }
     end,
     -- union WORLD AABB (render space) of all standing house pieces -> collision can size a shell to it
     bounds        = function()
@@ -2259,6 +2340,145 @@ _G.IrisForge = {
             if rec.go and not excluded[rec.id] then list[#list + 1] = { id = rec.id, go = rec.go } end
         end
         return list
+    end,
+    -- ══ ⭐⭐ 08-12 THE OUTBUILDINGS CONTRACT (iris-outbuildings-menu-handoff) ═══════════════
+    -- kits() -> the Build tab's rows; footprint from the kit's own placement offsets
+    kits = function()
+        local t = {}
+        for _, h in ipairs(HOUSES) do
+            if type(h.ob) == "table" and h.placements then
+                local mnx, mxx, mnz, mxz, mxy = 0.0, 0.0, 0.0, 0.0, 3.0
+                for _, p in ipairs(h.placements) do
+                    local o = p.off or {}
+                    local ox = tonumber(o.x) or 0.0
+                    local oy = tonumber(o.y) or 0.0
+                    local oz = tonumber(o.z) or 0.0
+                    if ox < mnx then mnx = ox end
+                    if ox > mxx then mxx = ox end
+                    if oz < mnz then mnz = oz end
+                    if oz > mxz then mxz = oz end
+                    if oy + 3.0 > mxy then mxy = oy + 3.0 end
+                end
+                t[#t + 1] = { key = h.ob.key, label = h.ob.label,
+                    timber = h.ob.timber, stone = h.ob.stone, pieces = #h.placements,
+                    footprint_aabb = { min = { x = mnx - 1.0, y = 0.0, z = mnz - 1.0 },
+                                       max = { x = mxx + 1.0, y = mxy, z = mxz + 1.0 } } }
+            end
+        end
+        return t
+    end,
+    -- blocker 4: are ALL of this kit's pfbs forged on disk? Check BEFORE consuming materials.
+    kit_ready = function(key)
+        for _, h in ipairs(HOUSES) do
+            if type(h.ob) == "table" and h.ob.key == key then
+                local missing = 0
+                for _, id in ipairs(_placement_ids(h.placements)) do
+                    local on_disk = false
+                    pcall(function() on_disk = BitStream.checkFileExists(_out_file(id)) == true end)
+                    if not on_disk then missing = missing + 1 end
+                end
+                return missing == 0, missing
+            end
+        end
+        return false, -1
+    end,
+    -- raise a kit at a UNIVERSAL anchor under its own tag (tag = the site key, so two
+    -- shelters can stand). Loads only that kit's prefabs; defers through the pump if cold.
+    build_kit = function(key, ux, uy, uz, yaw, tag)
+        local row = nil
+        for _, h in ipairs(HOUSES) do if type(h.ob) == "table" and h.ob.key == key then row = h end end
+        if not row then return false, "unknown kit '" .. tostring(key) .. "'" end
+        tag = tag or key
+        if #build_queue > 0 or plot_build_pending then return false, "the forge is mid-build" end
+        local tf = _player_tf()
+        if not tf then return false, "no player" end
+        -- universal -> render (the forge speaks render): render = universal - the player delta
+        local dx, dy, dz
+        local okd = pcall(function()
+            local rp = tf:call("get_Position")
+            local up = tf:call("get_UniversalPosition")
+            dx, dy, dz = up.x - rp.x, up.y - rp.y, up.z - rp.z
+        end)
+        if not (okd and dx) then return false, "no coordinate frame" end
+        local anchor = { x = ux - dx, y = uy - dy, z = uz - dz, yaw = yaw or 0, raw = true }
+        local missing = 0
+        for _, id in ipairs(_placement_ids(row.placements)) do
+            M._claim_warmed(id)
+            if not loaded[id] then missing = missing + 1 end
+        end
+        M.build_requested_at, M.visual_first_at = os.clock(), nil
+        if missing == 0 then
+            _build(row.placements, anchor, tag)
+        else
+            local q = _load_placements(row.placements)
+            if q == 0 then return false, "kit prefabs not forged yet - FORGE ALL (fresh game start) first" end
+            plot_build_pending = { anchor = anchor, placements = row.placements, tag = tag }
+        end
+        _log(string.format("BUILD KIT '%s' tag '%s' at U(%.1f,%.1f,%.1f) yaw=%.1f missing=%d",
+            tostring(key), tostring(tag), ux, uy, uz, yaw or 0, missing))
+        if tag == "obpreview" then M._preview_row = row end
+        return true
+    end,
+    -- ══ ⭐ 08-12 SITING PREVIEW (Aurora: "see the actual building as a ghost"): the REAL
+    -- kit raised under the reserved tag "obpreview" - forged pieces carry no collision
+    -- until the graft, so the ghost is walk-through by nature. preview_move slides every
+    -- piece under the player's stick; preview_clear tears it down on any exit.
+    preview_kit = function(key, ux, uy, uz, yaw)
+        _G.IrisForge.despawn_tag("obpreview")
+        M._preview_row = nil
+        return _G.IrisForge.build_kit(key, ux, uy, uz, yaw or 0, "obpreview")
+    end,
+    preview_move = function(ux, uy, uz, yaw)
+        local row = M._preview_row
+        if not row then return end
+        local tf = _player_tf()
+        if not tf then return end
+        local dx, dy, dz
+        local okd = pcall(function()
+            local rp = tf:call("get_Position")
+            local up = tf:call("get_UniversalPosition")
+            dx, dy, dz = up.x - rp.x, up.y - rp.y, up.z - rp.z
+        end)
+        if not (okd and dx) then return end
+        local ax, ay, az = ux - dx, uy - dy, uz - dz
+        local theta = math.rad(yaw or 0)
+        -- tagged instances stand in placement order (FIFO queue law); mirror _build's skips
+        local plist = {}
+        for _, p in ipairs(row.placements) do
+            if not excluded[p.id] then plist[#plist + 1] = p end
+        end
+        local k = 0
+        for _, rec in ipairs(instances) do
+            if rec.tag == "obpreview" then
+                k = k + 1
+                local p = plist[k]
+                if p then
+                    pcall(function()
+                        local t = rec.go:call("get_Transform")
+                        if p.spline then
+                            t:call("set_Position", _vec3(ax + M.sp_x, ay + M.sp_y, az + M.sp_z))
+                        else
+                            local o = _yaw_offset(theta, p.off)
+                            local q = _yaw_compose(theta, p.rot)
+                            t:call("set_Position", _vec3(ax + o.x, ay + o.y, az + o.z))
+                            local qt = t:call("get_Rotation")
+                            qt.x, qt.y, qt.z, qt.w = q.x, q.y, q.z, q.w
+                            t:call("set_Rotation", qt)
+                        end
+                    end)
+                end
+            end
+        end
+    end,
+    preview_clear = function()
+        M._preview_row = nil
+        return _G.IrisForge.despawn_tag("obpreview")
+    end,
+    -- the ghost's first piece = the creature cam's follow target during siting
+    preview_anchor = function()
+        for _, rec in ipairs(instances) do
+            if rec.tag == "obpreview" then return rec.go end
+        end
     end,
 }
 

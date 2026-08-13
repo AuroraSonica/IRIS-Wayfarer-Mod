@@ -598,10 +598,31 @@ re.on_application_entry("UpdateBehavior", function()
         local up = st and (st.instances or 0) > 0
         if building then pending_collision.seen = true end
         if pending_collision.seen and not building and up then
-            pending_collision = nil
+            -- ⛔ 08-12 (reviewer blocker 3): the flag used to clear BEFORE add() - a refused
+            -- add() (rigs standing, mid-build race, no player) silently lost collision
+            -- forever. Now: call, VERIFY it took (jobs pending or rigs standing), and only
+            -- then consume. A refusal retries next pass, capped at 12 strikes (~loud drop).
+            local took = false
             if _G.IrisCollision and _G.IrisCollision.add then
                 _G.IrisCollision.add()
+                pcall(function()
+                    local C9 = _G.IrisCollision
+                    took = (C9.busy and C9.busy() == true)
+                        or (C9.count and (tonumber(C9.count()) or 0) > 0)
+                        or (C9.pooled and C9.pooled() == true)
+                end)
+            end
+            if took then
+                pending_collision = nil
                 _log("auto collision: rigs queued")
+            else
+                pending_collision.strikes = (tonumber(pending_collision.strikes) or 0) + 1
+                if pending_collision.strikes >= 12 then
+                    pending_collision = nil
+                    _log("auto collision: add() refused 12 passes - DROPPED (see collision panel)")
+                elseif pending_collision.strikes == 1 or pending_collision.strikes % 4 == 0 then
+                    _log("auto collision: add() refused (strike " .. pending_collision.strikes .. ") - retrying")
+                end
             end
         end
     end

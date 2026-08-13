@@ -29,12 +29,14 @@ local reacquired_this_load = false
 -- below survives as the safety net for paths that never fire this (a crash kills
 -- the bodies with the game anyway).
 re.on_script_reset(function()
+    -- log FIRST (receipts round 2: the log line never appeared -- either this never
+    -- fires or something above it died silently; now the log cannot be skipped)
+    pcall(function() log.info("[IrisHomesteadBox] script reset detected - despawning residents") end)
+    pcall(function() if B.spawner then B.spawner:deleteAll() end end)
     pcall(function()
-        if B.spawner then B.spawner:deleteAll() end
         B.bodies = {}
         B.addrs = {}
         B.near = false
-        log.info("[IrisHomesteadBox] script reset detected - residents despawned cleanly")
     end)
 end)
 
@@ -47,6 +49,19 @@ local C = {
     max_residents = 8,
     use_t_anchor = true,     -- plot anchor: t* (deed sign space) vs u* -- field-verified via the marker
     debug_marker = false,    -- draw the plot anchor + resident states on screen
+    -- THE HERD BELL (08-12): registered by position from the panel; the loader only
+    -- restores DECLARED keys, so these must exist here or the bell forgets on reload
+    bell_set = false, bell_x = 0.0, bell_y = 0.0, bell_z = 0.0,
+    -- ⛔ these MUST be declared here: the loader below only restores keys that already exist
+    -- in C, so an undeclared setting is silently dropped on every reload.
+    bell_prompts   = true,    -- at a homestead: take "Await Oxcart" off the bell post
+    bell_hide_sign = true,    -- ...and the notice-board "Examine" on the same post
+    bell_dialog    = true,    -- ringing the bell opens the "who should come" dialog
+    bell_plot_r    = 60.0,    -- how near an owned plot anchor a post counts as "homestead"
+    bell_own_r     = 3.0,     -- how near a PLACED bell record a post must stand to be "ours"
+    -- ⛔ KNOWN-BAD, default OFF: zeroing the timeskip args set the world to permanent midnight
+    -- (Aurora, 08-13). Kept only as a documented switch -- see bell_neuter below.
+    bell_neuter_skip = false,
 }
 pcall(function()
     local d = json.load_file(CFG)
@@ -56,6 +71,150 @@ local function save_cfg() pcall(function() json.dump_file(CFG, C) end) end
 
 local B = _G.IrisHomesteadBox or {}
 _G.IrisHomesteadBox = B
+
+-- ⛔⛔⛔ 08-13, THE BUG THAT KILLED THE WHOLE BELL SLICE, and it is this repo's oldest law
+-- ([[lua-syntax-check]]): **a `local function` does not exist above its own definition.**
+-- `nearest_bell_dist` (below) calls `player_spaces()`, but that was declared `local function`
+-- ~130 lines FURTHER DOWN -- so the call compiled to a GLOBAL lookup, found nil, and threw
+-- "attempt to call a nil value" into the pcall that wraps it. Silently. Every single time.
+-- Consequences, all of which read in the field as separate mysteries:
+--   * nearest_bell_dist() always returned nil -> at_the_bell() was ALWAYS false
+--   * bell_neuter() returned on its first line -> the Await timeskip was NEVER neutered
+--   * the "Ring for the Herd" prompt block never ran -> the tap-to-ring path was unreachable
+-- The `bell scan: N` log line still printed because it sits ABOVE the faulting call - which is
+-- exactly why this looked like "the scan is wrong" and not "the function is dead".
+-- FIX: forward-declare both, and ASSIGN to the forward locals below (⛔ writing
+-- `local function player_spaces()` again down there would create a NEW local that shadows
+-- this one and the bug would survive the fix).
+local player_go, player_spaces
+
+-- ⛔ 08-12 (Aurora: "I don't want the oxcart timeskip in the homestead -- remove it"):
+-- the Await-Oxcart hold calls app.TimeSkipManager:requestOxcartWarp(hour, min, day, ...)
+-- (dump-verified dedicated method). We never SKIP the call (a null RequestData into an
+-- unknown caller is CTD roulette) -- we NEUTER it: within homestead radius the skip
+-- becomes 0h 0m 0d. A blink of fade, no hours lost, no cart. Everywhere else: untouched.
+-- ⭐ 08-12 (Aurora: "I wanted the BELL to be the spot -- anyone can put a bell anywhere,
+-- or have multiple bells"): bells are AUTO-DISCOVERED, never registered. The dump's
+-- receipt: OxcartManager holds a `_gm63_042_01` field -- app.Gm63_042_01 IS the
+-- oxcart-stop post class. Scene-scan for the component = every bell post in the world,
+-- cached 4s; nearest one within reach is THE bell. (The panel registration survives as
+-- a silent fallback for exotic bells the class scan misses.)
+-- returns: distance (or nil), and the nearest bell record { ux, uy, uz } for the walk target
+local function nearest_bell_dist()
+    local best, best_b = nil, nil
+    pcall(function()
+        local now = os.clock()
+        if not (B.bells and now < (tonumber(B.bells_at) or 0.0)) then
+            B.bells_at = now + 4.0
+            B.bells = {}
+            local sm = sdk.get_native_singleton("via.SceneManager")
+            local smt = sdk.find_type_definition("via.SceneManager")
+            local scene = sm and sdk.call_native_func(sm, smt, "get_CurrentScene")
+            -- ⛔⛔ 08-13 THE CLASS WAS WRONG. `app.Gm63_042_01` is a lockable GATE/DOOR gimmick
+            -- (dump: DoorStartOpenSE / OpenSec / LockObj / CheckOpenPressId) with no interact
+            -- point and no prefab -- it was inferred from an `OxcartManager._gm63_042_01` field
+            -- that turns out to be a single gate reference. THE REAL BELL IS `app.Gm50_036_Bell`
+            -- (prefabs gm50_036 / _01 / _02 / _03; IrisHomeLife.lua:415-421 already classified it
+            -- as the Ring one-shot, and Aurora's placed bell is gm50_036_02).
+            local comps = scene and scene:call("findComponents(System.Type)", sdk.typeof("app.Gm50_036_Bell"))
+            local n = 0
+            pcall(function() n = comps:call("get_Length") or 0 end)
+            if n == 0 then pcall(function() n = comps:get_size() or 0 end) end
+            for i = 0, (tonumber(n) or 0) - 1 do
+                pcall(function()
+                    local c = comps:call("get_Item", i) or comps[i]
+                    local g = c:call("get_GameObject")
+                    local tr = g:call("get_Transform")
+                    local p = tr:call("get_Position")
+                    -- ⭐ store BOTH spaces. The distance test below is render-vs-render, but the
+                    -- herd walks in UNIVERSAL (call_tick reads get_UniversalPosition) -- taking a
+                    -- walk target out of the render cache is the coord shear this file has a law
+                    -- about. Read the universal off the SAME transform, in the same breath.
+                    local u = tr:call("get_UniversalPosition")
+                    B.bells[#B.bells + 1] = { x = p.x, y = p.y, z = p.z,
+                                              ux = u and u.x, uy = u and u.y, uz = u and u.z }
+                end)
+            end
+            if B.bell_scan_n ~= #B.bells then
+                B.bell_scan_n = #B.bells
+                pcall(function() log.info("[IrisHomesteadBox] bell scan: " .. #B.bells .. " oxcart-stop post(s) in the scene") end)
+            end
+        end
+        local pu9, pr = player_spaces()
+        if not pr then return end
+        for _, b in ipairs(B.bells or {}) do
+            local d = math.sqrt((b.x - pr.x) ^ 2 + (b.z - pr.z) ^ 2)
+            if not best or d < best then best = d; best_b = b end
+        end
+        -- fallback: a hand-registered spot still counts (universal-space compare)
+        if C.bell_set == true and pu9 then
+            local d = math.sqrt((pu9.x - C.bell_x) ^ 2 + (pu9.z - C.bell_z) ^ 2)
+            if not best or d < best then
+                best = d
+                best_b = { ux = C.bell_x, uy = C.bell_y, uz = C.bell_z }
+            end
+        end
+    end)
+    return best, best_b
+end
+
+-- how close counts as "at the bell". Was an inline 4.5 in three places while the UI text said
+-- 3m; one name so they can never drift apart again.
+local BELL_REACH = 4.5
+
+local function at_the_bell()
+    local d = nearest_bell_dist()
+    return d ~= nil and d <= BELL_REACH
+end
+
+-- ⛔⛔⛔ 08-13 THE NEUTER IS RETIRED, AND IT IS OFF BY DEFAULT. Aurora's field report:
+-- "it seems to have made the world permanently night time." That is exactly what this did.
+-- These args are not a DELTA to skip, they are the TARGET time -- so writing 0/0/0 set the
+-- clock to 00:00 and, worse, plausibly day 0 (the farming growth clock and the breeding
+-- gestation clock both read app.TimeManager get_InGameDay, so a zeroed day is not cosmetic).
+-- It never fired before today only because at_the_bell() was dead (the law at the top of this
+-- file); fixing that function is what let this loose.
+-- ⇒ The right fix for "no Await Oxcart at home" is to REMOVE THE PROMPT (bell_points_tick),
+-- not to corrupt the clock behind it. Left in place, disabled, purely so the reasoning
+-- survives with the code: turning `bell_neuter_skip` back on is a known-bad idea.
+local function bell_neuter(args, label)
+    if C.bell_neuter_skip ~= true then return end
+    if not at_the_bell() then return end
+    pcall(function()
+        args[3] = sdk.to_ptr(0)   -- hour   ⛔ TARGET, not delta -- this is the midnight bug
+        args[4] = sdk.to_ptr(0)   -- min
+        args[5] = sdk.to_ptr(0)   -- day    ⛔ and this one moves the farming/gestation clock
+    end)
+    -- ⭐ 08-13 THIS IS NOW A PURE AIRBAG, and that is a deliberate downgrade. It used to also
+    -- fire B.call_all() and a toast ("the neutered hold IS a bell-pull") -- but it had never
+    -- actually run once (at_the_bell() was dead, see the law at the top of this file), and now
+    -- that it CAN run, the Await prompt it was compensating for is removed outright by
+    -- bell_points_tick and ringing is the interact hook's job. Leaving the call in here would
+    -- mean a hold fired a second, competing herd-call behind the dialog -- and three methods
+    -- are hooked, of which `request` is very likely the internal delegate of the other two, so
+    -- it would fire more than once per press. Neuter the skip, say so, do nothing else.
+    pcall(function() log.info("[IrisHomesteadBox] " .. tostring(label)
+        .. " at the bell -> timeskip neutered (airbag; the prompt should already be gone)") end)
+end
+
+if not _G.IrisHomesteadOxcartWarpHook2 then
+    pcall(function()
+        local td = sdk.find_type_definition("app.TimeSkipManager")
+        -- the Await is a WAIT-IN-PLACE: hook BOTH the plain skip and the cart warp
+        -- (the first hook watched only the warp -- the log stayed silent, the receipt)
+        for _, mn in ipairs({ "requestTimeSkip", "requestOxcartWarp", "request" }) do
+            local m = td and td:get_method(mn)
+            if m then
+                local label = mn
+                sdk.hook(m, function(args) bell_neuter(args, label) end, function(r) return r end)
+                pcall(function() log.info("[IrisHomesteadBox] bell-neuter hook installed on " .. label) end)
+            else
+                pcall(function() log.info("[IrisHomesteadBox] bell-neuter: method NOT FOUND: " .. tostring(mn)) end)
+            end
+        end
+        _G.IrisHomesteadOxcartWarpHook2 = true
+    end)
+end
 B.bodies = B.bodies or {}     -- rec.id -> { addr = go addr, name, at }
 B.addrs = B.addrs or {}       -- go addr -> rec.id (produce gate + fast lookup)
 B.spawner = B.spawner or nil
@@ -75,6 +234,64 @@ end
 
 local function bridge() return rawget(_G, "IrisGriffinBridge") end
 
+-- ⭐⭐⭐ ROUND 10 - THE NATIVE AIM EXEMPTION (08-13, aim-probe receipts + il2cpp).
+-- Component surgery lost 9 rounds because the swing homing is app.LockOnController,
+-- which feeds setAimTargetInfoToCharacter - and it filters targets by ASKING, not by
+-- reading the target's components. It already exempts two classes natively: neutral/
+-- friend animals and THE OXCART OX (isAnimalWithoutOxcart - why the cart ox never
+-- draws swings). Residents claim the same exemptions: all three filter questions
+-- answer "not a targetable animal" for our registered bodies. Components stay WHOLE
+-- (HC/LockOn/Hate all restorable) - the game simply never considers them.
+-- Hooks persist across script resets; closures read _G fresh each call (pin-safe).
+if not B.aim_exempt_hooked then
+    B.aim_exempt_hooked = true
+    local function is_res_ch(ch)
+        local ra = rawget(_G, "IrisResidentChAddrs")
+        return ra ~= nil and ch ~= nil and ra[ch:get_address()] == true
+    end
+    pcall(function()
+        sdk.hook(sdk.find_type_definition("app.LockOnController")
+            :get_method("isAnimalWithoutOxcart(app.Character)"),
+            function(args)
+                local hit = false
+                pcall(function()
+                    hit = is_res_ch(sdk.to_managed_object(args[2]))
+                end)
+                thread.get_hook_storage().iris_res_exempt = hit
+            end,
+            function(retval)
+                if thread.get_hook_storage().iris_res_exempt then
+                    return sdk.to_ptr(false)
+                end
+                return retval
+            end)
+        pcall(function() log.info("[IrisHomesteadBox] aim exemption armed: isAnimalWithoutOxcart") end)
+    end)
+    for _, mname in ipairs({
+        "isCharacterWithoutNeutralOrFriendAnimal(app.LockOnTargetWork)",
+        "isTargetEnableLockOn(app.LockOnTargetWork)",
+    }) do
+        pcall(function()
+            sdk.hook(sdk.find_type_definition("app.LockOnController"):get_method(mname),
+                function(args)
+                    local hit = false
+                    pcall(function()
+                        local work = sdk.to_managed_object(args[3])
+                        hit = is_res_ch(work and work:call("get_Character"))
+                    end)
+                    thread.get_hook_storage().iris_res_exempt2 = hit
+                end,
+                function(retval)
+                    if thread.get_hook_storage().iris_res_exempt2 then
+                        return sdk.to_ptr(false)
+                    end
+                    return retval
+                end)
+            pcall(function() log.info("[IrisHomesteadBox] aim exemption armed: " .. mname) end)
+        end)
+    end
+end
+
 local plots_cache = nil
 local function owned_plots()
     if plots_cache then return plots_cache end
@@ -93,7 +310,7 @@ local function plot_anchor(p)
     return p.ux, p.uy, p.uz
 end
 
-local function player_go()
+player_go = function()          -- ⛔ assignment, NOT `local function` (see the law above)
     local go = nil
     pcall(function()
         local pl = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer")
@@ -107,7 +324,7 @@ end
 -- and the two spaces shear apart the moment the game re-bases its tiles. Distance is
 -- measured universal-vs-universal; the SPAWNER speaks RENDER, so anchors convert through
 -- the player's own universal-render offset at the moment of use (the taming recipe).
-local function player_spaces()
+player_spaces = function()      -- ⛔ assignment, NOT `local function` (see the law above)
     local u, r = nil, nil
     pcall(function()
         local pgo = player_go()
@@ -225,7 +442,14 @@ local function spawn_resident(rec, ax, ay, az, slot)
     -- also fixes Y to just above the TRUE floor (better than the old blind +2.5).
     local ux, uz, uy = nil, nil, ay + 2.5
     local cast9 = rawget(_G, "route3_cast_ground_below")
+    -- ⭐ 08-12 SPAWN PINS (the Homestead Screen's core, shipped early): a soul with a
+    -- personal pin spawns THERE -- where the player stood to set it (known-good ground,
+    -- +0.6 drop-in) -- and skips the ring lottery entirely.
+    if type(rec.home_pin) == "table" and tonumber(rec.home_pin.x) then
+        ux, uy, uz = tonumber(rec.home_pin.x), (tonumber(rec.home_pin.y) or ay) + 0.6, tonumber(rec.home_pin.z)
+    end
     for try9 = 0, 7 do
+        if ux then break end   -- pinned: the ring never runs
         local a9 = ((slot + try9 * 11) * 2.399963)
         local r9 = (tonumber(C.ring_min) or 4.0)
             + ((slot + try9) % 3) * ((tonumber(C.ring_max) or 12.0) - (tonumber(C.ring_min) or 4.0)) / 3.0
@@ -260,6 +484,21 @@ local function spawn_resident(rec, ax, ay, az, slot)
         local base = big and 0.55 or 1.0
         local gene = rec.iv and tonumber(rec.iv.size) or 15
         sc = base * (iris_size_mult_for and iris_size_mult_for(rec.species, gene, base) or 1.0)
+        -- ⭐ 08-13 (Aurora: "everyone at home looks very large"): the companion path also
+        -- multiplies the body's innate wild variance (rec.wild_base, 0.85-1.15) - home
+        -- bodies now wear it too, so a resident is EXACTLY its summoned size
+        local wb = tonumber(rec.wild_base)
+        if wb and wb > 0.5 and wb < 1.5 then sc = sc * wb end
+        -- 08-12 BREEDING slice 1: newborns are SMALL -- 0.45x at birth easing to their
+        -- full gene size across the growth days (the in-game clock)
+        local d0, d1 = tonumber(rec.growth_born), tonumber(rec.growth_mature)
+        if d0 and d1 then
+            local b9 = bridge()
+            local day9 = b9 and b9.breed_day and b9.breed_day() or nil
+            if day9 and day9 < d1 then
+                sc = sc * (0.45 + 0.55 * math.max(0.0, math.min(1.0, (day9 - d0) / math.max(1, d1 - d0))))
+            end
+        end
     end)
     local cfg = {
         spawnIdle = true,
@@ -292,6 +531,133 @@ local function spawn_resident(rec, ax, ay, az, slot)
     return ok
 end
 
+-- ⭐ 08-12 FAST-TRACKED (Aurora: "the bell moving creatures... to help fix this"): THE
+-- CALL. Every resident walks to the player -- the fix for wall-stuck and river-strayed
+-- bodies, and the breeding gather. v1 trigger: the call key (K) near the plot + the
+-- panel button; the oxcart bell's Examine interact takes over in the bell slice.
+-- Movement = the yoke recipe: think stop + FSM parked + walk clip + position steps
+-- (the sliding law: clips must own the body or hooves slide).
+local function call_clip(ch, bank, id)
+    pcall(function()
+        local mo = ch:call("get_Motion")
+        local layer = mo and mo:call("getLayer", 0)
+        if layer then
+            layer:call("changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                bank, id, 0.0, 8.0, 1, 1)
+        end
+    end)
+end
+
+local function call_hold(ch, go, hold)
+    pcall(function() ch:call("set_IsThinkStop(System.Boolean)", hold == true) end)
+    pcall(function()
+        local fsm = go:call("getComponent(System.Type)", sdk.typeof("via.motion.MotionFsm2"))
+        if fsm then fsm:call("set_Enabled", hold ~= true) end
+    end)
+    -- ⛔ 08-12 (Aurora: "they stutter over... the ox slid back after it arrived"): the
+    -- NAV CONTROLLER translates the TRANSFORM directly (the yoke rite's law) - it fights
+    -- every universal step of the call walk, and after the handback it walks the body
+    -- straight back to its old anchor. Cut the muscle when the call starts and LEAVE it
+    -- cut at arrival (the arrival comment always promised "nav safely cut" - now it is).
+    -- Critters without a nav controller are untouched.
+    pcall(function()
+        local nav = go:call("getComponent(System.Type)", sdk.typeof("app.MonsterNavigationController"))
+        if nav then nav:call("set_Enabled", false) end
+    end)
+end
+
+-- ⭐ 08-13 THE WALK TARGET (Aurora: "when you select one, it moves them to the bell").
+-- `tgt` = { ux, uy, uz } in UNIVERSAL space, or nil for "walk to whoever rang" (the player).
+-- ⛔ It must be universal: call_tick measures with get_UniversalPosition, and B.bells caches
+-- render as well -- handing it a render point is the coord shear this file already has scars from.
+B.call_all = function(tgt)
+    local n = 0
+    for _, e in pairs(B.bodies) do
+        if e.ch and e.addr then e.calling = true; e.call_clip_on = nil; n = n + 1 end
+    end
+    B.call_target = tgt
+    B.call_until = os.clock() + 45.0
+    B.call_last = nil     -- the first tick must not bill itself for the idle gap since the last call
+    pcall(function() log.info("[IrisHomesteadBox] THE CALL: " .. n .. " resident(s) called to "
+        .. (tgt and "the bell" or "the player")) end)
+    return n
+end
+
+-- ⭐ 08-12 THE HOMESTEAD SCREEN: call ONE resident by soul id (the Animals tab's
+-- "call this one"). Same machinery as call_all - only the one body gets e.calling.
+B.call_one = function(id, tgt)
+    local e = B.bodies[id]
+    if not (e and e.ch and e.addr) then return false end
+    e.calling = true
+    e.call_clip_on = nil
+    B.call_target = tgt
+    B.call_until = os.clock() + 45.0
+    B.call_last = nil
+    pcall(function() log.info("[IrisHomesteadBox] THE CALL (one): " .. tostring(e.name) .. " called to "
+        .. (tgt and "the bell" or "the player")) end)
+    return true
+end
+
+local function call_tick(now)
+    if not B.call_until then return end
+    if now > B.call_until then
+        for _, e in pairs(B.bodies) do
+            if e.calling then
+                e.calling = nil
+                pcall(function() call_hold(e.ch, e.ch:call("get_GameObject"), false) end)
+            end
+        end
+        B.call_until = nil
+        B.call_target = nil
+        return
+    end
+    local pu, pr = player_spaces()
+    if not (pu and pr) then return end
+    -- ⭐ 08-13 steer to the BELL when one rang, else to the player (the K key / panel button).
+    local tg = B.call_target or pu
+    local dt = math.max(0.005, math.min(0.1, now - (tonumber(B.call_last) or now)))
+    B.call_last = now
+    local live = 0
+    for _, e in pairs(B.bodies) do
+        if e.calling and e.ch then
+            pcall(function()
+                local go = e.ch:call("get_GameObject")
+                local tr = go:call("get_Transform")
+                local u = tr:call("get_UniversalPosition")
+                -- ⛔ the ARRIVAL test below must measure against the SAME point we steer at:
+                -- steering at the bell while testing arrival against the player would leave
+                -- them shuffling at the bell forever whenever she stepped away from it.
+                local dx, dz = (tg.x or tg.ux) - u.x, (tg.z or tg.uz) - u.z
+                local dd = math.sqrt(dx * dx + dz * dz)
+                if dd < 3.0 then
+                    -- arrived: hand the body back (small ones resume their wander at
+                    -- your feet; parked bigs stand with you, nav still safely cut).
+                    -- ⭐ 08-12: the arrival spot becomes the body's new truth - without
+                    -- this, the navmesh-snap verifier warps it back to the OLD want.
+                    e.calling = nil
+                    e.want = { x = u.x, y = u.y, z = u.z }
+                    call_hold(e.ch, go, false)
+                    return
+                end
+                live = live + 1
+                call_hold(e.ch, go, true)
+                if not e.call_clip_on then
+                    e.call_clip_on = true
+                    call_clip(e.ch, 0, 100)   -- com_walk_loop, the ch99 rig convention
+                end
+                local step = math.min(dd, 1.7 * dt)
+                tr:call("set_UniversalPosition",
+                    make_position(u.x + dx / dd * step, u.y, u.z + dz / dd * step))
+                local yaw = math.atan(dx, dz)
+                local q = make_quat_identity()
+                q.y = math.sin(yaw / 2.0); q.w = math.cos(yaw / 2.0)
+                tr:call("set_Rotation", q)
+            end)
+        end
+    end
+    if live == 0 then B.call_until = nil; B.call_target = nil end
+end
+
 -- ⛔ 08-12 (Clucky: killed at her own homestead for +6 XP): residents had NO protection --
 -- the party friend-shield only shapes pawn TARGETING, not the player's sword. The ritual
 -- shield recipe (IrisTaming's set_immunity, replicated): the body's HitController refuses
@@ -305,6 +671,30 @@ local function resident_shield(ch)
         for _, sig in ipairs({ "set_IsDamageZero", "set_IsIgnoreDamageHit", "set_DamageCollisionOff" }) do
             pcall(function() hc:call(sig, true) end)
         end
+        -- ⭐⭐ 08-13 AIM PROBE VERDICT (the dump receipts): LockOnTarget AND
+        -- AIActionTargetInfoController were both confirmed DISABLED on the live
+        -- chicken while the hoe still homed - our levers stick, they were just the
+        -- wrong ones. The ONLY targeting component still enabled on the resident:
+        -- app.HateSystem, the combat-participation ledger - and the round-6 suspects
+        -- ladder's unreached last rung ("then the hate side"). Hate goes OFF, and
+        -- the HitController comes BACK - if hate is the homing's true handle, the
+        -- animals keep their whole bodies (milk/eggs/interacts) at the same time.
+        pcall(function() hc:call("set_Enabled", true) end)
+        pcall(function()
+            local hs = go:call("getComponent(System.Type)", sdk.typeof("app.HateSystem"))
+            if hs then hs:call("set_Enabled", false) end
+        end)
+        -- ⭐ 08-13 round 7 (Aurora's clean experiment: re-stable Clucky = hoe fine;
+        -- near the rat = auto-aim at the rat - 100% the resident BODIES): the aim's
+        -- physical handle is app.LockOnTarget (the probe clears its TargetData to
+        -- de-target the griffin). No component, no handle, nothing to acquire.
+        pcall(function()
+            local lo = go:call("getComponent(System.Type)", sdk.typeof("app.LockOnTarget"))
+            if lo then
+                pcall(function() lo:set_field("TargetData", nil) end)
+                lo:call("set_Enabled", false)
+            end
+        end)
     end)
 end
 
@@ -374,14 +764,622 @@ local function adopt_new_instances()
     end)
 end
 
+-- ══════════════════════════════════════════════════════════════════════════════════════
+-- THE HOMESTEAD BELL POST: deciding which of its three prompts the player may use
+-- ══════════════════════════════════════════════════════════════════════════════════════
+-- Aurora 08-13: "I only want the bell interaction to work and not the await oxcart... just
+-- replace 'Await oxcart' entirely with the examine bell ring (but only in a homestead plot)."
+--
+-- ⭐ THE SHAPE OF THE PROBLEM (offline prefab table + catalog.json, not guessed): ONE prefab
+-- (gm50_036_02) carries THREE interact points on THREE different owner components:
+--     app.Gm50_036       IconType 12 WaitOxcart  CharacterType 1 (Player)  <- Capcom lit this
+--     app.Gm50_036_Bell  IconType  0 Search      CharacterType 8 (Human)   <- the RING
+--     app.gm81_128       IconType  0 Search      CharacterType 1 (Player)  <- notice board
+-- So "Await Oxcart" was never ours to remove by NOT adding it -- it ships player-capable.
+-- The fix is the exact INVERSE of Interactables.lua's Engine A unlock: a per-point data write
+-- clearing the Player bit. Same field, same readback discipline, same restore.
+--
+-- ⛔⛔ WE WALK THE BELL'S OWN GAMEOBJECT, NEVER SCAN BY CLASS. `app.gm81_128` is ALSO the
+-- class of the homestead DEED SIGN -- a scene-wide scan that neutered gm81_128 near a plot
+-- would take away the sign Aurora buys and manages her plots with. Starting from the bell
+-- component and walking ITS GameObject's components cannot reach any other object.
+--
+-- ⛔ 1 -> 8 (Human), never 1 -> 0. CharacterType 8 is a proven-legal authored value (405
+-- NPC-only points ship with it, and it is what Interactables' restore writes back); an empty
+-- mask is authored nowhere in the game and is untested.
+local BELL_LOCK_ICON = { [12] = "Await Oxcart", [0] = "signboard" }
+local bell_pts = {}          -- [point addr] = { point, old_ct, tag }
+local bell_scan_at = 0.0
+local bell_census_done = {}  -- [go addr] = true, so the diagnostic prints once per post
+
+local function _addr(o)
+    local a = nil
+    pcall(function() a = o:get_address() end)
+    return a
+end
+
+local function _arr(list)
+    local out = {}
+    if not list then return out end
+    pcall(function()
+        -- ⚠ per-item pcall: one throwing element must not abandon the whole array (a single
+        -- outer pcall would silently return a SHORT list, which reads exactly like "the scene
+        -- doesn't have that component").
+        local n = nil
+        pcall(function() n = tonumber(list:call("get_Length")) end)
+        if n == nil then pcall(function() n = tonumber(list:get_size()) end) end
+        for i = 0, (n or 0) - 1 do
+            local v = nil
+            pcall(function() v = list:call("get_Item", i) end)
+            if v == nil then pcall(function() v = list[i] end) end
+            if v then out[#out + 1] = v end
+        end
+    end)
+    return out
+end
+
+-- write one point's CharacterType, verify the readback, and remember the old value.
+-- Returns true only when the engine agreed.
+local function bell_set_ct(point, new_ct, tag)
+    local a = _addr(point)
+    if not a then return false end
+    local ct = nil
+    pcall(function() ct = tonumber(point:get_field("CharacterType")) end)
+    if ct == nil or ct == new_ct then return false end
+    local wrote = pcall(function() point:set_field("CharacterType", new_ct) end)
+    local rb = nil
+    if wrote then pcall(function() rb = tonumber(point:get_field("CharacterType")) end) end
+    if rb ~= new_ct then
+        pcall(function() log.info("[IrisHomesteadBox] bell point " .. tostring(tag)
+            .. ": CharacterType write REFUSED (" .. tostring(ct) .. " -> " .. tostring(new_ct)
+            .. ", readback " .. tostring(rb) .. ")") end)
+        return false
+    end
+    if bell_pts[a] == nil then bell_pts[a] = { point = point, old_ct = ct, tag = tag } end
+    pcall(function() log.info("[IrisHomesteadBox] bell point " .. tostring(tag)
+        .. ": CharacterType " .. tostring(ct) .. " -> " .. tostring(new_ct)) end)
+    return true
+end
+
+local function bell_points_restore(why)
+    local n = 0
+    for a, r in pairs(bell_pts) do
+        -- ⛔ these are managed wrappers cached across ticks; after an area change they can
+        -- point at freed data, and a pcall does NOT catch an access violation -- but it does
+        -- catch the ordinary "invalid object" throw, which is the common case. Callers must
+        -- also DROP the table without writing when the world went away (see the sweep).
+        pcall(function() r.point:set_field("CharacterType", r.old_ct) end)
+        bell_pts[a] = nil
+        n = n + 1
+    end
+    if n > 0 then
+        pcall(function() log.info("[IrisHomesteadBox] bell points restored: " .. n
+            .. " (" .. tostring(why) .. ")") end)
+    end
+end
+
+-- forget every cached point WITHOUT writing to it (the world is gone / the wrappers are stale)
+local function bell_points_forget(why)
+    local n = 0
+    for a in pairs(bell_pts) do bell_pts[a] = nil; n = n + 1 end
+    bell_census_done = {}
+    if n > 0 then
+        pcall(function() log.info("[IrisHomesteadBox] bell points dropped unwritten: " .. n
+            .. " (" .. tostring(why) .. ")") end)
+    end
+end
+
+-- ⭐⭐ 08-13 (Aurora: "can I just confirm the removal of the await oxcart is only for the
+-- oxcart bells in the homestead? I don't want to break the normally placed in-world ones which
+-- need that action."). A plot RADIUS alone does not promise that -- if the game happened to
+-- author a real oxcart stop within the radius of her plot, the radius would silence it too.
+-- ⇒ THE REAL GATE IS IDENTITY: a post is only touched if it stands where SHE PLACED a bell,
+-- read from the furnish system's own record file. A world oxcart stop is not in that file, so
+-- it can never match, whatever the distance.
+local placed_bells, placed_bells_at = nil, 0.0
+local function placed_bell_list()
+    local now = os.clock()
+    if placed_bells and now < placed_bells_at then return placed_bells end
+    placed_bells_at = now + 5.0
+    local out = {}
+    pcall(function()
+        local d = json.load_file("IRIS/iris_furniture.json")
+        for _, r in ipairs(d or {}) do
+            local gid = tostring(r.gid or "")
+            -- every oxcart-bell prefab: gm50_036, _01, _02, _03
+            if gid:match("^gm50_036") and tonumber(r.ux) and tonumber(r.uz) then
+                out[#out + 1] = { x = tonumber(r.ux), y = tonumber(r.uy) or 0.0, z = tonumber(r.uz) }
+            end
+        end
+    end)
+    placed_bells = out
+    return placed_bells
+end
+
+-- does a post at this UNIVERSAL position correspond to a bell Aurora placed herself?
+local function is_placed_bell(u, radius)
+    local r = tonumber(radius) or 3.0
+    for _, b in ipairs(placed_bell_list()) do
+        local dx, dz = b.x - u.x, b.z - u.z
+        if dx * dx + dz * dz <= r * r then return true end
+    end
+    return false
+end
+
+-- is this world position inside one of the owned plots? (UNIVERSAL space, like plot anchors)
+local function near_owned_plot(ux, uz, radius)
+    local r = tonumber(radius) or 60.0
+    for _, p in ipairs(owned_plots()) do
+        local ax, _, az = plot_anchor(p)
+        if ax and az then
+            local dx, dz = ax - ux, az - uz
+            if dx * dx + dz * dz <= r * r then return true end
+        end
+    end
+    return false
+end
+
+-- patch every interact point on ONE component. `role` decides the rule.
+local function bell_patch_comp(comp, tn, role, census)
+    pcall(function()
+        -- BOTH lists must be written: the authored template and the live runtime copy the
+        -- InteractiveObject serves from (Interactables' law).
+        local lists = {}
+        pcall(function() lists[#lists + 1] = comp:get_field("InteractiveObjectDataList") end)
+        local io = nil
+        pcall(function() io = comp.InteractiveObject end)
+        if not io then pcall(function() io = comp:get_field("InteractiveObject") end) end
+        if io then pcall(function() lists[#lists + 1] = io:get_field("DataList") end) end
+
+        for _, list in ipairs(lists) do
+            for idx, point in ipairs(_arr(list)) do
+                local icon, ct
+                pcall(function() icon = tonumber(point:get_field("IconType")) end)
+                pcall(function() ct = tonumber(point:get_field("CharacterType")) end)
+                if census then
+                    local cpi = nil
+                    if io then pcall(function() cpi = io:call("canPlayerInteract", idx - 1) end) end
+                    pcall(function() log.info(string.format(
+                        "[IrisHomesteadBox] bell census: %s point[%d] icon=%s ct=%s canPlayerInteract=%s",
+                        tn, idx - 1, tostring(icon), tostring(ct), tostring(cpi))) end)
+                end
+                if icon and ct then
+                    local player_bit = (ct % 2) == 1
+                    local human_bit = (math.floor(ct / 8) % 2) == 1
+                    if role == "await" and icon == 12 and player_bit then
+                        bell_set_ct(point, (ct == 1) and 8 or (ct - 1), "Await Oxcart")
+                    elseif role == "sign" and icon == 0 and player_bit then
+                        bell_set_ct(point, (ct == 1) and 8 or (ct - 1), "signboard")
+                    elseif role == "ring" and icon == 0 and human_bit and not player_bit then
+                        -- ⭐ light the RING ourselves rather than depending on Interactables'
+                        -- name-normalised unlock: a SPAWNED gimmick can report a rig name its
+                        -- catalog key never matches ("a spawned gm80_257 reports gmSeat"), in
+                        -- which case that unlock silently never reaches this point and there
+                        -- is no prompt to ring at all.
+                        bell_set_ct(point, ct + 1, "ring the bell")
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- find every component of `type_name` whose GameObject passes `accept(universal_pos)`.
+local function bell_each(scene, type_name, accept, fn)
+    pcall(function()
+        local comps = scene:call("findComponents(System.Type)", sdk.typeof(type_name))
+        for _, c in ipairs(_arr(comps)) do
+            pcall(function()
+                local go = c:call("get_GameObject")
+                local tr = go and go:call("get_Transform")
+                local u = tr and tr:call("get_UniversalPosition")
+                if not u then return end
+                if not accept(u) then return end
+                local ga = _addr(go)
+                local key = tostring(ga) .. "|" .. type_name
+                local census = (ga ~= nil and not bell_census_done[key])
+                if census then bell_census_done[key] = true end
+                fn(c, go, u, census)
+            end)
+        end
+    end)
+end
+
+local function bell_points_tick(now)
+    if C.bell_prompts == false then return end
+    if now < bell_scan_at then return end
+    bell_scan_at = now + 2.0
+    -- ⚠ re-asserted on a cadence rather than written once: the WaitOxcart point's component
+    -- carries IsRegistInteractAuto = 0, i.e. its owner registers it itself and may re-stamp
+    -- the runtime copy from the authored template on a state change.
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene = sm and sdk.call_native_func(sm, smt, "get_CurrentScene")
+        if not scene then return end
+
+        -- ⛔⛔ 08-13 FIELD RECEIPT, and it killed the previous version outright. The census
+        -- printed exactly ONE line -- `app.Gm50_036_Bell point[0]` -- and no app.Gm50_036 at
+        -- all, so the Await Oxcart point does NOT live on the bell's GameObject. The post is
+        -- several GameObjects, one per owner component. Walking the bell's own components can
+        -- never reach the sign, which is why "Await Oxcart (Hold)" survived the last build.
+        -- ⇒ find each owner class SEPARATELY, scene-wide, and gate each by position.
+        -- ⛔⛔ BOTH gates, and the second one is the promise: near an owned plot AND standing
+        -- exactly where the furnish system records that SHE placed a bell. A vanilla oxcart
+        -- stop is in no record file, so no distance makes it eligible.
+        local function in_plot(u)
+            if not near_owned_plot(u.x, u.z, C.bell_plot_r) then return false end
+            if not is_placed_bell(u, C.bell_own_r) then return false end
+            return true
+        end
+
+        -- 1) the BELL itself -> light the ring. Also remember where the posts are, so the
+        --    notice board can be identified by standing ON one.
+        local posts = {}
+        bell_each(scene, "app.Gm50_036_Bell", in_plot, function(c, go, u, census)
+            posts[#posts + 1] = u
+            bell_patch_comp(c, "app.Gm50_036_Bell", "ring", census)
+        end)
+
+        -- 2) "Await Oxcart" -> app.Gm50_036. ✅ Safe to sweep scene-wide: that class is ONLY
+        --    the oxcart-stop post, so the plot radius is the whole gate it needs.
+        bell_each(scene, "app.Gm50_036", in_plot, function(c, go, u, census)
+            bell_patch_comp(c, "app.Gm50_036", "await", census)
+        end)
+
+        -- 3) the notice board -> app.gm81_128. ⛔⛔ THAT CLASS IS ALSO THE HOMESTEAD DEED SIGN,
+        --    the thing Aurora buys and manages plots with. A plot-radius sweep would silence
+        --    it. So this one is gated on being physically INSIDE a bell post (2m) -- a deed
+        --    sign standing 2m inside the bell is not a thing.
+        if C.bell_hide_sign ~= false and #posts > 0 then
+            bell_each(scene, "app.gm81_128", function(u)
+                if not in_plot(u) then return false end
+                for _, p in ipairs(posts) do
+                    local dx, dy, dz = p.x - u.x, (p.y or 0) - (u.y or 0), p.z - u.z
+                    if dx * dx + dy * dy + dz * dz <= 2.0 * 2.0 then return true end
+                end
+                return false
+            end, function(c, go, u, census)
+                bell_patch_comp(c, "app.gm81_128", "sign", census)
+            end)
+        end
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════════════
+-- THE RING: a native dialog asking who should come
+-- ══════════════════════════════════════════════════════════════════════════════════════
+-- ⛔ RetVal (il2cpp app.ui010101.RetVal, authoritative -- three modules in this tree carry a
+-- WRONG mapping in their comments and self-correct later): Sel0=1 Sel1=2 Sel2=3 Sel3=4 Cancel=5
+local DLG_TYPE = 14          -- app.GuiDefine.GuiType.Dialog
+local PER_PAGE = 3
+local dlg = { open = false, baseline = nil, opened_at = 0, phase = nil,
+              nil_since = nil, closed_at = 0, page = 0, opts = nil, more = false, tgt = nil }
+local ring_pending = nil     -- os.clock() at which the ring's dialog should open
+
+local function _gm() return sdk.get_managed_singleton("app.GuiManager") end
+
+local function _dialog_pick()
+    local p
+    pcall(function()
+        local gm = _gm()
+        local rv = gm and gm:call("getDialogState")
+        if rv == nil then return end
+        if type(rv) == "number" then p = rv
+        else pcall(function() p = sdk.to_int64(rv) & 0xFFFFFFFF end) end
+    end)
+    return p
+end
+
+local function _close_dialog()
+    pcall(function()
+        local gm = _gm()
+        local d = gm and gm:get_field("Dialog")
+        if d then d:call("reqClose") end
+        if gm then gm:call("requestHideGuiType", DLG_TYPE) end
+    end)
+    dlg.open, dlg.phase, dlg.nil_since, dlg.opts = false, nil, nil, nil
+    dlg.closed_at = os.clock()
+    if _G.IrisNativeDialogOwner and _G.IrisNativeDialogOwner.who == "homesteadbox" then
+        _G.IrisNativeDialogOwner = nil
+    end
+end
+pcall(_close_dialog)   -- softlock guard: a reload must never strand a paused dialog
+
+-- ⛔ SIX other IRIS modules poll the SAME singleton getDialogState and none of them publishes
+-- ownership, so two readers can both act on one pick. Ask the dialog itself whether it is
+-- already on screen, and publish a claim for everyone who comes after us.
+local function _dialog_busy_elsewhere()
+    if _G.IrisFurnishUIOpen or _G.IrisFurnishFootprint or _G.IrisStableUIOpen then return true end
+    local o = _G.IrisNativeDialogOwner
+    if o and o.who ~= "homesteadbox" and (os.clock() - (tonumber(o.at) or 0)) < 60.0 then return true end
+    local disp = nil
+    pcall(function()
+        local gm = _gm()
+        local d = gm and gm:get_field("Dialog")
+        if d then disp = d:call("get_IsDisp") end
+    end)
+    return disp == true
+end
+
+local function _show_dialog(prompt, o1, o2, o3, o4, phase)
+    pcall(function()
+        local gm = _gm()
+        local d = gm and gm:get_field("Dialog")
+        if not d then return end
+        pcall(function() d:set_field("Ret", 0) end)   -- belt & braces; the baseline is the real mechanism
+        gm:call("requestGuiType", DLG_TYPE)
+        -- arg 20 = restrain_input_time. Every other module passes 0.0; 0.3 buys native input
+        -- restraint over the B-release edge that opened us, on top of our own debounce.
+        d:call("reqDisp", prompt, o1 or "", o2 or "", o3 or "", o4 or "",
+            true, 0, true, 58, 0, -1, nil,
+            false, false, false, false, false, false, true, 0.3)
+        dlg.open, dlg.opened_at, dlg.baseline = true, os.clock(), _dialog_pick()
+        dlg.phase, dlg.nil_since = phase, nil
+        _G.IrisNativeDialogOwner = { who = "homesteadbox", at = os.clock() }
+    end)
+end
+
+-- the animal picker page. ⭐ A CANCEL ON EVERY PAGE: when the list paginates we show TWO
+-- animals and keep BOTH tail options -- IrisFarming shipped the 3+one-tail version and it left
+-- a paginated list with no visible way out on page one.
+local function _show_pick_page(page)
+    local rows = home_rows()
+    if #rows == 0 then
+        _close_dialog()
+        pcall(function()
+            local T = rawget(_G, "IrisTaming")
+            if T and T.prompt then T.prompt("THE BELL RINGS", "Nobody is home to answer it.", 4.0, 0xFFB0C0FF) end
+        end)
+        return
+    end
+    local per = (#rows > PER_PAGE) and (PER_PAGE - 1) or PER_PAGE
+    local first = page * per
+    local opts = {}
+    for i = 1, per do
+        local r = rows[first + i]
+        if r then opts[#opts + 1] = r end
+    end
+    if #opts == 0 then                      -- ran off the end: wrap to page 0
+        -- ⛔ `page` itself must be reset, not just dlg.page -- the assignment below writes
+        -- `page` back onto dlg and would otherwise restore the off-the-end value, so the
+        -- next "More..." would page into nothing again, forever.
+        page = 0
+        first, opts = 0, {}
+        for i = 1, per do
+            local r = rows[i]
+            if r then opts[#opts + 1] = r end
+        end
+    end
+    local more = (first + #opts) < #rows
+    local labels = {}
+    for i, r in ipairs(opts) do
+        labels[i] = tostring(r.name or "?") .. (r.label and ("  (" .. tostring(r.label) .. ")") or "")
+    end
+    dlg.opts, dlg.more, dlg.page = opts, more, page
+    labels[#labels + 1] = more and "More..." or "Cancel"
+    if more then labels[#labels + 1] = "Cancel" end
+    _show_dialog("Who should come to the bell?", labels[1], labels[2], labels[3], labels[4], "pick")
+end
+
+local function _bell_target()
+    local _, b = nearest_bell_dist()
+    if b and b.ux then return { ux = b.ux, uy = b.uy, uz = b.uz } end
+    return nil
+end
+
+local function _ring_open()
+    if dlg.open or _dialog_busy_elsewhere() then
+        pcall(function() log.info("[IrisHomesteadBox] ring: another dialog owns the screen - skipped") end)
+        return
+    end
+    local rows = home_rows()
+    if #rows == 0 then
+        pcall(function()
+            local T = rawget(_G, "IrisTaming")
+            if T and T.prompt then T.prompt("THE BELL RINGS", "Nobody is home to answer it.", 4.0, 0xFFB0C0FF) end
+        end)
+        return
+    end
+    dlg.tgt = _bell_target()
+    dlg.page = 0
+    _show_dialog("The bell rings out across the homestead. Who should come?",
+        "All animals", "Select an animal", "Cancel", nil, "bell")
+end
+
+local function _dialog_tick()
+    if not dlg.open then
+        if ring_pending and os.clock() >= ring_pending then
+            ring_pending = nil
+            _ring_open()
+        end
+        return
+    end
+    local now = os.clock()
+    local raw = _dialog_pick()
+    -- LIVENESS: a live dialog answers with a number (0 while untouched). Sustained nil means
+    -- something else took the screen -- better than waiting out the 30s stuck guard.
+    if raw == nil then
+        dlg.nil_since = dlg.nil_since or now
+        if now - dlg.nil_since > 1.5 then _close_dialog(); return end
+    else
+        dlg.nil_since = nil
+    end
+    local p = raw
+    if p ~= nil and p ~= dlg.baseline then dlg.baseline = p else p = nil end
+    if p ~= nil and (now - dlg.opened_at) < 0.25 then p = nil end     -- debounce
+    if p == nil then
+        if now - dlg.opened_at > 30.0 then _close_dialog() end
+        return
+    end
+
+    if dlg.phase == "bell" then
+        if p == 1 then
+            local tgt = dlg.tgt
+            _close_dialog()
+            B.call_all(tgt)
+        elseif p == 2 then
+            _close_dialog()
+            -- a breath between a dialog and its follow-up (the deed sign's law)
+            dlg.next_at, dlg.next_page = now + 0.35, 0
+        else
+            _close_dialog()
+        end
+        return
+    end
+
+    if dlg.phase == "pick" then
+        local opts, more = dlg.opts or {}, dlg.more
+        local n = #opts
+        if p >= 1 and p <= n then
+            local row = opts[p]
+            local tgt = dlg.tgt
+            _close_dialog()
+            if row and row.id then
+                local okc = B.call_one(row.id, tgt)
+                if not okc then
+                    pcall(function()
+                        local T = rawget(_G, "IrisTaming")
+                        if T and T.prompt then T.prompt(tostring(row.name),
+                            "is home, but has no body out here to walk.", 4.0, 0xFFB0C0FF) end
+                    end)
+                end
+            end
+        elseif more and p == n + 1 then
+            _close_dialog()
+            dlg.next_at, dlg.next_page = now + 0.35, (dlg.page or 0) + 1
+        else
+            _close_dialog()   -- the tail Cancel, or the native Cancel (5)
+        end
+        return
+    end
+    _close_dialog()
+end
+
+-- the deferred follow-up (page turns and the bell -> picker handoff)
+local function _dialog_followup()
+    if dlg.next_at and not dlg.open and os.clock() >= dlg.next_at then
+        local pg = dlg.next_page or 0
+        dlg.next_at, dlg.next_page = nil, nil
+        _show_pick_page(pg)
+    end
+end
+
+-- ⛔ THE READER RUNS FIRST AND UNGUARDED. Our own dialog pauses the world (is_pause=true), so
+-- a reader sitting behind a pause guard can never see the answer -- that is a softlock, and it
+-- is a law this repo wrote in blood (the deed sign).
+re.on_application_entry("UpdateBehavior", function()
+    if C.enabled == false then return end
+    pcall(_dialog_tick)
+    pcall(_dialog_followup)
+end)
+
+-- ⭐ THE TRIGGER: observe the bell's OWN native interact STARTING. We never skip it, never
+-- cancel it, never call into the interact system -- we only notice that it fired.
+-- ⭐⭐ 08-13 MOVED onEnd -> onStart (Aurora: "can we have the dialogue appear before the ring?
+-- Right now it feels weird to ring the bell and wait 5 seconds for the dialogue box"). She is
+-- right, and the old placement was the cause: onEndInteractBase does not fire until the whole
+-- ring animation has played out. Firing at the START means the dialog opens on the next game
+-- tick -- and because the dialog pauses the world (is_pause), the ring is held at its first
+-- frame BEHIND the menu and only plays out once she has answered. So the dialogue really does
+-- come first.
+-- ⚠ Opening a dialog during a live interact is not new ground: IrisDeedSign ships exactly this
+-- (it preempts the requestGuiType that the native Examine itself raises). What is forbidden is
+-- driving the interact FLOW -- cancelInteract / endInteract / abort -- and we do none of that.
+-- ⛔ THE ORPHAN LAW: REFramework hooks are permanent for the process, and a script reset
+-- leaves the OLD closure installed with its OLD upvalues -- so a hook body written inline can
+-- only ever be changed by restarting the game. Route it through a _G entry point that every
+-- generation re-assigns, and edits take effect on a plain reset. (This is the same pattern
+-- IrisWeaponMount uses for its action-block hook.)
+_G.IrisHomesteadBellRing = function(bell_u)
+    if C.enabled == false or C.bell_dialog == false then return end
+    if not B.near then return end
+    -- ⛔ IDENTITY, not proximity: only a bell SHE PLACED opens the herd dialog. Ringing a real
+    -- world oxcart-stop bell that happens to be near the plot behaves exactly as vanilla.
+    if not (bell_u and is_placed_bell(bell_u, C.bell_own_r)) then return end
+    -- next tick, not this one: the dialog is raised from our own UpdateBehavior pump, never
+    -- from inside the engine's interact callback.
+    ring_pending = os.clock() + 0.02
+    pcall(function() log.info("[IrisHomesteadBox] the bell is being rung - opening the herd dialog") end)
+end
+
+if not _G.IrisHomesteadBellRingHook then
+    pcall(function()
+        local td = sdk.find_type_definition("app.Gm50_036_Bell")
+        local m = td and td:get_method("onStartInteractBase(System.UInt32, app.Character)")
+        if not m then
+            pcall(function() log.info("[IrisHomesteadBox] ring hook: onStartInteractBase NOT FOUND on app.Gm50_036_Bell") end)
+            return
+        end
+        -- the PRE pass only reads WHICH bell this is; the POST pass acts. (args[2] = `this`.)
+        local ringing_u = nil
+        sdk.hook(m,
+            function(args)
+                ringing_u = nil
+                pcall(function()
+                    local comp = sdk.to_managed_object(args[2])
+                    local go = comp and comp:call("get_GameObject")
+                    local tr = go and go:call("get_Transform")
+                    local u = tr and tr:call("get_UniversalPosition")
+                    if u then ringing_u = { x = u.x, y = u.y, z = u.z } end
+                end)
+            end,
+            function(retval)
+                pcall(function()
+                    local f = rawget(_G, "IrisHomesteadBellRing")
+                    if type(f) == "function" then f(ringing_u) end
+                end)
+                return retval
+            end)
+        _G.IrisHomesteadBellRingHook = true
+        pcall(function() log.info("[IrisHomesteadBox] ring hook installed on app.Gm50_036_Bell.onStartInteractBase") end)
+    end)
+end
+
+-- ⛔ A SECOND reset handler, deliberately down HERE. The one at the top of this file was
+-- written before any of this existed, and a closure cannot capture a `local` that is declared
+-- after it -- referencing bell_points_restore up there would compile to a nil global and fail
+-- silently, which is the exact bug that killed the bell slice in the first place.
+re.on_script_reset(function()
+    pcall(function() bell_points_restore("script reset") end)
+    pcall(_close_dialog)          -- never strand a paused dialog across a reload
+    pcall(function()
+        B.call_until, B.call_target, B.call_paused_at = nil, nil, nil
+    end)
+end)
+
 -- ⛔ 08-12 (the "requested, body not constructed yet" bat): the spawner lib is a QUEUE --
 -- requests only become bodies when the pump runs each tick. The probe pumps its four
 -- spawners with exactly this trio; without it, requestAddInstances waits forever.
 re.on_application_entry("UpdateBehavior", function()
-    if C.enabled == false or not B.spawner then return end
+    if C.enabled == false then return end
     local paused = false
     pcall(function() paused = type(griffin_world_paused) == "function" and griffin_world_paused() == true end)
-    if paused then return end
+    if paused then
+        -- ⛔ 08-13 FREEZE THE CALL CLOCK ACROSS A PAUSE. call_until/call_last are WALL clock,
+        -- and our own native dialog pauses the world (reqDisp is_pause=true) -- so picking an
+        -- animal out of a menu used to spend the walk window standing still in a paused world,
+        -- and the first tick after the unpause would bill itself for the entire pause.
+        if B.call_until and not B.call_paused_at then B.call_paused_at = os.clock() end
+        return
+    end
+    if B.call_paused_at then
+        local held = os.clock() - B.call_paused_at
+        if B.call_until then B.call_until = B.call_until + held end
+        B.call_paused_at = nil
+        B.call_last = nil          -- next dt starts fresh, not `held` seconds wide
+    end
+    -- ⭐⭐ 08-13 THE CALL MOVES HERE, AND THAT IS THE WHOLE FIX FOR "they barely move".
+    -- call_tick used to be driven from the on_frame sweep, which self-throttles to 1.5s, while
+    -- its own dt is clamped to 0.1 -- so a resident advanced 1.7 * 0.1 = 17cm every 1.5s
+    -- (~0.11 m/s), about 5m of travel in the entire 45s window, and anything further away
+    -- than that never reached the 3m arrival radius at all. On UpdateBehavior the dt is real
+    -- and the walk runs at its intended 1.7 m/s.
+    -- ⛔ It sits AFTER the pause gate on purpose: set_UniversalPosition writes on a paused
+    -- world are the pause-spawn crash family. It sits BEFORE the spawner guard because the
+    -- herd must still walk in a session where the spawner never came up.
+    pcall(function() call_tick(os.clock()) end)
+    if not B.spawner then return end
     pcall(function()
         B.spawner:updateInstanceCounts()
         B.spawner:requestSpawnOutstanding()
@@ -399,11 +1397,16 @@ re.on_frame(function()
         local pu = select(1, player_spaces())
         if not pu then
             if next(B.bodies) then despawn_all("player lost (load?)") end
+            -- ⛔ DROP the cached interact points WITHOUT writing to them. A load screen means
+            -- the old scene is going away; those are managed wrappers onto data that may
+            -- already be freed, and a pcall does not catch an access violation. The fresh
+            -- scene's posts get re-locked by the next scan anyway.
+            bell_points_forget("player lost (load?)")
             return
         end
         local pp = pu   -- UNIVERSAL, same space as the plot anchors
         local plots = owned_plots()
-        if #plots == 0 then return end
+        if #plots == 0 then bell_points_restore("no owned plots"); return end
         -- v1: single owned plot (Aurora owns one); nearest-owned when more arrive
         local p = plots[1]
         local best_d2 = nil
@@ -416,12 +1419,58 @@ re.on_frame(function()
         local ax, ay, az = plot_anchor(p)
         local d = math.sqrt(best_d2 or 1e12)
         -- receipts (the missing-bat lesson: a silent sweep cannot be diagnosed) --
-        -- the shield heartbeat: never let a resident stand unshielded for long
+        -- THE CALL: movement tick + triggers. (1) K near the plot (the blunt lever).
+        -- (2) ⭐ THE HERD BELL (08-12, Aurora: "is there any reason we can't do the bell
+        -- now?"): the bell is REGISTERED BY POSITION (stand at it, press the panel
+        -- button) -- no gimmick identity needed. A TAP of interact (pad B / keyboard F)
+        -- within 3m of the registered bell rings it natively (the Examine fires
+        -- untouched -- free anim + sound) AND calls the herd. A HOLD stays the Await
+        -- timeskip, unaffected: tap and hold part ways at 0.35s.
+        -- (call_tick moved to UpdateBehavior 08-13 -- this sweep is 1.5s and was starving it)
+        -- ⭐ the bell post's prompts: locked while you are at the homestead, handed straight
+        -- back the moment you leave, so world oxcart stops are never touched.
+        if B.near then bell_points_tick(now) else bell_points_restore("left the homestead") end
+        if B.near then
+            local kd = false
+            pcall(function() kd = type(iris_kb) == "function" and iris_kb(0x4B) == true end)
+            if kd and not B.call_key_prev then B.call_all() end
+            B.call_key_prev = kd
+            -- ⛔⛔ 08-13 THE PHANTOM PUBLISHER IS GONE, and removing it is part of the
+            -- one-prompt-at-a-time fix. This block used to publish "Ring for the Herd (tap)"
+            -- into the shared arbiter with dist<=4.5 -- close enough to WIN it -- while its own
+            -- tap sampler was unreachable dead code (it lived in this 1.5s-throttled sweep and
+            -- required a press+release inside 0.35s, which two samples 1.5s apart can never
+            -- observe). So standing at the bell it could out-bid milking or a chore and then do
+            -- nothing at all: a prompt that silences everyone and answers to no one. That was
+            -- harmless while nobody consulted the arbiter; now that taming does, it would be a
+            -- real blocker.
+            -- ⇒ The bell is served by its OWN NATIVE interact now (the ring hook opens the herd
+            -- dialog), so it needs no IRIS prompt and no key of its own. K remains as the blunt
+            -- lever, and the panel button as the dev path.
+            B.bell_down_t = nil
+            pcall(function()
+                if _G.IrisPrompt then
+                    _G.IrisPrompt.set("herd_bell", "")
+                    if _G.IrisPrompt.clear_slot then _G.IrisPrompt.clear_slot("herd_bell") end
+                end
+            end)
+        end
+        -- the shield heartbeat: never let a resident stand unshielded for long.
+        -- ⭐ 08-13 (Aurora's receipt: "summoned pets never draw my swings" - residents
+        -- do): the relationship hook matched mounts{} by WRAPPER identity; residents
+        -- registered with OUR wrappers matched nothing. Publish the live CHARACTER
+        -- addresses every heartbeat - the hook now matches residents by ADDRESS (the
+        -- HoldWolf pattern, the proven cure for the wrapper-identity disease).
         if (tonumber(B.shield_at) or 0.0) < now then
             B.shield_at = now + 3.0
+            local chaddrs = {}
             for _, e in pairs(B.bodies) do
-                if e.ch then resident_shield(e.ch) end
+                if e.ch then
+                    resident_shield(e.ch)
+                    pcall(function() chaddrs[e.ch:get_address()] = true end)
+                end
             end
+            _G.IrisResidentChAddrs = chaddrs
         end
         -- 10s heartbeat naming the plot, the distance, and the roster
         if (tonumber(B.dbg_at) or 0.0) < now then
@@ -445,6 +1494,30 @@ re.on_frame(function()
         local paused = false
         pcall(function() paused = type(griffin_world_paused) == "function" and griffin_world_paused() == true end)
         if paused then return end
+        -- eviction enforcement (the tameable-hen law): re-assert every exile until its
+        -- mover surrenders; expired entries fall away, dead wrappers are eaten by pcall
+        if B.evict then
+            for i9 = #B.evict, 1, -1 do
+                local ev = B.evict[i9]
+                if os.clock() > (tonumber(ev.until_t) or 0) then
+                    table.remove(B.evict, i9)
+                else
+                    pcall(function()
+                        ev.ch:call("set_IsThinkStop(System.Boolean)", true)
+                        ev.ch:call("get_GameObject"):call("get_Transform")
+                            :call("set_UniversalPosition", make_position(ev.x, ev.y, ev.z))
+                    end)
+                end
+            end
+        end
+        -- ⭐ 08-13 05:00 (the targeting hunt needs receipts, Aurora needs her farm NOW):
+        -- HERD INDOORS - one checkbox empties the yard (deleteAll, the proven despawn)
+        -- and holds it empty; untick and the herd returns on the next pass. Farming in
+        -- peace while the acquisition mystery waits for a fresh session.
+        if C.herd_indoors == true then
+            if next(B.bodies) then despawn_all("herd sent indoors") end
+            return
+        end
         local rows = home_rows()
         -- ⛔ 08-12 (THREE Mootildas): a script reset invalidates the old managed wrappers --
         -- body resolution failed, the module concluded "no bodies" and spawned fresh while
@@ -452,7 +1525,22 @@ re.on_frame(function()
         -- per load, scan the scene near the plot, RE-BIND band-matching bodies to their
         -- records, and purge true surplus (unshield + WARP off the farm -- the eviction
         -- law: never destroy).
+        -- ⛔⛔ 08-13 (the hoe aimed at a stray chicken - Aurora named it): wild doubles
+        -- left by the PRE-nav-fix evictions are valid ATTACK TARGETS standing in the
+        -- crops, and the swing homing steered every hoe strike at them. The census was
+        -- once-per-load by design; it now re-runs every 2 minutes (and by panel button)
+        -- so band-surplus strays are always purged off the farm - with the nav cut,
+        -- warped means gone.
+        if os.clock() > (tonumber(B.resweep_at) or 0) then
+            B.resweep_at = os.clock() + 120.0
+            reacquired_this_load = false
+        end
         if not reacquired_this_load then
+            -- ⛔⛔ 08-13 02:48 receipts ("reacquire scan: 6 strays (0 home records)" ->
+            -- the WHOLE herd purged as surplus, then respawned = the duplication): the
+            -- bridge's stable may not have woken this early in the load. NEVER classify
+            -- with an empty roster - wait for records before consuming the one pass.
+            if #rows == 0 then return end
             reacquired_this_load = true
             pcall(function()
                 B.addrs = {}
@@ -474,7 +1562,14 @@ re.on_frame(function()
                 local strays = {}
                 for i0 = 0, (tonumber(n0) or 0) - 1 do
                     pcall(function()
-                        local ch0 = comps0:call("get_Item", i0) or comps0[i0]
+                        -- ⛔ 08-13 (ZERO "REACQUIRED" lines EVER, receipts): the one-step
+                        -- `get_Item or [i]` THREW on this build's arrays and the per-item
+                        -- pcall ate it - the scan walked every character and found nothing,
+                        -- so every reset spawned duplicates over the survivors. Two-step
+                        -- access (the file's own pattern everywhere else).
+                        local ch0
+                        pcall(function() ch0 = comps0:call("get_Item", i0) end)
+                        if not ch0 then pcall(function() ch0 = comps0:get_element(i0) end) end
                         local go0 = ch0 and ch0:call("get_GameObject")
                         if not go0 then return end
                         local addr0 = go0:get_address()
@@ -483,10 +1578,13 @@ re.on_frame(function()
                         if not (band0 and DOCILE[band0]) then return end
                         local u0 = go0:call("get_Transform"):call("get_UniversalPosition")
                         local dx0, dz0 = u0.x - ax, u0.z - az
-                        if dx0 * dx0 + dz0 * dz0 > 35.0 * 35.0 then return end
+                        -- 60m: a called/wandered body must not slip the net (35m did)
+                        if dx0 * dx0 + dz0 * dz0 > 60.0 * 60.0 then return end
                         strays[#strays + 1] = { ch = ch0, go = go0, addr = addr0, band = band0 }
                     end)
                 end
+                pcall(function() log.info("[IrisHomesteadBox] reacquire scan: " .. #strays
+                    .. " stray docile body(ies) within 60m (" .. tostring(#rows) .. " home records)") end)
                 for _, r0 in ipairs(rows) do
                     if not (B.bodies[r0.id] and B.bodies[r0.id].addr) then
                         local rband0 = tostring(r0.species or ""):match("ch%d+")
@@ -512,12 +1610,29 @@ re.on_frame(function()
                 for _, s0 in ipairs(strays) do
                     if s0 then
                         pcall(function()
+                            -- ⛔ NAV LAW (the un-evicted twin ox, 02:48): an active nav
+                            -- controller snaps the body back the frame after a one-shot
+                            -- warp. Cut the muscle + think-stop FIRST; the stray stays sent.
+                            pcall(function()
+                                local nav0 = s0.go:call("getComponent(System.Type)", sdk.typeof("app.MonsterNavigationController"))
+                                if nav0 then nav0:call("set_Enabled", false) end
+                            end)
+                            pcall(function() s0.ch:call("set_IsThinkStop(System.Boolean)", true) end)
                             local hc0 = s0.go:call("getComponent(System.Type)", sdk.typeof("app.HitController"))
                             if hc0 then
+                                pcall(function() hc0:call("set_Enabled", true) end)
                                 for _, sig0 in ipairs({ "set_IsDamageZero", "set_IsIgnoreDamageHit", "set_DamageCollisionOff" }) do
                                     pcall(function() hc0:call(sig0, false) end)
                                 end
                             end
+                            pcall(function()
+                                local hs0 = s0.go:call("getComponent(System.Type)", sdk.typeof("app.HateSystem"))
+                                if hs0 then hs0:call("set_Enabled", true) end
+                            end)
+                            pcall(function()
+                                local lo0 = s0.go:call("getComponent(System.Type)", sdk.typeof("app.LockOnTarget"))
+                                if lo0 then lo0:call("set_Enabled", true) end
+                            end)
                             -- warp target ground-probed when the rig allows; wild again, elsewhere
                             local wx0, wz0 = ax + 120.0, az + 120.0
                             local wy0 = ay + 10.0
@@ -528,6 +1643,9 @@ re.on_frame(function()
                                 if hit0 and tonumber(hit0.y) then wy0 = tonumber(hit0.y) + 1.5 end
                             end)
                             s0.go:call("get_Transform"):call("set_UniversalPosition", make_position(wx0, wy0, wz0))
+                            B.evict = B.evict or {}
+                            B.evict[#B.evict + 1] = { ch = s0.ch, x = wx0, y = wy0, z = wz0,
+                                until_t = os.clock() + 15.0 }
                             log.info("[IrisHomesteadBox] surplus " .. tostring(s0.band)
                                 .. " unshielded + warped off the farm (the duplication purge)")
                         end)
@@ -549,9 +1667,56 @@ re.on_frame(function()
         for _, r in ipairs(rows) do live_ids[r.id] = true end
         for id, e in pairs(B.bodies) do
             if not live_ids[id] then
-                -- no per-instance delete in the lib: rebuild the yard on the next pass
-                despawn_all("roster changed")
-                break
+                -- ⭐ 08-13 (Aurora: "return one to the stable and the WHOLE yard blinks"):
+                -- the lib has no per-instance delete, but the duplication purge's eviction
+                -- recipe works one body at a time - unshield + ground-probed warp off the
+                -- farm (WARP never destroy). The rest of the herd never notices; streaming
+                -- retires the stray when the area turns over.
+                pcall(function()
+                    local go9 = e.ch and e.ch:call("get_GameObject")
+                    if go9 then
+                        -- the same nav law: cut before the warp or the body walks home
+                        pcall(function()
+                            local nav9 = go9:call("getComponent(System.Type)", sdk.typeof("app.MonsterNavigationController"))
+                            if nav9 then nav9:call("set_Enabled", false) end
+                        end)
+                        pcall(function() e.ch:call("set_IsThinkStop(System.Boolean)", true) end)
+                        local hc9 = go9:call("getComponent(System.Type)", sdk.typeof("app.HitController"))
+                        if hc9 then
+                            pcall(function() hc9:call("set_Enabled", true) end)
+                            for _, sig9 in ipairs({ "set_IsDamageZero", "set_IsIgnoreDamageHit", "set_DamageCollisionOff" }) do
+                                pcall(function() hc9:call(sig9, false) end)
+                            end
+                        end
+                        pcall(function()
+                            local hs9 = go9:call("getComponent(System.Type)", sdk.typeof("app.HateSystem"))
+                            if hs9 then hs9:call("set_Enabled", true) end
+                        end)
+                        pcall(function()
+                            local lo9 = go9:call("getComponent(System.Type)", sdk.typeof("app.LockOnTarget"))
+                            if lo9 then lo9:call("set_Enabled", true) end
+                        end)
+                        local wx9, wz9 = ax + 120.0, az + 120.0
+                        local wy9 = ay + 10.0
+                        pcall(function()
+                            local cast9 = rawget(_G, "route3_cast_ground_below")
+                            local rx9, _, rz9 = render_point_near(wx9, ay, wz9)
+                            local hit9 = cast9 and rx9 and cast9(rx9, ay + 30.0, rz9) or nil
+                            if hit9 and tonumber(hit9.y) then wy9 = tonumber(hit9.y) + 1.5 end
+                        end)
+                        go9:call("get_Transform"):call("set_UniversalPosition", make_position(wx9, wy9, wz9))
+                    end
+                    if e.addr then B.addrs[e.addr] = nil end
+                    -- ⛔ 08-13 (the tameable hen at the wall): a critter's own mover
+                    -- rejects a ONE-SHOT warp just like the monster nav did - enforce
+                    -- the exile for 15s until whatever drives it gives up
+                    B.evict = B.evict or {}
+                    B.evict[#B.evict + 1] = { ch = e.ch, x = wx9, y = wy9, z = wz9,
+                        until_t = os.clock() + 15.0 }
+                    log.info("[IrisHomesteadBox] " .. tostring(e.name or id)
+                        .. " left home - evicted quietly (no yard rebuild)")
+                end)
+                B.bodies[id] = nil
             end
         end
         adopt_new_instances()
@@ -637,19 +1802,16 @@ re.on_frame(function()
                 end
             end
         end
-        if not (B.spawner and B.spawner.instances) then return end
-        for i = 1, #B.spawner.instances do
+        -- ⭐ 08-13 (names vanished the FIRST time reacquire truly worked): the old loop
+        -- walked the spawner's instance list, and reacquired bodies were never in this
+        -- load's spawner. Draw from the bound bodies themselves - spawned or reacquired.
+        for _, e in pairs(B.bodies) do
             pcall(function()
-                local inst = B.spawner.instances[i]
-                local ch = inst.instance and inst.instance:get_Chara()
-                local go = ch and ch:call("get_GameObject")
-                local addr = go and go:get_address()
-                local id = addr and B.addrs[addr]
-                if not id then return end
-                local e = B.bodies[id]
+                if not e.ch then return end
+                local go = e.ch:call("get_GameObject")
                 local pos = go:call("get_Transform"):call("get_Position")
                 local sp = draw.world_to_screen(Vector3f.new(pos.x, pos.y + 1.1, pos.z))
-                if sp and e then
+                if sp then
                     local s = tostring(e.name or "?")
                     if not (F and F.text and F.text(s, sp.x - #s * 3.5, sp.y, 0xFFB8E8B8, 16)) then
                         draw.text(s, sp.x - #s * 3.5, sp.y, 0xFFB8E8B8)
@@ -709,6 +1871,17 @@ re.on_draw_ui(function()
                             tostring(e and e.name or "(unbound body)"), pos.x, pos.y, pos.z)
                     end
                     imgui.text(line)
+                    -- ⭐ 08-12 spawn pins: stand where you want them to live, press this
+                    if id and imgui.button("pin " .. tostring(e and e.name or "?") .. "'s spot HERE##pin_" .. tostring(id)) then
+                        pcall(function()
+                            local pu9 = select(1, player_spaces())
+                            local b9 = bridge()
+                            if pu9 and b9 and b9.set_home_pin then
+                                local _, m9 = b9.set_home_pin(id, pu9.x, pu9.y, pu9.z)
+                                B.tp_msg = tostring(m9)
+                            end
+                        end)
+                    end
                     if id then shown[id] = true end
                 end)
             end
@@ -748,6 +1921,25 @@ re.on_draw_ui(function()
             end)
         end
         if B.tp_msg then imgui.text(tostring(B.tp_msg)) end
+        if imgui.button("CALL the herd to me now (in-game key: K at the plot)") then B.call_all() end
+        local hi_c, hi_v = imgui.checkbox("HERD INDOORS (empty the yard - farm in peace)", C.herd_indoors == true)
+        if hi_c then C.herd_indoors = hi_v; pcall(save_cfg) end
+        if imgui.button("SWEEP STRAYS NOW (wild doubles draw the hoe's aim)") then
+            B.resweep_at = 0.0
+            reacquired_this_load = false
+        end
+        if imgui.button("REGISTER the herd bell HERE (stand at the bell first)") then
+            pcall(function()
+                local pu2 = select(1, player_spaces())
+                if pu2 then
+                    C.bell_x, C.bell_y, C.bell_z = pu2.x, pu2.y, pu2.z
+                    C.bell_set = true
+                    save_cfg()
+                    B.tp_msg = string.format("herd bell registered at (%.0f, %.0f, %.0f) - tap B/F within 3m", pu2.x, pu2.y, pu2.z)
+                end
+            end)
+        end
+        if C.bell_set == true then imgui.text(string.format("herd bell: (%.0f, %.0f, %.0f)", C.bell_x, C.bell_y or 0, C.bell_z)) end
         if imgui.button("despawn residents now") then despawn_all("manual") end
         if imgui.button("force respawn now (despawn + immediate rebuild)") then
             despawn_all("forced respawn")

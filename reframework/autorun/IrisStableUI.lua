@@ -159,6 +159,8 @@ pcall(function()
     -- centre cluster is CCenter/CLeft/CRight. CLeft = the View/Back/Select button; the
     -- old ladder resolved 0 and the hold-to-open could never fire (Aurora caught it).
     PAD.sel = pick("CLeft", "Select", "Back", "Share", "Minus")
+    PAD.lb = pick("LTrigTop", "L1", "LB", "LShoulder")
+    PAD.rb = pick("RTrigTop", "R1", "RB", "RShoulder")
 end)
 local function pad_button()
     local v = 0
@@ -347,6 +349,23 @@ local function input_tick()
     -- while our native dialog is up, IT owns the player's attention -- no screen toggles,
     -- no new queues (the answer comes through dlg_tick alone)
     if U.dlg and U.dlg.open then return end
+    -- ⛔ 08-13 (Aurora opened the stable while riding the cat: teleported under the
+    -- ground, cat died): the Screen is a ground-life menu. While seated on any rodeo
+    -- mount it will not open, and if somehow open it closes.
+    if rawget(_G, "IrisRiddenNow") then
+        _G.IrisScreenHandoff = nil
+        if U.open then set_open(false) end
+        return
+    end
+    -- ⭐ 08-12 ONE MENU (Aurora): the Homestead Screen hands back here when you slide off
+    -- its tab ends. Consume the request and open as if hold-Select had fired.
+    if _G.IrisScreenHandoff == "stable" then
+        _G.IrisScreenHandoff = nil
+        -- swallow the arriving press: the same RB that left the other screen must not
+        -- immediately bounce back out of this one (the same-frame double-edge bug)
+        U.handoff_guard = os.clock() + 0.35
+        if not U.open then set_open(true) end
+    end
     if edge2("toggle", kb(C.key_toggle)) then toggle_open() end
     -- pad opener: HOLD Select/Back ~0.7s (a bare press stays free for whatever the game
     -- binds it to; the hold is deliberate enough not to collide)
@@ -360,6 +379,28 @@ local function input_tick()
     _G.IrisStableUIOpen = U.open == true
     if not U.open then return end
     if edge2("close", pdown(PAD.face.b)) then set_open(false); return end
+    -- ⭐ 08-12 ONE MENU: RB slides from the Stable into the Homestead Screen's tabs -- but
+    -- ONLY when a built plot is in range. The home tabs are contextual, never global.
+    if edge2("handoff", pdown(PAD.rb)) and os.clock() > (tonumber(U.handoff_guard) or 0) then
+        local near9 = false
+        pcall(function()
+            local up9 = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer")
+                :call("get_GameObject"):call("get_Transform"):call("get_UniversalPosition")
+            for _, pr in ipairs(_G.IrisHomesteadPlots.list()) do
+                if pr.owned ~= false and pr.built ~= false then
+                    local dx, dz = (pr.ux or 0) - up9.x, (pr.uz or 0) - up9.z
+                    if dx * dx + dz * dz < 35.0 ^ 2 then near9 = true; break end
+                end
+            end
+        end)
+        if near9 then
+            set_open(false)
+            _G.IrisScreenHandoff = "furnish"
+            return
+        else
+            say("No homestead in range. The home tabs live at your plot.")
+        end
+    end
     local rows = stable_rows()
     if #rows == 0 then return end
     if U.cursor > #rows then U.cursor = #rows end
@@ -538,7 +579,19 @@ local function draw_ui()
                 or (r.active and "Selected - Not Summoned" or "Resting In The Stable")
             if r.hatch then status = status .. "  (Hatchling)" end
             if r.wyrm then status = status .. "  (Wyrm-Grown)" end
-            txt(status, rx + 10.0 * sc, ly + 36.0 * sc, r.live and 0xFF9AE89A or COL.dimtxt)
+            -- 08-12 BREEDING: a carrying mother announces it, with the days remaining
+            if type(r.carrying) == "table" then
+                local due = ""
+                pcall(function()
+                    local b9 = rawget(_G, "IrisGriffinBridge")
+                    local day9 = b9 and b9.breed_day and b9.breed_day() or nil
+                    local left9 = day9 and math.max(0, (tonumber(r.carrying.due_day) or 0) - day9) or nil
+                    due = left9 and ((left9 <= 0) and " - due NOW" or (" - due in " .. tostring(left9) .. " day" .. (left9 == 1 and "" or "s"))) or ""
+                end)
+                status = status .. "  (Carrying " .. tostring(r.carrying.sire or "?") .. "'s young" .. due .. ")"
+            end
+            txt(status, rx + 10.0 * sc, ly + 36.0 * sc,
+                (type(r.carrying) == "table" and 0xFFE8B0D8) or (r.live and 0xFF9AE89A) or COL.dimtxt)
             local by = ly + 62.0 * sc
             local bar_x = rx + 70.0 * sc
             local bar_w = rw - 200.0 * sc   -- room for "99990 / 100000" beside the bar
@@ -590,7 +643,32 @@ local function draw_ui()
     end
     -- title LAST among strings, still same layer (rects never cover it)
     txt("THE  STABLE", X + pad, Y + pad * 0.6, COL.cream, true)
-    txt("[O / B] Close   [Enter / A] Summon / Dismiss   [R / X] Rename   [H / DpadRight] Home   [Delete / Y] Release",
+    -- ⭐ 08-12 ONE MENU (Aurora's mockup): the homestead tabs sit greyed beside the title
+    -- whenever a built plot is in range - so RB visibly has somewhere to go. Contextual:
+    -- out in the world the tabs simply are not there.
+    if os.clock() > (U.nh_at or 0) then
+        U.nh_at = os.clock() + 2.0
+        U.near_home = false
+        pcall(function()
+            local up9 = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer")
+                :call("get_GameObject"):call("get_Transform"):call("get_UniversalPosition")
+            for _, pr in ipairs(_G.IrisHomesteadPlots.list()) do
+                if pr.owned ~= false and pr.built ~= false then
+                    local dx, dz = (pr.ux or 0) - up9.x, (pr.uz or 0) - up9.z
+                    if dx * dx + dz * dz < 35.0 ^ 2 then U.near_home = true; break end
+                end
+            end
+        end)
+    end
+    if U.near_home then
+        local tx9 = X + 250.0 * sc
+        for _, nm9 in ipairs({ "Decorations", "Build", "Animals" }) do
+            txt(nm9, tx9, Y + pad * 0.6 + 6.0 * sc, COL.dimtxt)
+            tx9 = tx9 + (text_w(nm9) or 80.0) + 30.0 * sc
+        end
+        txt("[RB >]", X + W - 76.0 * sc, Y + pad * 0.6 + 6.0 * sc, COL.dimtxt)
+    end
+    txt("[O / B] Close   [Enter / A] Summon / Dismiss   [R / X] Rename   [H / DpadRight] Home   [Delete / Y] Release   [RB] Homestead",
         X + pad, Y + H - 26.0 * sc, COL.dimtxt)
     if U.msg and os.clock() < (tonumber(U.msg_until) or 0.0) then
         local warn = U.confirm_id ~= nil and os.clock() < (tonumber(U.confirm_until) or 0.0)
@@ -709,6 +787,26 @@ re.on_draw_ui(function()
             pcall(function() local _, m = bridge().size_preview(nil); U.preview_msg = m end)
         end
         if U.preview_msg then imgui.text(tostring(U.preview_msg)) end
+        -- ── BREEDING slice 1 dev rig (08-12): a full generation testable in minutes ──
+        if imgui.button("DEV BREED: pair the first eligible home couple") then
+            pcall(function()
+                local b = bridge()
+                local mother, father, why = b.breed_eligible()
+                if mother and father then
+                    local _, m = b.breed_start(mother.id, father.id)
+                    U.breed_msg = tostring(mother.name) .. " x " .. tostring(father.name) .. ": " .. tostring(m)
+                else
+                    U.breed_msg = tostring(why)
+                end
+            end)
+        end
+        if imgui.button("DEV BREED: force all pregnancies due NOW") then
+            pcall(function()
+                local _, m = bridge().breed_force_due()
+                U.breed_msg = tostring(m) .. " (walk the homestead - births happen on a visit)"
+            end)
+        end
+        if U.breed_msg then imgui.text(tostring(U.breed_msg)) end
         if imgui.button("DEV: complete active companion's wyrm growth now") then
             local ok = false
             pcall(function()

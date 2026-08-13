@@ -78,7 +78,9 @@ W.take = function(addr)
     if not e then return nil end
     W.led[addr] = nil
     pcall(function() log.info("[IrisWildBlood] genes carried into the tame: " .. tostring(e.name)) end)
-    return e.iv
+    -- 08-12: the NATURAL base rides along too (second return) -- the tame preserves the
+    -- body's innate variance, not just its gene
+    return e.iv, e.base
 end
 
 local function roll_iv()

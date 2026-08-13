@@ -1303,6 +1303,23 @@ local function cat_state_for(game_object)
     return address and S.cats[tostring(address)] or nil
 end
 
+-- ⭐ 08-13 RIDDEN CAT VOICE (Aurora: "the cat isn't making any sound when riding"):
+-- the rodeo costume think-stops the body, so the native vocal triggers - and the
+-- wolf-vocal replacer with them - go quiet the moment a cat is armed for riding.
+-- Export the voice + the registry check so the rodeo can speak for it directly
+-- (chassis id can NOT discriminate: Shadow the wolf is ch223 like the cats -
+-- only the registry knows which bodies wear a cat).
+pcall(function()
+    local api = rawget(_G, "__iris_wild_cats_api")
+    if not api then return end
+    api.play = function(category, target_go)
+        return play_category(category, target_go)
+    end
+    api.is_cat = function(game_object)
+        return registered_cat_ancestor(game_object) ~= nil
+    end
+end)
+
 local trigger_method = sdk.find_type_definition("app.WwiseContainerApp")
     :get_method("trigger(soundlib.SoundManager.RequestInfo)")
 local trigger_hook_installed = false

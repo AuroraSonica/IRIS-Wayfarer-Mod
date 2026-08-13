@@ -48,7 +48,9 @@ local C = {
     critter_feed_prop = "environment/props/sm8x/sm81/sm81_014/sm81_014_00",   -- (unused by the critter rite now --
                                   -- the player DROPS the real herb natively; kept for future prop offerings)
     perch_button_bit = 0x1000,    -- L3 (left stick click, same family as the griffin mount): shoulder a tamed critter / set it down
-    perch_scale = 0.85,           -- shoulder-ride shrink (a crow is big; true size returns on set-down)
+    perch_scale = 0.85,           -- ⛔ DEAD since 08-13: shoulder riding no longer changes size at
+                                  -- all (Aurora: "Only the IVs should affect the size"). Kept only so
+                                  -- saved configs load without a nil; nothing reads it.
     perch_idle_clips = "0,0,0,0,1,2",   -- shoulder idle variety (weighted): mostly idle_loop, sometimes
                                   -- 1 cry / 2 grooming (picked at RANDOM each cycle, not in sequence)
     perch_bathe_chance = 0.0,     -- chance per idle cycle to bathe (60:0/60:10) ON THE SHOULDER; off (odd up there)
@@ -107,7 +109,7 @@ local C = {
     oxtame_pose_arm_joints = "L_Arm_Upper,L_Arm_Clavicle,L_Arm_Lower",   -- ⭐ REAL rig names (07-21, live-preview proved it; chain = _Arm_Upper/Lower/Hand/Clavicle). LEFT side: the hand-out clip 6200 offers the LEFT hand (Aurora, preview)
     oxtame_pose_head_joints = "Head,Neck_1,Neck_0",
     -- ⭐⭐ THE YOKE RITE (07-21, Aurora): tame a PASTURE ox (ch299003, never a harnessed cart ox)
-    -- as a pack companion. Deliberate start ONLY -- hold N near one (the reviewer's law: passive
+    -- as a pack companion. Deliberate start ONLY -- hold N / B near one (the reviewer's law: passive
     -- arming would sabotage the griffin's ox-offering hunt). Approach -> greens -> walk-beside
     -- bond -> palm -> the standard stable finisher (same family as the wolf).
     ox_rite_enabled = true,
@@ -124,7 +126,7 @@ local C = {
     oxtame_giveup = 18.0,          -- ⭐ CONSENT (Aurora 07-20): seconds a lured griffin can range off (>600m or out
                                    -- of sweep) before the rite stands down gracefully ("she wasn't interested this
                                    -- time"). Play into her AI having better things to do, don't force it.
-    -- ⭐⭐⭐ P4 RODEO BRACE-DUEL (Slice 1, 07-20): the rodeo is a minigame -- hold N through her bucks,
+    -- ⭐⭐⭐ P4 RODEO BRACE-DUEL (Slice 1, 07-20): the rodeo is a minigame -- hold N / B through her bucks,
     -- strike her between them, don't spend all your grip. All tunable live (session runtime).
     oxtame_buck_node = "Fly.Hovering.Ch253WinSpreadStruggle",  -- ⭐ 07-20 SLAM FIX (Aurora "it still slammed me down and I fell off"): HoverShakeOff is her NATIVE shake-the-climber-OFF move -- its slam/detach is baked in and no altitude guard can stop it. The buck is THEATER (grip is the real duel), so it must be a NON-attack struggle. A/B: Fly.Hovering.Ch253ThreatAir / (old) Fly.FlightAttack.Ch253HoverShakeOff. ⛔ never a Fly.Flight.* (travels = drops rider)
     oxtame_tell_node = "Fly.Hovering.Ch253ThreatAir",  -- IN-PLACE wind-up she plays during the TELL (the visual "brace!" warning before a buck). "" = no anim, text countdown only
@@ -248,7 +250,7 @@ local C = {
     oxtame_waypoint_grace = 12.0,    -- seconds to keep the FSM ladder OFF after an order, so she can actually act on it (her natural SitLoop->airborne chain is ~7s)
     oxtame_waypoint_progress = 20.0, -- metres she must close per grace window to count as "flying herself"
     oxtame_waypoint_hold_cd = 2.0,   -- ⭐ seconds between destination HOLD checks while she flies. Read-first: a no-op while she still holds our node, a re-write the moment her own patrol brain takes the slot back (Aurora: "she changes direction then fights and goes back to the original route")
-    oxtame_buck_secs = 2.5,          -- seconds each BUCK wave lasts (HOLD N through it)
+    oxtame_buck_secs = 2.5,          -- seconds each BUCK wave lasts (HOLD N / B through it)
     oxtame_tell_secs = 1.5,          -- ⭐ WARNING window before each buck (Aurora 07-20: a countdown + rear-up so the buck is never a gotcha; NO grip drain here -- grab N now)
     oxtame_pause_secs = 3.0,         -- seconds of PAUSE between bucks (recover grip / strike)
     oxtame_tame_stam = 20.0,         -- her "break" reserve; drains at oxtame_break_rate/sec while you STRIKE (RATE-based = class-fair). 07-20: 5->13->20->26->20 (pass 3: 26->20, Aurora "lower the hits required slightly")
@@ -1287,6 +1289,13 @@ local function creature_label(go2)
         -- 07-24 (Aurora #6): a CONVERTED horse and a wild doe are both
         -- ch299011 — ask the wild-horses registry which this is.
         local api = rawget(_G, "__iris_wild_horses_api")
+        -- ⛔ ASK UNICORN FIRST (08-12). A unicorn is ALSO a horse by design: its `kind` stays
+        -- "horse" precisely so the ~15 downstream kind=="horse" consumers keep working, and
+        -- is_horse therefore returns true for it. Asking is_horse first named every unicorn
+        -- "Horse" - the same ordering trap the stable's display name already had to solve.
+        if api and api.is_unicorn and api.is_unicorn(go2) then
+            return "Unicorn"
+        end
         if api and api.is_horse and api.is_horse(go2) then
             return "Horse"
         end
@@ -3002,7 +3011,240 @@ LOS.clear = function(pgo0, tgo0)
     return clear
 end
 
+-- ⭐ 08-12 PAD+TARGETING slice A -- THE TAME BUTTON: keyboard N and pad B/Circle as ONE
+-- input (mask 0x40080, the wyrm rite's proven bit). ONE chunk local (the 200-local law).
+local TB = {}
+TB.pad_down = function()
+    local pad = false
+    pcall(function()
+        local gp = sdk.get_native_singleton("via.hid.GamePad")
+        local td = sdk.find_type_definition("via.hid.GamePad")
+        local dev = gp and td and sdk.call_native_func(gp, td, "get_MergedDevice")
+        if not dev then dev = gp and td and sdk.call_native_func(gp, td, "getMergedDevice(System.UInt32)", 0) end
+        local mask = dev and tonumber(dev:call("get_Button")) or 0
+        pad = (math.floor(mask) & 0x40080) ~= 0
+    end)
+    return pad
+end
+-- ⭐⭐⭐ THE MISSING ARGUMENT THAT KEPT THE NATIVE B PROMPT OFF EVERY TAME (08-13).
+-- `_G.IrisPrompt.set(owner, text, prio, dist, POS, go)` -- every tame call site passed **nil** for
+-- pos, and IrisPromptBar's `_world_prompt` bails on `not entry.pos`. So the tames only ever drove
+-- the ui010201 BUTTON-PANEL relabel, which the game refuses whenever it is not already offering an
+-- interact (a withheld slot sits in PlayState DISABLE_HIDETXT, and writing PlayState is the
+-- double-CTD law). That is what "native B prompt at range = walled" actually meant.
+-- ⭐ But ui020701 -- the real floating B disc in the WORLD -- is a different surface, and it now
+-- draws arbitrary text at an arbitrary position (field-proven on farm beds, weapon plaques and the
+-- cookpot). It was simply never asked to draw for a tame. Giving it a position is the whole fix.
+-- ⚠ It wants RENDER space, so convert from the creature's transform (which is already render) and
+-- lift it clear of the body, the same shape the cookpot prompt uses.
+TB.prompt_pos = function(go, lift)
+    local v = nil
+    pcall(function()
+        local rp = go and go:call("get_Transform"):call("get_Position")
+        if not rp then return end
+        v = Vector3f.new(rp.x, rp.y + (tonumber(lift) or 1.2), rp.z)
+    end)
+    return v
+end
+
+-- ⭐⭐ THE FAKE PROMPT RETIRES (Aurora 08-13, after seeing the real one land: "if we can do that
+-- across ALL creatures then we can get rid of the fake prompt").
+-- The drawn "[N/B] Tame the X" marker was only ever a stand-in for a native prompt we believed was
+-- impossible. Now that ui020701 draws the genuine B disc over the creature, the marker is noise --
+-- her screenshot had BOTH stacked on one horse.
+-- ⚠ BUT IT STAYS AS A ONE-FRAME SAFETY NET, because the native prompt is not ours to command:
+-- IrisPromptBar arbitrates NEAREST-WINS across every IRIS publisher, and it stands down entirely
+-- when the GAME is offering its own interact. So a nearer farm bed, a cookpot, or a native prompt
+-- can legitimately take the slot while a creature is still a valid candidate. In that frame the
+-- drawn marker is the only thing that can say "this one" -- and it is honest, because our own
+-- candidate test (LOS + camera cone + range) is what gated it, not the prompt's availability.
+-- ⇒ draw it ONLY when the native frame did not render. `native_world_ready` is reset at the top of
+-- every LateUpdate, so from the main tick we read last frame's verdict: a one-frame lag, not a
+-- stale cache (which is the hazard the prompt notes warn about).
+-- ⭐⭐ "IS THIS ALREADY MINE?" (Aurora 08-13: "the tame prompt is coming up for tamed
+-- horses/unicorns" -- Epona, her own summoned unicorn, wearing a B Tame prompt).
+-- The rodeo's claim is published for any horse you LOOK AT within 9m, and a companion standing next
+-- to you qualifies. The other rites dodge this because find_candidate screens tamed bodies; the
+-- horse path bypasses find_candidate entirely, so it needs its own screen.
+-- ⛔ ADDRESS-CLASS LAW: `IrisGriffinBridge.griffin()` returns the CHARACTER first and the
+-- GAMEOBJECT second. We hold a GameObject here, so we must take the SECOND return -- comparing a
+-- Character address against a GameObject address is the trap that once made a damage hook never
+-- match. is_pet_body is the belt (it keys on GO addresses) but only knows THIS session's tames, so
+-- the bridge check is what catches a companion tamed before the last reload.
+TB.is_mine = function(go)
+    if not go then return false end
+    local mine, ga = false, nil
+    pcall(function() ga = go:get_address() end)
+    if not ga then return false end
+    pcall(function()
+        local B = _G.IrisGriffinBridge
+        if B and B.griffin then
+            local _, cgo = B.griffin()                  -- 2nd return = the GameObject
+            if cgo and cgo:get_address() == ga then mine = true end
+        end
+    end)
+    if not mine then
+        pcall(function()
+            local api = _G.IrisTaming
+            if api and api.is_pet_body and api.is_pet_body(ga) then mine = true end
+        end)
+    end
+    return mine
+end
+
+TB.mark = function(go, text, argb)
+    if not go then return end
+    local native = false
+    pcall(function()
+        local api = _G.IrisPrompt
+        native = api and api.native_world_ready and api.native_world_ready() == true
+    end)
+    if native and C.tame_marker_fallback ~= false then return end
+    draw_marker(go, text, argb or 0xFF60D0FF)
+end
+
+-- ⭐ THE ONE SUBJECT ANSWER (08-13): "what creature is this taming moment about?" Every rite
+-- needs it -- the pad gate below, the marker, and the auto-face on the palm all ask this. It was
+-- inlined in pad_ok and missing TWO rites, which is why pad B was dead in the griffin rite and on
+-- horses: a hold-to-scan flow with no published candidate starves the pad hand.
+TB.subject = function()
+    if S.ox_rite and S.ox_rite.go then return S.ox_rite.go end
+    if S.oxtame and S.oxtame.go then return S.oxtame.go end        -- 08-13: the GRIFFIN rite
+    if S.target then return char_go(S.target) end
+    if S.tame_mark then return char_go(S.tame_mark) end
+    if S.ox_mark_go then return S.ox_mark_go end                   -- the marked ox, pre-rite
+    local hgo = rawget(_G, "__iris_horse_taming_claim_go")          -- 08-13: horse / unicorn
+    if hgo then
+        local okh = false
+        pcall(function() okh = hgo:call("get_Transform") ~= nil end)
+        if okh then return hgo end
+    end
+    return nil
+end
+
+-- ⭐⭐ AUTO-FACE THE CREATURE ON THE PALM (Aurora 08-13: "every time you use B for palm during
+-- taming, it faces the creature you're taming automatically"). Bearing to the target never lies --
+-- the camera-forward servo was the source of the old 180-flip and the beyblade spin.
+-- ⛔ THE ONE EXCEPTION IS THE WOLF/PUMA CIRCLE: the wolf ORBITS you there, so you are meant to
+-- camera-track it. Snapping you to face it would fight the ritual's whole point.
+TB.face = function(go, secs)
+    if not go then return false end
+    if S.trial and tostring(S.trial.stage or "") == "circle" then return false end
+    local ok = false
+    pcall(function()
+        local pgo9 = char_go(get_player())
+        local pp9 = pgo9 and upos(pgo9)
+        local gp9 = upos(go)
+        if not (pgo9 and pp9 and gp9) then return end
+        local dx9, dz9 = gp9.x - pp9.x, gp9.z - pp9.z
+        if (dx9 * dx9 + dz9 * dz9) < 0.04 then return end   -- standing on top of it: no bearing
+        local hyaw = math.atan(dx9, dz9)
+        local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
+        q.x = 0; q.y = math.sin(hyaw / 2.0); q.z = 0; q.w = math.cos(hyaw / 2.0)
+        pgo9:call("get_Transform"):call("set_Rotation", q)
+        -- ⛔ NEVER SHORTEN A LONGER LEASE. The pact stroke deliberately locks face_hold for its whole
+        -- duration as the SOLE rotation authority -- that lock is what stopped the player beyblading
+        -- mid-nursing. A short 0.35s palm lease stamped over it would hand rotation back the moment
+        -- the palm released, part-way through the stroke. Extend, never truncate.
+        local until9 = os.clock() + (tonumber(secs) or 0.5)
+        local prev9 = S.face_hold and tonumber(S.face_hold.until_t) or nil
+        if prev9 and prev9 > until9 then until9 = prev9 end
+        S.face_hold = { x = q.x, y = q.y, z = q.z, w = q.w, until_t = until9 }
+        ok = true
+    end)
+    return ok
+end
+
+TB.pad_ok = function()
+    -- pad B doubles as DASH (and half the game): it counts as the tame hand ONLY when
+    --   1) a taming moment exists (mark / courtship / rite),
+    --   2) the player is not sprinting through it,
+    --   3) the camera faces the creature (Aurora: "only when needed, and facing it")
+    local subj = TB.subject()
+    if subj == nil then return false end
+    if (tonumber(S.player_spd) or 0.0) > 2.5 then return false end
+    local ok_face = false
+    pcall(function()
+        local cam = sdk.get_primary_camera()
+        local crot = cam:call("get_GameObject"):call("get_Transform"):call("get_Rotation")
+        local fx = -(2.0 * (crot.x * crot.z + crot.w * crot.y))
+        local fz = -(1.0 - 2.0 * (crot.x * crot.x + crot.y * crot.y))
+        local fl = math.max(0.05, math.sqrt(fx * fx + fz * fz))
+        local sp2 = upos(subj)
+        local pu2 = upos(char_go(get_player()))
+        if not (sp2 and pu2) then return end
+        local dx, dz = sp2.x - pu2.x, sp2.z - pu2.z
+        local dl = math.max(0.05, math.sqrt(dx * dx + dz * dz))
+        ok_face = ((dx / dl) * (fx / fl) + (dz / dl) * (fz / fl)) > 0.35
+    end)
+    return ok_face
+end
+TB.held = function()
+    if _G.IrisStableUIOpen == true then return false end   -- B is the stable screen's close there
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then return false end
+    local kb = false
+    pcall(function() kb = iris_kb(math.floor(tonumber(C.tame_key) or 0x4E)) == true or iris_kb(0x4E) == true end)
+    local held = kb or (TB.pad_ok() and TB.pad_down())
+    -- ⭐ 08-13: the palm IS the face. Every rite reads its hand through TB.held(), so facing here
+    -- covers wolf trials, the ox yoke, critter/bird give, the griffin rite and horses in ONE place
+    -- instead of six. Re-asserted while held (0.35s lease) so it tracks a creature that moves.
+    -- ⛔ TB.face itself refuses during the wolf/puma circle -- see its comment.
+    if held and C.tame_autoface ~= false then
+        if (os.clock() - (tonumber(S.autoface_at) or 0.0)) > 0.15 then
+            S.autoface_at = os.clock()
+            TB.face(TB.subject(), 0.35)
+        end
+    end
+    return held
+end
+
+-- ⭐⭐⭐ 08-13 THE ARBITER GATE (Aurora: "if I'm next to the oxcart bell and wanting to press
+-- examine, if a bed flies past it doesn't do the tame instead -- which is literally what just
+-- happened... I tried to milk a cow earlier and instead started a tame with a rabbit not far
+-- off"). She is describing a real design hole, not bad luck.
+--
+-- IrisPromptBar already arbitrates: NEAREST publisher wins, priority only breaks ties inside
+-- 0.3m, and the GAME's own interact outranks everyone (native_busy). Its contract is explicit:
+-- *publishing a prompt entitles you to nothing -- you must ask who won before you act.*
+-- farm_bed / cookpot / farm_animal / home_life / wyrm_rite / weapon_mount all ask.
+-- **tame_begin and tame_ox published and then acted on the raw button.** So the tame fired
+-- alongside whatever the player actually meant, and being the louder handler, it won.
+--
+-- ⛔ THIS GATE BELONGS ON *STARTING* A RITE, NOT ON TB.held() ITSELF. Every live rite reads
+-- its hand through TB.held() -- the griffin call, the palm raise, feeding, the ox offer hold --
+-- and once a rite owns the moment it clears its own prompt, so the arbiter no longer knows its
+-- name. Gating TB.held() globally would strand every courtship mid-rite.
+--
+-- ⭐ It does NOT break taming at range: when nothing else is publishing, the tame IS the
+-- winner at any distance. It only stands down when something nearer wants the same button.
+TB.may_start = function(owner)
+    local P = rawget(_G, "IrisPrompt")
+    if not P then return true end            -- no arbiter loaded: behave exactly as before
+    local refuse_why = nil
+    pcall(function()
+        if P.native_busy and P.native_busy() then
+            refuse_why = "the game is offering its own interact here"
+            return
+        end
+        local w = P.winner and P.winner() or nil
+        if w and w ~= owner then refuse_why = "'" .. tostring(w) .. "' is nearer" end
+    end)
+    if not refuse_why then return true end
+    -- throttled receipt: a silent refusal is indistinguishable from a dead feature
+    S.may_start_said = S.may_start_said or {}
+    local k = tostring(owner)
+    if (os.clock() - (tonumber(S.may_start_said[k]) or 0.0)) > 3.0 then
+        S.may_start_said[k] = os.clock()
+        pcall(function() log.info("[IrisTaming] " .. k .. " stood down: " .. refuse_why) end)
+    end
+    return false
+end
+
 local function find_candidate(pgo)
+    -- ⛔ 08-13 (Aurora, riding the cat past wildlife: "tame prompts coming up as I
+    -- rode past"): ground-life actions stand down while seated on a rodeo mount.
+    -- No candidate = no prompt AND no B press for every rite that screens here.
+    if rawget(_G, "IrisRiddenNow") then return nil end
     local pp = pgo and upos(pgo)
     if not pp then return nil end
     -- the stable's ACTIVE companion is off-limits: it is already tamed and already being
@@ -3054,7 +3296,12 @@ local function find_candidate(pgo)
                     horse_owned = api and api.is_horse
                         and api.is_horse(go) == true
                 end)
-                if not horse_owned
+                local resident9 = false   -- 08-12: the homestead's own are NEVER candidates
+                pcall(function()
+                    local hb9 = rawget(_G, "IrisHomesteadBox")
+                    resident9 = hb9 and hb9.is_resident and hb9.is_resident(go:get_address()) or false
+                end)
+                if not horse_owned and not resident9
                     and (name_in_csv(nm, C.target_bands) or name_in_csv(nm, C.critter_bands))
                     and not name_in_csv(nm, C.exclude_bands)
                     and not S.tamed[ch] and not is_dead(ch)
@@ -4583,10 +4830,33 @@ re.on_application_entry("LateUpdateBehavior", function()
     -- freshly finalised player root, so it never floats or lags during the walk cycle.
     pcall(function()
         local pa = S.perch_active
+        -- ⭐ is the send-home run-off currently driving this body? (published by the theater in
+-- GriffinRideProbe). Anything in this file that moves a companion must ask first -- two writers on
+-- one body is the bug that has bitten three times tonight. Declared as a GLOBAL on purpose: the
+-- follow branch that calls it sits ~11k lines below, where a local would resolve to a nil global.
+function iris_sendhome_owns(go)
+    if not go then return false end
+    local a = rawget(_G, "IrisSendHomeGoAddr")
+    if not a then return false end
+    local ga = nil
+    pcall(function() ga = tostring(go:get_address()) end)
+    return ga ~= nil and tostring(a) == ga
+end
+
+-- ⭐⭐ PUBLISH THE PERCH (08-13). A shoulder-riding critter is pinned to the player's
+        -- shoulder joint every frame from here, so ANY other system that writes that body's position
+        -- is in an unwinnable fight with this pin. Aurora's rabbit proved it: the send-home run-off
+        -- drove it while this pin held it, and it "appeared at my side, started running on the spot".
+        -- S.perch_active is file-local, so there was no way for another module to know. Now there is.
+        -- ⛔ GAMEOBJECT address (the address-class law: never compare this against a Character).
+        rawset(_G, "IrisTamingPerchGoAddr", nil)
         if not pa or not pa.go then return end
+        pcall(function() rawset(_G, "IrisTamingPerchGoAddr", tostring(pa.go:get_address())) end)
         local player = get_player()
         local pgo = player and char_go(player)
         if pgo then pin_crow_shoulder(pa.go, pgo) end
+        -- ⛔ NO SCALE WRITE HERE EITHER (08-13). This is where I had the pin; it is gone. The perch
+        -- owns POSITION only (pin_crow_shoulder above). Size belongs to the size gene, full stop.
     end)
     -- (08-08: the PALM/CALL posture block moved to PrepareRendering
     -- below -- Aurora: "the palm-out hand was shaking". Written here at
@@ -7216,7 +7486,7 @@ re.on_application_entry("UpdateBehavior", function()
             if post3 == "roost" or post3 == "ground" then
                 set_prompt(oxt_fill(st0, "{SHE} HAS NOT STIRRED"), "The griffin rests still. The scent takes time to reach a sleeping hunger -- stay by the offering.", 6.0, 0xFFFFD080)
             elseif stalled3 then
-                set_prompt(oxt_fill(st0, "{SHE} HESITATES"), "The griffin wheels overhead and will not commit. Raise your hand to the sky (HOLD N) and CALL the stoop yourself.", 7.0, 0xFFFFD080)
+                set_prompt(oxt_fill(st0, "{SHE} HESITATES"), "The griffin wheels overhead and will not commit. Raise your hand to the sky (HOLD N / B) and CALL the stoop yourself.", 7.0, 0xFFFFD080)
             else
                 set_prompt("IT CIRCLES", oxt_fill(st0, "The griffin has your gift in {her} eye. Stay by the offering, and let {herO} come."), 6.0, 0xFFFFD080)
             end
@@ -8269,7 +8539,7 @@ re.on_application_entry("UpdateBehavior", function()
             end
         end
         -- ⭐⭐ THE CALL-DOWN (07-20, Aurora: "I wouldn't be opposed if I could call it down with a
-        -- motion"): player agency over the stoop. While she's lured + aloft + within 150m, HOLD N --
+        -- motion"): player agency over the stoop. While she's lured + aloft + within 150m, HOLD N / B --
         -- your hand rises (the palm rig) and the call builds ~1.2s; she answers with the proven
         -- short dive to the offering (the same bundle as the auto seize). Covers every stuck-hover
         -- and wide-circle case with a GESTURE instead of a wait.
@@ -8280,11 +8550,9 @@ re.on_application_entry("UpdateBehavior", function()
         if st0.stage == "bait" and st0.lured and not st0.native_dive_pending and not low0
             and dc0 <= 450.0 and corpse0
             and nowO >= (tonumber(st0.call_cd) or 0.0) then
-            local nheld8 = false
-            pcall(function()
-                local tk8 = math.floor(tonumber(C.tame_key) or 0x4E)
-                nheld8 = (tk8 > 0 and iris_kb(tk8) == true) or iris_kb(0x4E) == true
-            end)
+            -- 08-13: was keyboard-only (Aurora: "the Griffin tame will need the controller buttons
+            -- to work during its tame"). TB.held() = N or pad B, and it auto-faces the griffin.
+            local nheld8 = TB.held()
             if nheld8 then
                 st0.call_t = (tonumber(st0.call_t) or 0.0) + 0.7
                 local phc8 = math.floor(tonumber(C.player_hand_clip) or 6200)
@@ -8700,7 +8968,7 @@ re.on_application_entry("UpdateBehavior", function()
                 else
                     play_motion(st0.ch, 0, 0)   -- the meal ends: back to a standing idle
                 end
-                set_prompt(he0:upper() .. " IS SATED", "The griffin stands over the kill, watching you. Approach and HOLD OUT YOUR HAND (hold N).", 9.0, 0xFF80FFB0)
+                set_prompt(he0:upper() .. " IS SATED", "The griffin stands over the kill, watching you. Approach and HOLD OUT YOUR HAND (hold N / B).", 9.0, 0xFF80FFB0)
                 -- ⭐ LET THE SATED CARD BE READ (07-26, Aurora: "'IS SATED' lasted like a fraction of a
                 -- second, couldn't read it, and moved to THE COURTSHIP"). The palm stage's idle nag is
                 -- gated on `st0.palm_say`, which is NIL on the first palm tick -- so `nowO >= 0.0` was
@@ -8731,13 +8999,10 @@ re.on_application_entry("UpdateBehavior", function()
             local her0 = (st0.gender == "female") and "her" or "his"
             local dp0 = dist(wu0, pu0)
             local nheld0 = false
-            pcall(function()
-                -- Aurora's save has tame_key = -1 (unbound via the hotkeys UI) -- the palm
-                -- listened to a key that doesn't exist. The literal N always works.
-                local tk0 = math.floor(tonumber(C.tame_key) or 0x4E)
-                nheld0 = (tk0 > 0 and iris_kb(tk0) == true)
-                    or iris_kb(0x4E) == true
-            end)
+            -- Aurora's save has tame_key = -1 (unbound via the hotkeys UI) -- the palm listened to
+            -- a key that doesn't exist. The literal N always works, and TB.held() covers pad B too
+            -- (08-13: the griffin rite was keyboard-only). It also auto-faces the griffin.
+            nheld0 = TB.held()
             if nheld0 and dp0 < 12.0 then
                 -- 12m: a griffin's ROOT sits meters from her beak -- 7m refused Aurora's held
                 -- palm while she stood touching the bird
@@ -8820,7 +9085,7 @@ re.on_application_entry("UpdateBehavior", function()
                 st0.palm_t = math.max(0.0, (tonumber(st0.palm_t) or 0.0) - 0.35)
                 if nowO >= (tonumber(st0.palm_say) or 0.0) then
                     st0.palm_say = nowO + 8.0
-                    set_prompt("THE COURTSHIP", "Stand before " .. ((st0.gender == "female") and "her" or "him") .. ", weapon sheathed, and HOLD OUT YOUR HAND (hold N).", 8.0, 0xFFFFD080)
+                    set_prompt("THE COURTSHIP", "Stand before " .. ((st0.gender == "female") and "her" or "him") .. ", weapon sheathed, and HOLD OUT YOUR HAND (hold N / B).", 8.0, 0xFFFFD080)
                 end
             end
         elseif st0.stage == "mount" then
@@ -9124,7 +9389,7 @@ re.on_application_entry("UpdateBehavior", function()
             end)
             -- ⭐⭐⭐ THE BRACE-DUEL (P4 Slice 1, 07-20 -- Aurora's design): the rodeo is a real minigame.
             -- She BUCKS in SCRIPTED waves (a native IN-PLACE shake node via the oxtame_buck bridge); you
-            -- HOLD N to cling (drains GRIP); between bucks you RELEASE to recover, or STRIKE her (any
+            -- HOLD N / B to cling (drains GRIP); between bucks you RELEASE to recover, or STRIKE her (any
             -- weapon = one fixed taming-blow) to drain HER stamina -- but each blow costs grip. Grip 0 =
             -- THROWN (fail); her stamina 0 = she YIELDS (win). ⛔ Cadence is a SCRIPTED os.clock timer,
             -- NEVER native arousal: predation is cleared (she can't hunt oxen) which would leave her IDLE
@@ -9140,7 +9405,7 @@ re.on_application_entry("UpdateBehavior", function()
                 st0.duel_until = nowO + (tonumber(C.oxtame_pause_secs) or 3.0)
                 st0.duel_last = nowO
                 st0.c253 = comp(st0.go, "app.Ch253000")
-                set_prompt("BREAK " .. ((st0.gender == "female") and "HER" or "HIM"), "HOLD N (or LT) to cling through each buck. Between them, ATTACK to break " .. ((st0.gender == "female") and "her" or "him") .. " -- but striking spends your grip.", 9.0, 0xFFFF8060)
+                set_prompt("BREAK " .. ((st0.gender == "female") and "HER" or "HIM"), "HOLD N / B (or LT) to cling through each buck. Between them, ATTACK to break " .. ((st0.gender == "female") and "her" or "him") .. " -- but striking spends your grip.", 9.0, 0xFFFF8060)
             end
             -- ⭐ PANIC ESCAPE (07-20, Aurora: "got completely stuck in the first 5-10s -- pause/unpause
             -- fixed it"). The freeze is a player action-lock (that's WHY a pause cycle clears it); root
@@ -9246,7 +9511,7 @@ re.on_application_entry("UpdateBehavior", function()
                     pcall(function() log.info("[OxTame] rodeo anti-slam: low airborne -> re-lift") end)
                 end
             end
-            -- SCRIPTED cadence: pause (recover/strike) -> TELL (rear-up warning, no drain) -> buck (hold N)
+            -- SCRIPTED cadence: pause (recover/strike) -> TELL (rear-up warning, no drain) -> buck (hold N / B)
             if nowO >= (tonumber(st0.duel_until) or 0.0) then
                 if st0.duel_phase == "pause" then
                     -- THE TELL (07-20, Aurora: the buck must never be a gotcha): she rears up + a
@@ -9273,7 +9538,7 @@ re.on_application_entry("UpdateBehavior", function()
             local dtd = math.max(0.1, math.min(1.5, nowO - (tonumber(st0.duel_last) or nowO)))
             st0.duel_last = nowO
             local braced0 = false
-            pcall(function() braced0 = (iris_kb(0x4E) == true) or iris_lt_down() end)   -- HOLD N (keyboard) OR LT (controller)
+            pcall(function() braced0 = (iris_kb(0x4E) == true) or iris_lt_down() end)   -- HOLD N / B (keyboard) OR LT (controller)
             -- am I ACTIVELY ATTACKING her? -- read the PLAYER'S ACTION (class-agnostic), NOT a hit: a
             -- sorceror's staff bolt attributes to the projectile so damageProc never saw "the player";
             -- reading the action works for staff AND cleave. While attacking, the BREAK bar + grip drain
@@ -9288,7 +9553,7 @@ re.on_application_entry("UpdateBehavior", function()
                     set_prompt("BRACE!", "Keep holding N or LT!", 1.0, 0xFF4040FF)
                 else
                     st0.grip = (tonumber(st0.grip) or 1.0) - (tonumber(C.oxtame_grip_slip_drain) or 0.40) * dtd
-                    set_prompt("BRACE!", "Hold N or LT NOW -- you're slipping!", 1.0, 0xFF4040FF)
+                    set_prompt("BRACE!", "Hold N / B or LT NOW -- you're slipping!", 1.0, 0xFF4040FF)
                 end
             else
                 -- ATTACK WINDOW (pause + the tell rear-up): STRIKE her (rate-based) to fill the BREAK bar;
@@ -9312,7 +9577,7 @@ re.on_application_entry("UpdateBehavior", function()
                 to_buck = math.max(0.0, to_buck)
                 local breakf = 1.0 - (tonumber(st0.tame_stam) or 0.0) / tsmax   -- fills as she breaks
                 if st0.duel_phase == "tell" then
-                    set_prompt("BRACE!", "Hold N or LT -- a buck is coming!", 1.0, 0xFF4040FF)
+                    set_prompt("BRACE!", "Hold N / B or LT -- a buck is coming!", 1.0, 0xFF4040FF)
                 else
                     set_prompt("NOW'S YOUR CHANCE!", string.format("Attack! Next buck in %.0fs.", math.max(1.0, math.ceil(to_buck))), 1.0, 0xFF80FFB0)
                 end
@@ -9578,7 +9843,7 @@ re.on_application_entry("UpdateBehavior", function()
             end
         elseif st0.stage == "pact" then
             -- ⭐⭐ THE FINAL PACT (07-20, Aurora's design): stand before the spent griffin and HOLD OUT
-            -- YOUR HAND (hold N) -- the palm machinery, re-staged. The seal = tame_creature (register +
+            -- YOUR HAND (hold N / B) -- the palm machinery, re-staged. The seal = tame_creature (register +
             -- join the stable + the shrink to mount scale) + the naming card (the world holds its breath).
             pcall(function() full_pacify(st0.ch) end)
             -- ⭐ the eased LIE-DOWN (07-21): the landing flare gets its beat, then the going-down clip
@@ -9704,11 +9969,8 @@ re.on_application_entry("UpdateBehavior", function()
                 end)
             end
             local dp9 = dist(wu0, pu0)
-            local nheld9 = false
-            pcall(function()
-                local tk0 = math.floor(tonumber(C.tame_key) or 0x4E)
-                nheld9 = (tk0 > 0 and iris_kb(tk0) == true) or iris_kb(0x4E) == true
-            end)
+            -- 08-13: pad B works here too now, and the palm auto-faces the griffin
+            local nheld9 = TB.held()
             if nheld9 and dp9 < 12.0 then
                 st0.pact_palm = (tonumber(st0.pact_palm) or 0.0) + 0.7
                 local phc0 = math.floor(tonumber(C.player_hand_clip) or 6200)
@@ -9743,7 +10005,7 @@ re.on_application_entry("UpdateBehavior", function()
                 st0.pact_palm = math.max(0.0, (tonumber(st0.pact_palm) or 0.0) - 0.35)
                 if nowO >= (tonumber(st0.pact_say) or 0.0) then
                     st0.pact_say = nowO + 8.0
-                    set_prompt("THE PACT WAITS", ((st0.gender == "female") and "She" or "He") .. " is spent and still. Stand before " .. ((st0.gender == "female") and "her" or "him") .. " and HOLD OUT YOUR HAND (hold N).", 8.0, 0xFFFFD080)
+                    set_prompt("THE PACT WAITS", ((st0.gender == "female") and "She" or "He") .. " is spent and still. Stand before " .. ((st0.gender == "female") and "her" or "him") .. " and HOLD OUT YOUR HAND (hold N / B).", 8.0, 0xFFFFD080)
                 end
             end
         elseif st0.stage == "flee" then
@@ -11207,7 +11469,7 @@ local function try_finish(player, pgo, ch, go, why, at_hand)
 end
 
 -- ============================ THE YOKE RITE (the ox tame, 07-21) ============================
--- Aurora's pack-beast: you don't BREAK an ox, you WIN it. Deliberate start only (hold N near a
+-- Aurora's pack-beast: you don't BREAK an ox, you WIN it. Deliberate start only (hold N / B near a
 -- pasture ox -- passive arming would sabotage the griffin's ox-offering hunt, the review's law).
 -- approach (be near, be slow) -> greens (id-based feed) -> THE WALK (a gently-puppeted meander,
 -- stay by its side) -> palm -> the standard stable finisher (the wolf's exact family path).
@@ -11229,11 +11491,7 @@ re.on_application_entry("UpdateBehavior", function()
         local pgo = player and char_go(player)
         local pp = pgo and upos(pgo)
         if not pp then return end
-        local nheld = false
-        pcall(function()
-            local tk0 = math.floor(tonumber(C.tame_key) or 0x4E)
-            nheld = (tk0 > 0 and iris_kb(tk0) == true) or iris_kb(0x4E) == true
-        end)
+        local nheld = TB.held()   -- 08-12 slice A: keyboard N or pad B, one hold
         local R = S.ox_rite
         if not R then
             -- ARMING: a held N near a wild pasture ox, with NOTHING else underway (the review's
@@ -11242,8 +11500,15 @@ re.on_application_entry("UpdateBehavior", function()
                 or S.name_pending or S.combat_tame or S.yield_down or S.iris_carry then
                 S.ox_arm_t0 = nil; return
             end
-            if not nheld then S.ox_arm_t0 = nil; return end
+            -- round 13 (B on oxen was dead): the scan runs ALWAYS (throttled 0.3s) and
+            -- MARKS its candidate -- the pad hand needs a subject BEFORE the rite exists,
+            -- and the ox deserves the same begin-marker as every other tameable
             local found0 = nil
+            if S.ox_scan_at and now < S.ox_scan_at
+                and S.ox_mark and S.ox_mark.ch and char_go(S.ox_mark.ch) then
+                found0 = S.ox_mark
+            else
+            S.ox_scan_at = now + 0.3
             pcall(function()
                 local sm0 = sdk.get_native_singleton("via.SceneManager")
                 local smt0 = sdk.find_type_definition("via.SceneManager")
@@ -11276,7 +11541,12 @@ re.on_application_entry("UpdateBehavior", function()
                             locked0 = ga9 and S.lockouts
                                 and (tonumber(S.lockouts[tostring(ga9)]) or 0.0) > os.clock() or false
                         end)
-                        if nm0:find("ch299003", 1, true) and not employed0 and not locked0
+                        local resident0 = false   -- 08-12: the homestead's own are NEVER candidates
+                        pcall(function()
+                            local hb0 = rawget(_G, "IrisHomesteadBox")
+                            resident0 = hb0 and hb0.is_resident and hb0.is_resident(go0:get_address()) or false
+                        end)
+                        if nm0:find("ch299003", 1, true) and not employed0 and not locked0 and not resident0
                             and not is_dead(ch0) and not iris_ox_is_tamed(ch0) then
                             local u0 = upos(go0)
                             local d0 = u0 and dist(u0, pp)
@@ -11285,6 +11555,31 @@ re.on_application_entry("UpdateBehavior", function()
                     end)
                 end
             end)
+            S.ox_mark = found0
+            end
+            -- the MARK: the candidate ox wears the begin-marker + the shared prompt line
+            if found0 and found0.go then
+                S.ox_mark_go = found0.go
+                local lbl0 = "Ox"
+                pcall(function() lbl0 = tostring(creature_label(found0.go)) end)
+                pcall(function()
+                    local sp0 = rawget(_G, "IrisSpecies")
+                    local g0 = sp0 and sp0.gender and sp0.gender(found0.go) or nil
+                    if lbl0 == "Ox" then lbl0 = (g0 == "male" and "Bull") or (g0 == "female" and "Cow") or lbl0 end
+                end)
+                TB.mark(found0.go, "[N/B] Tame the " .. lbl0)   -- native B wins; this is the fallback
+                pcall(function()
+                    local mp0 = upos(found0.go)
+                    -- 08-13: pos was nil here too -- the ox never got the native prompt either
+                    if _G.IrisPrompt then _G.IrisPrompt.set("tame_ox", "Tame the " .. lbl0,
+                        20, mp0 and dist(mp0, pp) or 99.0, TB.prompt_pos(found0.go), found0.go) end
+                end)
+            else
+                S.ox_mark_go = nil
+                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_ox", "") end end)
+            end
+            -- ⭐ 08-13: ask the arbiter before the offer hold may begin (see TB.may_start)
+            if not (nheld and TB.may_start("tame_ox")) then S.ox_arm_t0 = nil; return end
             if not found0 then S.ox_arm_t0 = nil; return end
             S.ox_arm_t0 = S.ox_arm_t0 or now
             -- the hand goes OUT during the offer hold (Aurora: "the initial start doesn't
@@ -11301,6 +11596,8 @@ re.on_application_entry("UpdateBehavior", function()
             if now - S.ox_arm_t0 >= 1.2 then
                 S.ox_arm_t0 = nil
                 S.ox_rite = { ch = found0.ch, go = found0.go, stage = "approach", t0 = now, appr = 0.0, last = now }
+                S.ox_mark = nil; S.ox_mark_go = nil   -- the mark's job is done; the rite owns the moment
+                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_ox", "") end end)
                 -- 08-12 (Aurora: "it did IT WAITS but was still walking as normal"): think-stop
                 -- only blocks NEW decisions -- a move command already in flight keeps walking.
                 -- SEIZE the body at rite start: cancel the live action, pin navigation.
@@ -11431,14 +11728,21 @@ re.on_application_entry("UpdateBehavior", function()
             end)
         end
         -- walking away ends it gracefully (any stage); 08-12 round 8: past 40m it is simply
-        -- ABANDONED -- no fifteen-second grace, no lockout (leaving is not an insult)
+        -- ABANDONED -- no lockout (leaving is not an insult). Round 12: the reading must
+        -- PERSIST a full second -- a single-frame garbage universal read (the tile re-base
+        -- shear) fired a phantom abandon while Aurora stood BESIDE the ox.
         if dp > 40.0 then
+            R.far40_t = R.far40_t or now
+        else
+            R.far40_t = nil
+        end
+        if R.far40_t and now - R.far40_t > 1.0 then
             yoke_nav_muscle(true)
             pcall(function() set_player_fsm(go, true) end)
             pcall(function() release_creature(ch) end)
             S.ox_rite = nil
             set_prompt("THE RITE IS ABANDONED", "You have left it behind. The ox returns to its grazing.", 7.0, 0xFFFFD080)
-            pcall(function() log.info("[OxRite] stand-down: abandoned (>40m)") end)
+            pcall(function() log.info("[OxRite] stand-down: abandoned (>40m held 1s)") end)
             return
         elseif dp > 25.0 then
             R.far_t = R.far_t or now
@@ -11544,8 +11848,11 @@ re.on_application_entry("UpdateBehavior", function()
                         pcall(function()
                             if R.drop_go then R.drop_go:call("destroy", R.drop_go); R.drop_go = nil end
                         end)
-                        R.stage = "walk"; R.bond = 0.0; R.wp = nil; R.clip = nil; R.eating = nil
-                        set_prompt("THE YOKE", "Walk with it. Stay by its side as it wanders.", 7.0, 0xFF80FFB0)
+                        -- round 13 (Aurora: "after eating, the ox faces you and lows"): the
+                        -- beat between meal and yoke -- atlas 0:2 com_idle_cry IS the moo
+                        R.stage = "low"; R.low_t0 = now; R.clip = nil; R.eating = nil
+                        pcall(function() play_motion(ch, 0, 2) end)
+                        set_prompt("IT LOWS FOR YOU", "The offering is taken. It turns to you and lows, long and deep.", 4.0, 0xFF80FFB0)
                     end
                 end
             else
@@ -11575,6 +11882,21 @@ re.on_application_entry("UpdateBehavior", function()
                     R.give_gscan_at = now + 1.0   -- the scene sweep is heavy: once a second
                     drop_go9 = ground_scan_new(pgo, R.give_gseen)
                 end
+                -- round 13 junk law, ported from the critter give (the phantom offering: it
+                -- "ate" a streamed mesh and marched straight to the yoke): a ground-scan
+                -- find must be item-shaped, never engine scenery
+                if not drop9 and drop_go9 then
+                    -- round 14 CORRECTION (the refused Greenwarish): real dropped ITEMS wear
+                    -- engine names too (gm/it/sm prefixes) -- those PASS. Only true scenery
+                    -- patterns are junk: characters, planes, trims, double-underscore names.
+                    local l9 = ""
+                    pcall(function() l9 = tostring(go_name(drop_go9) or "") end)
+                    if l9 == "" or l9:find("^ch%d") or l9:find("Plane")
+                        or l9:find("Trim") or l9:find("__") then
+                        pcall(function() log.info("[OxRite] ground-scan REJECTED scenery: '" .. l9 .. "'") end)
+                        drop_go9 = nil
+                    end
+                end
                 if drop9 or drop_go9 then
                     local dgo9 = nil
                     pcall(function() dgo9 = (drop9 and drop9:call("get_GameObject")) or drop_go9 end)
@@ -11585,8 +11907,15 @@ re.on_application_entry("UpdateBehavior", function()
                         local prp9 = pgo:call("get_Transform"):call("get_Position")
                         ux9 = pp.x + (rp9.x - prp9.x); uy9 = pp.y + (rp9.y - prp9.y); uz9 = pp.z + (rp9.z - prp9.z)
                     end)
-                    -- BEFORE THE OX: the laid thing must be within its reach (universal vs universal)
-                    local near_ox9 = dist({ x = ux9, y = uy9, z = uz9 }, gp) <= 6.0
+                    -- BEFORE THE OX: within its WALK, not its nose (round 12 -- the 6m radius
+                    -- silently rejected honest drops and the two 0.6s cards strobed; the
+                    -- eat-walk exists precisely to cover distance)
+                    local doff9 = dist({ x = ux9, y = uy9, z = uz9 }, gp)
+                    local near_ox9 = doff9 <= 12.0
+                    if not near_ox9 then
+                        pcall(function() log.info(string.format(
+                            "[OxRite] offering rejected: %.1fm from the ox (limit 12)", doff9)) end)
+                    end
                     if near_ox9 then
                         R.feedpt = { x = ux9, y = uy9, z = uz9 }
                         R.drop_go = dgo9
@@ -11594,11 +11923,22 @@ re.on_application_entry("UpdateBehavior", function()
                         set_prompt("THE OFFERING", "The greens lie before it. It comes to eat.", 5.0, 0xFF80FFB0)
                         pcall(function() log.info("[OxRite] offering seen via " .. (drop9 and "drop-list" or "ground-scan")) end)
                     else
-                        set_prompt("IT WAITS", "Lay it closer -- the offering must rest before it.", 0.6, 0xFF80D0FF)
+                        set_prompt("IT WAITS", "Lay it closer -- the offering must rest nearer the ox.", 2.5, 0xFF80D0FF)
                     end
                 else
                     set_prompt("IT WAITS", "Open your pack and DROP something green before it -- Greenwarish or other greens.", 0.6, 0xFF80D0FF)
                 end
+            end
+        elseif R.stage == "low" then
+            -- the LOW: it turns to face you and cries its own cry -- then the yoke
+            pcall(function() set_think_stop(ch, true) end)
+            pcall(function() set_ai(ch, false) end)
+            pcall(function() set_player_fsm(go, false) end)
+            yoke_face_player()
+            -- round 14: 2.6s cut the cry short -- give the low its full breath
+            if now - (tonumber(R.low_t0) or now) > 4.6 then
+                R.stage = "walk"; R.bond = 0.0; R.wp = nil; R.clip = nil
+                set_prompt("THE YOKE", "Walk with it. Stay by its side as it wanders.", 7.0, 0xFF80FFB0)
             end
         elseif R.stage == "walk" then
             -- ⭐ THE WALK: the signature beat. The ox MEANDERS under a gentle puppet (the review's
@@ -11635,9 +11975,30 @@ re.on_application_entry("UpdateBehavior", function()
                 -- is the anim-spam trap, so assert only on change)
                 if R.clip ~= 100 then R.clip = 100; play_motion(ch, 0, 100) end
             end)
+            -- round 14 (Aurora: "you need to KEEP TIME with it"): the bond fills only while
+            -- you are near AND walking at its pace -- the ox ambles at 0.85 m/s, so the
+            -- accepted band is a generous walk (0.35..1.9). Sprinting past or standing
+            -- rooted earns nothing; the stall clock does the judging if it goes on.
             if dp <= 6.0 then
-                R.bond = math.min(20.0, (tonumber(R.bond) or 0.0) + dt0)
-                set_prompt("THE YOKE", "Stay with it -- side by side.", 0.6, 0xFF80D0FF)
+                -- round 15 (the strobing card): raw per-frame speed JITTERS across the band
+                -- edges. Smooth it (EMA), and the VERDICT is sticky -- a new judgment must
+                -- hold 0.35s before the card changes its mind. The bond follows the sticky
+                -- verdict, so it fills steadily for honest walking.
+                R.psp_s = (tonumber(R.psp_s) or psp) * 0.85 + psp * 0.15
+                local v9 = (R.psp_s > 2.1 and "fast") or (R.psp_s < 0.30 and "slow") or "ok"
+                if v9 ~= R.pace_pend then R.pace_pend = v9; R.pace_pend_t = now end
+                R.pace_state = R.pace_state or "ok"
+                if v9 ~= R.pace_state and now - (tonumber(R.pace_pend_t) or now) > 0.35 then
+                    R.pace_state = v9
+                end
+                if R.pace_state == "ok" then
+                    R.bond = math.min(20.0, (tonumber(R.bond) or 0.0) + dt0)
+                    set_prompt("THE YOKE", "Stay with it -- side by side, step for step.", 0.6, 0xFF80D0FF)
+                elseif R.pace_state == "fast" then
+                    set_prompt("THE YOKE", "Too hurried -- match its amble.", 0.6, 0xFFFFD080)
+                else
+                    set_prompt("THE YOKE", "Walk WITH it -- standing still is not walking together.", 0.6, 0xFFFFD080)
+                end
             elseif dp > 10.0 then
                 set_prompt("THE YOKE", "You fall behind -- keep its side.", 0.6, 0xFF5050FF)
             end
@@ -11654,18 +12015,22 @@ re.on_application_entry("UpdateBehavior", function()
                 return
             end
             if (tonumber(R.bond) or 0.0) >= 20.0 then
-                R.stage = "palm"; R.clip = 0
-                pcall(function() play_motion(ch, 0, 0) end)   -- it slows and stands
+                R.stage = "palm"; R.clip = 2
+                R.cry_until = now + 4.6   -- round 14 (Aurora): the yoke completes with the
+                pcall(function() play_motion(ch, 0, 2) end)   -- idle cry again -- it LOWS
                 -- round 10: FSM STAYS OFF -- the native idle was the walking-away problem;
                 -- the atlas idle holds it until the seal restores everything
-                set_prompt("IT SLOWS AND STANDS", "Stand before it, and hold out your hand (hold N).", 8.0, 0xFF80FFB0)
+                set_prompt("IT SLOWS AND STANDS", "Stand before it, and hold out your hand (hold N / B).", 8.0, 0xFF80FFB0)
             end
         elseif R.stage == "palm" then
             pcall(function() set_think_stop(ch, true) end)
             pcall(function() set_ai(ch, false) end)
             pcall(function() set_player_fsm(go, false) end)   -- round 10: the atlas idle owns it to the seal
             pcall(function()
-                if R.clip ~= 0 then R.clip = 0; play_motion(ch, 0, 0) end
+                -- round 14: let the completion LOW finish before the idle takes over
+                if now >= (tonumber(R.cry_until) or 0.0) and R.clip ~= 0 then
+                    R.clip = 0; play_motion(ch, 0, 0)
+                end
             end)
             yoke_face_player()
             -- patience: 30s for the hand to come out and STAY -- a new high-water mark resets it
@@ -11704,7 +12069,7 @@ re.on_application_entry("UpdateBehavior", function()
                 end
             else
                 R.palm = 0.0
-                set_prompt("THE PALM", "Stand before it and hold N -- offer your hand.", 0.6, 0xFF80D0FF)
+                set_prompt("THE PALM", "Stand before it and hold N / B -- offer your hand.", 0.6, 0xFF80D0FF)
             end
         end
     end)
@@ -11881,7 +12246,7 @@ local function pick_next(T, now)
     local nxt = T.plan[T.plan_i]
     if not nxt then
         T.stage = "laststeps"; T.t0 = now; S.wolf_clip = nil
-        S.status = "NOW: hand out (HOLD N) and hold it - it is deciding."
+        S.status = "NOW: hand out (HOLD N / B) and hold it - it is deciding."
         return
     end
     T.stage = nxt; T.t0 = now; S.wolf_clip = nil
@@ -12012,9 +12377,14 @@ re.on_frame(function()
             -- the Arisen SEARCHES: play the 60:7631 scanning gesture as the sense fires
             -- upper = don't seize the body (walk through it); follow = hold for the clip's REAL
             -- length instead of a fixed guess, which is what made it cut out mid-gesture
+            -- 08-12 (Aurora: "frustrating to wait"): the gesture runs FASTER
+            -- (speed applies to the live layer) and carries a [B] early-out.
+            -- (Feet-free was tried long ago: layer 1 refuses this clip, the
+            -- self-heal below always falls back to the full-body seize.)
             S.phold = { clip = tonumber(C.sense_anim) or 7631,
                 until_t = os.clock() + (tonumber(C.sense_anim_secs) or 3.5),
-                no_pin = true, upper = (C.sense_upper ~= false), follow = true }
+                no_pin = true, upper = (C.sense_upper ~= false), follow = true,
+                speed = tonumber(C.sense_anim_speed) or 1.6, cancel = true }
         end
         S.sense_prev = sdn
         if C.sense_enabled == false then return end
@@ -12079,6 +12449,57 @@ re.on_frame(function()
                     sense_name = (g8 == "male" and "Bull") or (g8 == "female" and "Cow") or nil
                     if employed8 then tier, rgb = "yoked to its cart", 0x909090
                     else tier, rgb = "tameable pack-beast", 0xFFC040 end   -- the ox: yoke rite, ride comes later (07-21 honesty fix)
+                elseif nm:find("ch299011", 1, true) then
+                    -- ⭐⭐ HORSES AND UNICORNS JOIN THE SENSE (Aurora 08-12: "horses/unicorns don't
+                    -- appear in wayfarer sense", screenshot: a wild horse 8m away with only timber
+                    -- marked). They never could, and the cause was absence rather than a filter:
+                    -- **ch299011 is in NO sense band** - target_bands is "ch223" (wolves),
+                    -- critter_bands is the small tier, sense_mount_bands is "ch253,ch299003" - so
+                    -- every horse fell down the whole ladder into `if not tier then return end`.
+                    -- (hunt_prey_band DOES list ch299011, but that is the wolf hunt's prey config,
+                    -- a different feature. I first assumed is_huntable() was rejecting them; it is
+                    -- not involved here at all.)
+                    -- ⚠ ONE CHASSIS, THREE CREATURES: wild doe, converted horse, and unicorn all wear
+                    -- ch299011, and ONLY the wild-horses registry can separate them - name matching
+                    -- provably cannot. Same ask creature_label makes above.
+                    -- ⛔ ORDER IS LOAD-BEARING: is_unicorn MUST come first, because a unicorn is also
+                    -- a horse by design (kind stays "horse" to keep ~15 consumers working).
+                    local api9 = rawget(_G, "__iris_wild_horses_api")
+                    local uni9, hor9 = false, false
+                    pcall(function()
+                        if not api9 then return end
+                        uni9 = api9.is_unicorn and api9.is_unicorn(go) == true
+                        hor9 = api9.is_horse and api9.is_horse(go) == true
+                    end)
+                    if uni9 then
+                        -- ⭐ Aurora's ask: rainbow font + "Ultra Rare Tameable!". The hue sweep is the
+                        -- same one her unicorn's COAT runs (UNI.hsv, 0.12 cycles/sec), ported here as
+                        -- pure arithmetic on purpose: the sense must not depend on a cross-file
+                        -- function that may not be loaded, and there is no engine API to guess.
+                        -- The creature sweep already runs every frame, so the label animates for free.
+                        local h9 = (os.clock() * 0.12) % 1.0
+                        local i9 = math.floor(h9 * 6.0)
+                        local f9 = h9 * 6.0 - i9
+                        local v9, s9 = 1.0, 0.85      -- vivid for TEXT; the coat uses 0.55 to read pearlescent
+                        local p9 = v9 * (1.0 - s9)
+                        local q9 = v9 * (1.0 - f9 * s9)
+                        local t9 = v9 * (1.0 - (1.0 - f9) * s9)
+                        local r9, g9, b9 = v9, p9, q9
+                        local m9 = i9 % 6
+                        if m9 == 0 then r9, g9, b9 = v9, t9, p9
+                        elseif m9 == 1 then r9, g9, b9 = q9, v9, p9
+                        elseif m9 == 2 then r9, g9, b9 = p9, v9, t9
+                        elseif m9 == 3 then r9, g9, b9 = p9, q9, v9
+                        elseif m9 == 4 then r9, g9, b9 = t9, p9, v9 end
+                        sense_name, tier = "Unicorn", "Ultra Rare Tameable!"
+                        rgb = math.floor(r9 * 255) * 0x10000 + math.floor(g9 * 255) * 0x100 + math.floor(b9 * 255)
+                    elseif hor9 then
+                        sense_name, tier, rgb = "Horse", "tameable mount", 0xFFC040   -- gold, same as the griffin/ox tier
+                    end
+                    -- a genuine WILD DOE stays unmarked (tier nil -> the return below). She is the
+                    -- wolf rite's PREY, not a tame, and a "tameable" label would promise something
+                    -- every rite refuses. This is also the graceful-degrade path: no IrisWildHorses
+                    -- loaded means no registry, means no markers, means exactly today's behaviour.
                 elseif name_in_csv(nm, tostring(C.sense_mount_bands or "ch253,ch299003")) then tier, rgb = "tameable mount", 0xFFC040   -- griffin = passive tame + RIDE, gold
                 elseif name_in_csv(nm, C.sense_boss_bands) then tier, rgb = "combat tame", 0x5050FF
                 end
@@ -13037,6 +13458,15 @@ re.on_frame(function()
                         set_player_fsm(pgo, false)
                         play_player_motion(player, tonumber(S.phold.clip) or 830, nil, nil, 0)
                     end
+                    -- 08-12: play the held gesture FASTER when asked (Aurora:
+                    -- the sense search "takes a while... frustrating")
+                    if S.phold.speed then
+                        pcall(function()
+                            player:call("get_Motion")
+                                :call("getLayer", S.phold.upper and 1 or 0)
+                                :call("set_Speed", S.phold.speed)
+                        end)
+                    end
                 else
                     -- ⭐ FOLLOW THE CLIP: hold exactly as long as it actually RUNS. A fixed timeout
                     -- is what truncated the search gesture; reading the live layer needs no
@@ -13068,9 +13498,70 @@ re.on_frame(function()
                                 else
                                     play_player_motion(player, want, nil, S.phold.at_frame, li)
                                     S.phold.until_t = now + 0.30
+                                    if S.phold.speed then
+                                        pcall(function()
+                                            player:call("get_Motion")
+                                                :call("getLayer", li)
+                                                :call("set_Speed", S.phold.speed)
+                                        end)
+                                    end
                                 end
                             end
                         end)
+                    end
+                    -- 08-12 [B] EARLY-OUT (Aurora: "press B to cancel"):
+                    -- bottom-right hint while a cancelable gesture holds;
+                    -- B (pad, enum-resolved -- never guess masks) or the B
+                    -- key ends it now via the normal cleanup path.
+                    if S.phold.cancel then
+                        -- 08-12 (Aurora: "use the native UI, not a fake label
+                        -- over the button"): publish into the game's own key
+                        -- guide via the shared IrisPromptBar service -- B slot
+                        -- = PNL_R02, fire-and-forget with a 1s TTL, so this
+                        -- per-tick republish is the whole contract.
+                        pcall(function()
+                            local P9 = rawget(_G, "IrisPrompt")
+                            if P9 and P9.set_slot then
+                                P9.set_slot("iris_sense", "PNL_R02",
+                                    "End Search")
+                            end
+                        end)
+                        local cb9 = false
+                        pcall(function() cb9 = iris_kb(0x42) end)
+                        if not cb9 then
+                            pcall(function()
+                                if S.sense_cancel_mask == nil then
+                                    S.sense_cancel_mask = 0
+                                    local bt9 = sdk.find_type_definition(
+                                        "via.hid.GamePadButton")
+                                    local f9 = bt9 and bt9:get_field("RRight")
+                                    S.sense_cancel_mask =
+                                        tonumber(f9:get_data(nil)) or 0
+                                end
+                                local hid9 = sdk.get_native_singleton(
+                                    "via.hid.GamePad")
+                                local ht9 = sdk.find_type_definition(
+                                    "via.hid.GamePad")
+                                local dev9 = sdk.call_native_func(hid9, ht9,
+                                    "get_MergedDevice")
+                                local mask9 = dev9
+                                    and tonumber(dev9:call("get_Button")) or 0
+                                cb9 = S.sense_cancel_mask ~= 0
+                                    and (mask9 & S.sense_cancel_mask) ~= 0
+                            end)
+                        end
+                        if cb9 then
+                            pcall(function() log.info(
+                                "[IrisTaming] sense gesture cancelled ([B])") end)
+                            S.phold.until_t = 0.0
+                            S.phold.next = nil
+                            pcall(function()
+                                local P9 = rawget(_G, "IrisPrompt")
+                                if P9 and P9.clear_slot then
+                                    P9.clear_slot("iris_sense")
+                                end
+                            end)
+                        end
                     end
                     if not S.phold.no_pin then
                         pcall(function()
@@ -13081,8 +13572,34 @@ re.on_frame(function()
                     end
                 end
             elseif S.phold.next then
+                -- 08-12 (Aurora: "she can run really fast" after the sense):
+                -- set_Speed lives on the LAYER, not the clip -- the FSM
+                -- inherits a 1.6x locomotion layer unless it is handed back
+                -- at 1.0. Reset at EVERY exit, chained or final.
+                if S.phold.speed then
+                    pcall(function()
+                        local mo9 = player:call("get_Motion")
+                        mo9:call("getLayer", 0):call("set_Speed", 1.0)
+                        mo9:call("getLayer", 1):call("set_Speed", 1.0)
+                    end)
+                end
                 S.phold = S.phold.next   -- chained clip: keep the freeze, play the follow-up
             else
+                if S.phold.speed then
+                    pcall(function()
+                        local mo9 = player:call("get_Motion")
+                        mo9:call("getLayer", 0):call("set_Speed", 1.0)
+                        mo9:call("getLayer", 1):call("set_Speed", 1.0)
+                    end)
+                end
+                if S.phold.cancel then
+                    pcall(function()
+                        local P9 = rawget(_G, "IrisPrompt")
+                        if P9 and P9.clear_slot then
+                            P9.clear_slot("iris_sense")
+                        end
+                    end)
+                end
                 -- only hand the body back if we actually took it (upper-body never seized it)
                 if not S.phold.upper then
                     set_think_stop(player, false)
@@ -13155,11 +13672,14 @@ re.on_frame(function()
                 S.face_hold = nil
             end
         end
+        pcall(function()
+            -- published speed: TB's dash-vs-hand discriminator (pad B is also sprint)
+            if S.player_prev_pos then S.player_spd = dist(pp, S.player_prev_pos) / math.max(0.016, dt) end
+        end)
         S.player_prev_pos = pp
 
-        -- tame key edge
-        local down = false
-        pcall(function() down = iris_kb(math.floor(tonumber(C.tame_key) or 0x54)) end)
+        -- tame key edge (08-12 slice A: keyboard N OR pad B -- one button, every rite)
+        local down = TB.held()
         local pressed = down and not S.btn_prev
         S.btn_prev = down
         -- IrisHorseRodeo owns N while an aimed horse (or an active horse
@@ -13205,7 +13725,20 @@ re.on_frame(function()
                         pcall(function() set_player_fsm(ago, true) end)
                         pcall(function() ach:call("setCharacterControllerEnable", true) end)
                         set_ground_glue(ago, true)
-                        pcall(function() ago:call("get_Transform"):call("set_LocalScale", Vector3f.new(1.0, 1.0, 1.0)) end)
+                        -- ⛔ 08-13: was a hard-coded 1.0 -- the SAME defect as the set-down write
+                        -- (:14939). A re-adopt that "restores" 1.0 discards the size gene and the
+                        -- easer then has to crawl the body back at 2%/frame. Ask the bridge, which
+                        -- is now gene-aware, and only write if it answers.
+                        pcall(function()
+                            local bsr = nil
+                            pcall(function()
+                                local br = _G.IrisGriffinBridge
+                                if br and br.body_scale then bsr = tonumber(br.body_scale()) end
+                            end)
+                            if bsr and bsr > 0.05 and bsr <= 3.0 then
+                                ago:call("get_Transform"):call("set_LocalScale", Vector3f.new(bsr, bsr, bsr))
+                            end
+                        end)
                         pcall(function() ach:call("resetActionAndAI") end)
                         pcall(function() if b.companion_hold then b.companion_hold(true) end end)   -- the driver has no critter gaits
                         pcall(function()   -- welded to the player from before the orig-restore fix? best-effort free
@@ -14923,15 +15456,44 @@ re.on_frame(function()
                     pcall(function() ch:call("setCharacterControllerEnable", false) end)
                     pcall(function() ch:call("EnableRagdoll(System.Boolean)", false) end)   -- a ragdoll tumbles off the pin
                     set_ground_glue(go, false)
-                    pcall(function()   -- a crow is big: a touch smaller sells the fit on a shoulder
-                        local s = tonumber(C.perch_scale) or 0.85
-                        -- per-species multiplier: shoulder fit varies by body (rabbit != crow)
-                        s = s * iris_species_perch(tostring(go_name(go) or ""):match("ch%d+")).scale
-                        go:call("get_Transform"):call("set_LocalScale", Vector3f.new(s, s, s))   -- the proven creature-scale call
-                    end)
+                    -- ⭐⭐⭐ THE SHOULDER DOES NOT TOUCH SIZE (Aurora 08-13, and she is right):
+                    -- "When the IV sets the size of the creature, that's all. Then when it goes on
+                    -- the shoulder, stays the exact same as when it was not on the shoulder."
+                    -- The old 0.85 x species shrink is GONE. So is my compromise that folded the gene
+                    -- in at a strength -- that was solving a problem she never had.
+                    -- ⛔ BUT SKIPPING THE WRITE IS NOT ENOUGH, and that is the real finding: with the
+                    -- write already skipped she watched the crow get BIGGER than its IV size on the
+                    -- shoulder. So something else grows a perched body -- the likeliest culprit is
+                    -- that perching kills think-stop/FSM/controller/ragdoll, and whatever normally
+                    -- holds these little bodies in check stops holding while the stable easer keeps
+                    -- asserting. Rather than hunt every writer (the losing game), we PIN:
+                    -- capture the body's scale on the frame the perch BEGINS, and re-assert exactly
+                    -- that for as long as it rides. Whatever it looked like standing on the ground is
+                    -- what it looks like on the shoulder -- which is the spec, literally.
+                    -- ⚠ Self-healing lifetime: rec.perch_seen is stamped every perch frame and the
+                    -- capture re-arms if it goes stale, so we never need to find every set-down path.
+                    -- ⛔⛔⛔ THE PERCH TOUCHES SCALE ZERO TIMES (Aurora 08-13, and she had to say it
+                    -- four times): "there will be code that adjusts the scale when I press L3 to
+                    -- mount the shoulder. Just turn that off. The creature gets scaled by the size
+                    -- IV. It doesn't need any other alteration."
+                    -- Gone from here: the original 0.85 x species shrink, then my gene-compression
+                    -- compromise, then my capture-and-pin. That last one was the mistake worth
+                    -- naming -- I removed the shrink and then immediately wrote a DIFFERENT value on
+                    -- the same property, so scale-on-perch was still being altered by this code, by
+                    -- me, while I told her it wasn't. There is now no scale write on this path at all.
+                    -- ⇒ THE SIZE GENE IS THE ONLY AUTHOR, on the ground and on the shoulder alike.
+                    -- The easer in IrisGriffin/stable.lua owns it and keeps owning it while perched.
                     -- the pin is written ONLY in the LATE hook: the shoulder joint is posed by
                     -- then; writing here (pre-pose) would place it on a stale bone = the float
+                    -- scale0 rides along so the LATE hook can re-assert it as the LAST writer of the
+                    -- frame (see the pin block). Writing it here loses to whoever runs after us.
                     S.perch_active = { go = go }
+                    -- ⛔⛔ PUBLISH THE PERCH *HERE*, IN THE MAIN TICK, NOT ONLY IN THE LATE HOOK
+                    -- (08-13). The griffin easer reads this flag to stand down, and it runs in its
+                    -- own hook -- publishing only from the late hook meant the easer could read a
+                    -- ONE-FRAME-STALE value, so on the frame a perch began the easer still wrote.
+                    -- The main tick runs first, so the flag is live before anyone asks.
+                    pcall(function() rawset(_G, "IrisTamingPerchGoAddr", tostring(go:get_address())) end)
                     -- alive on the shoulder: cycle the little idle repertoire (crow: loop/cry/grooming)
                     if now >= (tonumber(rec.perch_idle_at) or 0.0) then
                         rec.perch_idle_at = now + (tonumber(C.crow_idle_period) or 3.5)
@@ -14973,7 +15535,17 @@ re.on_frame(function()
                         iris_body_solid(ch, go, false)
                         pcall(function() log.info("[IrisTaming] pet solidity OFF (pickup window -- no step-up)") end)
                     end
-                elseif rec.follow then
+                elseif rec.follow and not iris_sendhome_owns(go) then
+                    -- ⛔⛔⛔ 08-13, THE RABBIT RUNNING ON THE SPOT -- and this is the real culprit,
+                    -- not the perch. This follow block drives a critter TOWARD THE PLAYER every
+                    -- frame (puppet_step below), and it also TELEPORTS it to player-1.5m as a
+                    -- catch-up. So while the send-home run-off pushed the rabbit at the homestead,
+                    -- this pulled it straight back: the two cancelled to a couple of metres of
+                    -- jitter, which is exactly "it appeared at my side and ran on the spot".
+                    -- ⇒ ONE OWNER, the third time tonight: while the theater is driving that body,
+                    -- the follow stands down completely. Guarded at the TOP of the branch so the
+                    -- catch-up teleport, the walk step, the clip and the idle all stand down together
+                    -- -- guarding only the puppet_step would have left the teleport live.
                     local cp = upos(go)
                     local d2p = (cp and pp) and dist(cp, pp) or 0.0
                     if name_in_csv(go_name(go), C.critter_bands) then
@@ -15136,9 +15708,95 @@ re.on_frame(function()
                 end
             end)
         end
+        -- ⭐⭐ HORSES AND UNICORNS GET THE TAME MARKER TOO (Aurora 08-13: "make sure the 'B to tame'
+        -- context notification appears over the Horse/Unicorn, and the native B UI prompt too, just
+        -- like all the other tames"). The horse RITE belongs to IrisHorseRodeo, so a claimed horse
+        -- skipped this whole block (see the `not horse_claim_addr` gate below) and therefore never
+        -- wore a marker or a prompt. IrisTaming owns every tame marker, so the mark belongs here and
+        -- the rodeo just publishes its candidate.
+        if not S.target and horse_claim_addr then
+            pcall(function()
+                local hgo = rawget(_G, "__iris_horse_taming_claim_go")
+                if not hgo then return end
+                -- 08-13: never offer to tame a horse you already own (Epona wore a B Tame prompt).
+                -- The claim fires for any horse within 9m of your gaze, companions included.
+                if TB.is_mine(hgo) then return end
+                local lblH = "Horse"
+                pcall(function() lblH = tostring(creature_label(hgo)) end)   -- says "Unicorn" for one
+                TB.mark(hgo, "[N/B] Tame the " .. lblH)          -- native B wins; this is the fallback
+                local mpH = upos(hgo)
+                if _G.IrisPrompt then
+                    _G.IrisPrompt.set("tame_begin", "Tame the " .. lblH, 20,
+                        mpH and dist(mpH, pp) or 99.0, TB.prompt_pos(hgo), hgo)
+                end
+            end)
+        end
         if not S.target and not horse_claim_addr then
-            S.target = find_candidate(pgo)
-            if S.target then S.mode = "idle"; S.armed = nil; S.combat_tame = nil; S.caught_dumped = nil; S.carry_dbg = nil end
+            -- ⭐ 08-12 PAD+TARGETING slice A (Aurora: "the tame direction feels very random"):
+            -- the candidate is MARKED, never auto-courted. The looked-at creature wears the
+            -- begin-marker + the NATIVE B prompt (IrisPrompt shared service, the wyrm's own
+            -- range trick) -- and NOTHING starts until the button says so.
+            S.tame_mark = find_candidate(pgo)
+            if S.tame_mark then
+                local mgo = char_go(S.tame_mark)
+                if mgo then
+                    local lbl9 = "Creature"
+                    pcall(function() lbl9 = tostring(creature_label(mgo)) end)
+                    TB.mark(mgo, "[N/B] Tame the " .. lbl9)      -- native B wins; this is the fallback
+                    pcall(function()
+                        local mp9 = upos(mgo)
+                        local dd9 = mp9 and dist(mp9, pp) or 99.0
+                        -- 08-13: pos was nil here, so the native world prompt never drew
+                        if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "Tame the " .. lbl9, 20, dd9, TB.prompt_pos(mgo), mgo) end
+                    end)
+                end
+                local down9 = TB.held()
+                -- ⭐ 08-13: the arbiter decides. ⚠ the LATCH below still consumes this edge
+                -- even when we stand down -- otherwise the press stays "new" and would fire
+                -- the instant taming became the winner (the queued-interact-after-the-menu bug
+                -- IrisWeaponMount documents).
+                if down9 and not S.tame_mark_latch and TB.may_start("tame_begin") then
+                    S.target = S.tame_mark
+                    S.tame_mark = nil
+                    pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
+                    S.mode = "idle"; S.armed = nil; S.combat_tame = nil; S.caught_dumped = nil; S.carry_dbg = nil
+                end
+                S.tame_mark_latch = down9
+            else
+                S.tame_mark_latch = TB.held()
+                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
+            end
+        end
+        -- ⭐ 08-12 slice A -- UNIVERSAL ABANDON (Aurora: "every taming instance... outside a
+        -- certain distance ends it"): any live courtship ends cleanly at 40m held 1s (the
+        -- one-frame law). Familiarity keeps; every body-restore rides release_creature.
+        if S.target and (S.armed or S.trial or S.combat_tame or S.mode == "context") then
+            local far9 = false
+            pcall(function()
+                local tgo9 = char_go(S.target)
+                local d9 = tgo9 and dist(upos(tgo9), pp) or nil
+                far9 = (d9 ~= nil) and d9 > 40.0
+            end)
+            if far9 then
+                S.abandon_t = S.abandon_t or os.clock()
+                if os.clock() - S.abandon_t > 1.0 then
+                    local ch0 = S.target
+                    pcall(function() release_creature(ch0) end)
+                    restore_pack()
+                    _G.IrisTamingWatchAddr = nil; _G.IrisTamingWatchGoAddr = nil; _G.IrisTamingPlayerStruckWolf = nil
+                    S.held_ground = nil
+                    S.trial = nil; S.armed = nil; S.combat_tame = nil; S.camp_tend = nil
+                    S.yield_down = nil; S.iris_carry = nil; S.feed_drop = nil; S.camp_rite = nil
+                    S.target = nil; S.mode = "idle"; S.pressure = 0.0
+                    S.abandon_t = nil
+                    set_prompt("THE RITE IS ABANDONED", "You have left it behind. (Its trust is mostly kept.)", 6.0, 0xFFFFD080)
+                    pcall(function() log.info("[IrisTaming] universal abandon: courtship left behind (>40m held 1s)") end)
+                end
+            else
+                S.abandon_t = nil
+            end
+        else
+            S.abandon_t = nil
         end
 
         -- ===== TAMING MUSIC (ask #2): a chosen in-game theme plays while a tame is active =====
@@ -15356,10 +16014,10 @@ re.on_frame(function()
                     S.feed_drop = nil
                     if S.camp_rite then
                         S.camp_rite.stage = "hand"   -- fed: now the hand, then the pat
-                        set_prompt("NOW THE HAND", "Hold N. Offer it your hand.", 3.0, 0xFF80FFB0)
+                        set_prompt("NOW THE HAND", "Hold N / B. Offer it your hand.", 3.0, 0xFF80FFB0)
                     elseif S.trial and S.trial.stage == "c_give" then
                         S.trial.stage = "c_palm"; S.trial.t0 = now; S.trial.cpalm = 0.0
-                        set_prompt("NOW THE PALM", "Hold N. Keep the hand out until it is finished.", 3.0, 0xFF80FFB0)
+                        set_prompt("NOW THE PALM", "Hold N / B. Keep the hand out until it is finished.", 3.0, 0xFF80FFB0)
                     else
                         try_finish(player, pgo, ch, go, "fed", true)
                     end
@@ -15624,7 +16282,7 @@ re.on_frame(function()
                             S.status = nm .. ": you carry no meat for it"
                         end
                     elseif rite.stage == "hand" then
-                        -- THE HAND: hold N; it rises and comes to your open hand
+                        -- THE HAND: hold N / B; it rises and comes to your open hand
                         if down then
                             set_think_stop(ch, true)
                             -- stop well short of the player: at 1.8m its bulk shoved the player
@@ -15652,8 +16310,8 @@ re.on_frame(function()
                                 set_prompt("THE PACT", "Your hand rests on it.", 3.0, 0xFF80FFB0)
                             end
                         else
-                            set_prompt("OFFER YOUR HAND", "Hold N. Let it come to your hand.", 0.6, 0xFF80D0FF)
-                            S.status = nm .. ": hold N and offer your hand"
+                            set_prompt("OFFER YOUR HAND", "Hold N / B. Let it come to your hand.", 0.6, 0xFF80D0FF)
+                            S.status = nm .. ": hold N / B and offer your hand"
                         end
                     elseif rite.stage == "pat" then
                         set_think_stop(ch, true)
@@ -15974,17 +16632,26 @@ re.on_frame(function()
                 S.wolf_clip = nil   -- stale cache from the LAST trial made wolf_clip(0) a no-op
                                     -- and left the chase-run looping = the endless meet shove
             end
+            -- round 15 (villagers beat the courted wolf mid-MEET, screenshot receipts): the
+            -- rel hook's HoldWolf shield answers FRIEND for EVERY relationship read that
+            -- involves the courted one -- publish it for the WHOLE trial, refreshed each
+            -- tick, so no villager, guard or pawn classifies the wolf as engageable
+            pcall(function()
+                if S.target then
+                    _G.IrisTamingHoldWolf = { ch_addr = S.target:get_address(), until_t = os.clock() + 2.0 }
+                end
+            end)
             -- the ritual card: every stage announces itself, big and clear
             do
                 local PR = {
-                    meet = { "THE MEET", "Sheathe. Come close. HOLD N -- raise your hand." },
+                    meet = { "THE MEET", "Sheathe. Come close. HOLD N / B -- raise your hand." },
                     feast = { "THE FEAST", "Your kill speaks for you. Stay back." },
-                    circle = { "THE CIRCLE", "Hold N. TURN with it (your camera) -- lose it and it remembers." },
+                    circle = { "THE CIRCLE", "Hold N / B. TURN with it (your camera) -- lose it and it remembers." },
                     rush_tell = { "STAND YOUR GROUND", "Do NOT move. Do NOT draw." },
                     rush = { "STAND YOUR GROUND", "Do NOT move." },
                     back_off = { "IT YIELDS GROUND", "Breathe. Keep the hand ready." },
                     laststeps = { "THE LAST STEPS", "KEEP N HELD. Stand still. It comes to your hand." },
-                    stare = { "THE STARE-DOWN", "HOLD N. Meet its eyes -- don't look away." },
+                    stare = { "THE STARE-DOWN", "HOLD N / B. Meet its eyes -- don't look away." },
                     howl = (T and T.cat_sit)
                         and { "IT SITS", "HOLD [H] -- be slow, be calm; let it study you." }
                         or { "IT HOWLS", "HOLD [H] and HOWL BACK at it." },
@@ -16007,13 +16674,13 @@ re.on_frame(function()
                 local pr = PR[T.stage]
                 if pr and T.stage == "meet" then
                     -- live coaching on the card + the standing instruction stays visible
-                    set_prompt("THE MEET", tostring(S.status or pr[2]) .. "  |  keep the hand out (hold N)", 0.6)
+                    set_prompt("THE MEET", tostring(S.status or pr[2]) .. "  |  keep the hand out (hold N / B)", 0.6)
                 elseif pr then
                     if T.stage == "laststeps" and S.lie_cue == "loop" then
                         set_prompt("THE PACT", "Keep the hand there...", 0.6)
                     elseif T.stage == "laststeps" then
                         if not hand then
-                            set_prompt("THE LAST STEPS", "It trusts you now. STAND STILL and HOLD N - it will come to your hand.", 0.6)
+                            set_prompt("THE LAST STEPS", "It trusts you now. STAND STILL and HOLD N / B - it will come to your hand.", 0.6)
                         elseif d > 4.0 then
                             set_prompt("THE LAST STEPS", "It is coming to your hand. KEEP N HELD. Do not move.", 0.6)
                         else
@@ -16182,12 +16849,12 @@ re.on_frame(function()
                         pv.x = T.hold_pt.x; pv.y = yy; pv.z = T.hold_pt.z
                         set_upos(go, pv)
                     end)
-                    set_prompt("IT DESCENDS", "hold N - stay still, it comes down to you", 0.6)
+                    set_prompt("IT DESCENDS", "hold N / B - stay still, it comes down to you", 0.6)
                     if k >= 1.0 then T.landing = "land"; T.land_t0 = now; S.wolf_clip = nil; play_motion(ch, 0, tonumber(C.crow_land_clip) or 400) end
                     return true
                 elseif T.landing == "land" then
                     pin_ground()
-                    set_prompt("IT LANDS", "hold N - be still", 0.6)
+                    set_prompt("IT LANDS", "hold N / B - be still", 0.6)
                     if now - (tonumber(T.land_t0) or now) > (tonumber(C.crow_land_secs) or 0.7) then T.landing = "done" end
                     return true
                 end
@@ -16222,7 +16889,7 @@ re.on_frame(function()
                     set_prompt("IT SETTLES", "It watches you from afar. Begin again, gently.", 2.0, 0xFF80D0FF)
                 end
                 if not hand then
-                    set_prompt("A SMALL WILD THING", "HOLD N - be still, keep your distance. Let it grow used to you.", 0.6)
+                    set_prompt("A SMALL WILD THING", "HOLD N / B - be still, keep your distance. Let it grow used to you.", 0.6)
                 elseif moved_fast then
                     set_prompt("A SMALL WILD THING", "too fast - small things startle", 0.6)
                 else
@@ -16356,7 +17023,7 @@ re.on_frame(function()
                 if T.call_anim == "whistle" then
                     wolf_clip(species_idle_clip(go))
                     if now >= (tonumber(T.call_next) or 0.0) then
-                        set_prompt("THE CALL IS MADE", "Now HOLD N - offer it the arm.", 0.6)
+                        set_prompt("THE CALL IS MADE", "Now HOLD N / B - offer it the arm.", 0.6)
                     else
                         set_prompt("THE CALL IS MADE", "The whistle carries across the field...", 0.6)
                     end
@@ -16377,7 +17044,7 @@ re.on_frame(function()
                 end)
                 if not hand then
                     T.cnohand = (tonumber(T.cnohand) or 0.0) + dt
-                    set_prompt("THE CALL", "HOLD N - keep the arm out for it.", 0.6)
+                    set_prompt("THE CALL", "HOLD N / B - keep the arm out for it.", 0.6)
                     if T.cnohand > 5.0 then
                         if S.call_anim_live and lab then pcall(function() lab.stop() end); S.call_anim_live = nil end
                         trial_fail("the call faltered")
@@ -16664,17 +17331,39 @@ re.on_frame(function()
                             pcall(function() log.info(string.format("[IrisTaming] offering drop seen: '%s' id=%s food=%s", label9, tostring(iid9), tostring(ok_food))) end)
                         end)
                     else
-                        -- the fallback trusts the moment: the player is mid-rite, told to drop an
-                        -- herb, and a fresh non-character object just appeared at the feet
-                        ok_food = true
+                        -- round 13 ("It eyes the 13__RimTransPlane__00__00..."): the fallback
+                        -- accepted STREAMED SCENERY as food. An engine-named mesh is not an
+                        -- offering -- REJECT it outright, never just blank the label.
                         pcall(function() label9 = go_name(drop_go9) end)
-                        pcall(function() log.info(string.format("[IrisTaming] offering accepted via ground scan: '%s'", label9)) end)
-                        -- an ENGINE name is not a food ("It eyes the gm82_000_02..." -- image 105):
-                        -- the card falls back to "offering" when the GO name is all we have
-                        if tostring(label9):find("^gm%d") or tostring(label9):find("^eqit")
-                            or tostring(label9):find("^it%d") or tostring(label9):find("^sm%d") then
-                            label9 = ""
+                        local l9 = tostring(label9 or "")
+                        -- round 14 CORRECTION: real dropped items wear engine names (gm/it/sm)
+                        -- -- those PASS with a blanked label (the original law). Only true
+                        -- SCENERY is junk: characters, planes, trims, double-underscores.
+                        local junk9 = l9 == "" or l9:find("^ch%d")
+                            or l9:find("Plane") or l9:find("Trim") or l9:find("__")
+                        ok_food = not junk9
+                        if l9:find("^gm%d") or l9:find("^eqit") or l9:find("^it%d") or l9:find("^sm%d") then
+                            label9 = ""   -- an engine name is not a word for the card
                         end
+                        pcall(function() log.info(string.format(
+                            "[IrisTaming] ground-scan offering '%s' -> %s", l9,
+                            ok_food and "accepted" or "REJECTED (scenery)")) end)
+                    end
+                    -- round 13: THE OX LAW, PORTED -- the offering must lie BEFORE THE
+                    -- CREATURE (within 8m of it), never merely near the running player
+                    if ok_food then
+                        pcall(function()
+                            local dgo0 = (drop9 and drop9:call("get_GameObject")) or drop_go9
+                            local rp0 = dgo0:call("get_Transform"):call("get_Position")
+                            local prp0 = pgo:call("get_Transform"):call("get_Position")
+                            local u0 = { x = pp.x + (rp0.x - prp0.x), y = pp.y + (rp0.y - prp0.y), z = pp.z + (rp0.z - prp0.z) }
+                            local cg0 = upos(char_go(ch))
+                            local dd0 = cg0 and dist(u0, cg0) or nil
+                            if dd0 and dd0 > 8.0 then
+                                ok_food = false
+                                log.info(string.format("[IrisTaming] offering rejected: %.1fm from the creature (limit 8)", dd0))
+                            end
+                        end)
                     end
                     if ok_food then
                         -- the drop's ground spot: render position -> universal via the player's offset
@@ -16733,7 +17422,7 @@ re.on_frame(function()
                 -- THE PALM: the held hand, until it is finished deciding -- then the bond
                 if not hand then
                     T.cnohand = (tonumber(T.cnohand) or 0.0) + dt
-                    set_prompt("THE PALM", "HOLD N - keep the palm out until it is finished.", 0.6)
+                    set_prompt("THE PALM", "HOLD N / B - keep the palm out until it is finished.", 0.6)
                     if T.cnohand > 5.0 then
                         trial_fail("the palm dropped")
                         return true
@@ -16813,7 +17502,7 @@ re.on_frame(function()
                 elseif d > connect then
                     S.status = string.format("come closer - it pays you no mind from %.1fm (hold %s = the hand)", d, "N")
                 elseif not hand then
-                    S.status = "HOLD N - raise your hand and hold it. Let it look at you."
+                    S.status = "HOLD N / B - raise your hand and hold it. Let it look at you."
                 elseif moved_fast then
                     S.status = "too fast - slow your feet, keep the hand up"
                 else
@@ -17642,8 +18331,8 @@ re.on_frame(function()
                 end
                 if not hand and not T.hand_seen then
                     T.t0 = now; T.grace = (tonumber(T.grace) or 0.0) + dt
-                    S.status = "RAISE THE HAND (hold N) - meet its stare"
-                    set_prompt("THE STARE-DOWN", "RAISE YOUR HAND (hold N) - meet its eyes", 0.6)
+                    S.status = "RAISE THE HAND (hold N / B) - meet its stare"
+                    set_prompt("THE STARE-DOWN", "RAISE YOUR HAND (hold N / B) - meet its eyes", 0.6)
                     if T.grace > 8.0 then trial_fail("you would not meet its eyes"); return true end
                 else
                     T.hand_seen = true
@@ -17733,7 +18422,7 @@ re.on_frame(function()
                         T.nohand = (tonumber(T.nohand) or 0.0) + dt
                         if T.nohand > 5.0 then trial_fail("you lowered the hand"); return true end
                     end
-                    S.status = "RAISE THE HAND (hold N) - it is waiting on you"
+                    S.status = "RAISE THE HAND (hold N / B) - it is waiting on you"
                 elseif not sheathed_ok then
                     if now - (tonumber(T.t0) or now) > 2.0 then
                         trial_fail("you drew steel")
@@ -18808,7 +19497,8 @@ re.on_draw_ui(function()
                 imgui.text("(shoulder a creature -- its own X/Y/Z/rotate/scale sliders appear here)")
             end
             c9, C.companion_nameplate = imgui.checkbox("Floating nameplate (name + gender) over companions##tame_nameplate", C.companion_nameplate ~= false); chg = chg or c9
-            c9, C.perch_scale = imgui.drag_float("Shoulder scale (shrink while riding)##tame_pscale", tonumber(C.perch_scale) or 0.85, 0.01, 0.5, 1.0); chg = chg or c9
+            imgui.text("Shoulder riding no longer changes size at all (08-13). The SIZE gene is the only")
+            imgui.text("thing that sizes a creature; a perched body holds whatever it was on the ground.")
             imgui.tree_pop()
         end
         if imgui.tree_node("Scout drone (bird)##tame_scout") then
@@ -20886,7 +21576,7 @@ re.on_draw_ui(function()
             if imgui.button("free the wolf##tame_lab_free") then
                 if S.target then pcall(function() release_creature(S.target) end) end
             end
-            imgui.text("tip: do NOT hold N while using the lab (the ritual would fight it)")
+            imgui.text("tip: do NOT hold N / B while using the lab (the ritual would fight it)")
             imgui.tree_pop()
         end
         c, C.target_bands = imgui.input_text("Tameable name prefixes##tame_bands", tostring(C.target_bands or "")); chg = chg or c
@@ -20940,7 +21630,7 @@ re.on_frame(function()
         end
     end)
     -- WALKABLE HAND-OUT TEST (RiftSpeak carry recipe): FSM stays LIVE so the legs walk on L0;
-    -- the offer is painted on L1 (the UpperBodyDefault layer). Hold N in the open + move.
+    -- the offer is painted on L1 (the UpperBodyDefault layer). Hold N / B in the open + move.
     if iris_walk_test and iris_kb(math.floor(tonumber(C.tame_key) or 0x4E)) then
         pcall(function()
             local pc = get_player()
@@ -20964,7 +21654,7 @@ re.on_draw_ui(function()
         if ch then iris_probe_on = v; iris_probe_last = nil end
         imgui.text("ON -> do the hand-up gesture (activate a riftstone) -> read log for [IrisProbe]")
         imgui.separator()
-        imgui.text("WALK TEST: away from any wolf, hold N and move. Does the raised arm stay up?")
+        imgui.text("WALK TEST: away from any wolf, hold N / B and move. Does the raised arm stay up?")
         local cw, wv = imgui.checkbox("TEST walk-with-hand-out (L1 paint)", iris_walk_test)
         if cw then iris_walk_test = wv end
         if imgui.button("mode: " .. iris_walk_mode .. "  (click to swap motion/action)") then
@@ -20992,5 +21682,46 @@ re.on_frame(function()
     -- touches S.mode -- the watcher heard "idle" through the whole tame. "trusting" is
     -- accepted by the watcher under EVERY start_mode config (context is not).
     if S.ox_rite then music_mode = "trusting" end
+    -- ── ⭐⭐ SHEATHE GATE (Aurora's #13, 2026-08-12) ────────────────────────────────────────
+    -- "During any taming rite the Arisen should sheathe their weapon": approaching a wolf sword-out
+    -- reads wrong, and pawns take a drawn blade as combat intent.
+    -- ⭐ THIS IS THE ONE PLACE WORTH HOOKING, and only because the three lines above already did the
+    -- hard part. Every rite is its own state machine -- the wolf circle moves S.mode, the griffin
+    -- bait rides S.oxtame, the yoke rides S.ox_rite -- and this block has ALREADY collapsed all of
+    -- them into one value. So a rising edge here covers wolf circle + ox yoke + critter give + bird
+    -- rite + griffin bait + camp rite at once, instead of patching six start sites and then having
+    -- to remember to patch the seventh rite somebody adds later.
+    -- ⛔⛔ THE COMBAT TAME IS EXEMPT AND THAT IS NOT OPTIONAL: that rite REQUIRES steel out. Its
+    -- release gate refuses while sheathed ("sheathed = peace, never released") and its back-out path
+    -- reads a sheathe as "you changed your mind" and drops the player to the peaceful shield. Firing
+    -- here would cancel the very tame they are winning, every single time.
+    -- ⚠ AND IT CANNOT BE FILTERED BY `music_mode`: the publisher maps the combat tame AND the
+    -- griffin bait rite to the SAME string, "context". S.combat_tame has to be tested directly.
+    -- ⛔ NOT the ActionManager "SheatheWeapon" route, even though IRIS ships that elsewhere (farming
+    -- uses it): a full-body pose hold turns the player's MotionFsm2 OFF, and a request onto a dead
+    -- FSM is swallowed silently -- IrisFarming has exactly that scar logged, "the request either
+    -- didn't take or the freeze caught the sheathe mid-animation". `forceChangeDrawingWeapon` writes
+    -- the controller state directly, needs no FSM, and also does the weapon-parent-joint bookkeeping
+    -- that a bare set_IsDraw(false) skips (flag says sheathed, blade stays in hand). It is the call
+    -- the critter branch of this same file already proved.
+    -- ⚠ FIRE ONCE, ON THE EDGE. Re-asserting every frame would hammer a native across a rite that
+    -- can run two minutes, and it would be wrong anyway: drawing steel mid-rite is already PUNISHED
+    -- by the trials ("you drew steel"), so re-forcing it would paper over a designed failure.
+    -- ⚠ Deliberately NOT gated on player_sheathed(): that reader returns nil when its getter fails,
+    -- and this file's own warning says nil slipped armed tames past every check. The call is harmless
+    -- when the weapon is already away, so fire unconditionally and let it be idempotent.
+    if music_mode ~= "idle" and tostring(S.sheathe_edge or "idle") == "idle" and not S.combat_tame then
+        local okS = false
+        pcall(function()
+            local p9 = get_player()
+            local h9 = p9 and p9:call("get_Human")
+            if h9 then h9:call("forceChangeDrawingWeapon", false); okS = true end
+        end)
+        pcall(function() log.info("[IrisTaming] sheathe requested at rite start (mode="
+            .. tostring(music_mode) .. " ok=" .. tostring(okS) .. ")") end)
+    end
+    -- set unconditionally, INCLUDING on the combat-tame path: otherwise the edge stays armed and
+    -- would fire mid-rite the moment S.combat_tame clears.
+    S.sheathe_edge = music_mode
     rawset(_G, "IrisTamingMode", music_mode)
 end)

@@ -80,6 +80,30 @@ local M = {
     disp_roll   = 0.0,
     disp_scale  = 1.0,
     disp_range  = 30.0,       -- spawn the prop only while you are near the plaque
+
+    -- ── the grab animation (Aurora 08-13: "a small grab animation for when you pick up /
+    --    put down a weapon on your wall - looking at 60:6005 (110 frames)") ──────────────
+    -- ⭐ Driven through IrisFarming's chore sequencer (_G.IrisFarming.emote), NOT a private
+    --   copy: that pump already owns the sheathe beat, the FSM hold, the tool-mesh hide and
+    --   the exact restore-on-every-path. Duplicating it would duplicate the softlock risk.
+    -- ⭐ THE HAND-OVER IS DEFERRED TO THE END OF THE CLIP (the chore law, Aurora 08-05:
+    --   "don't actually get the item until the animation is done") - the weapon leaves or
+    --   returns as the reach completes, not on the button press.
+    -- ⚠ frames are at 60fps (the watering pump's `frames / 60.0` convention), so 110f ≈ 1.83s.
+    grab_anim   = true,
+    grab_bank   = 60,         -- ch00_000_liv_split - the living/social gesture bank
+    -- TAKING one off the wall: one reach. Aurora field-verified 08-13: "the pick up animation
+    -- is perfectly fine."
+    grab_clip   = 6005,
+    grab_frames = 110,
+    -- ⭐ PUTTING one up is a DIFFERENT gesture (Aurora 08-13: the same clip "looks a bit off"
+    --   for placing). Her sequence: hand out -> the weapon appears on the wall -> hand returns.
+    --   The hand-over fires on the SEAM between the two clips via the sequencer's per-step
+    --   callback, so the sword lands on the plaque while her arm is still extended.
+    place_out_clip    = 6200,
+    place_out_frames  = 60,
+    place_back_clip   = 6202,
+    place_back_frames = 180,
 }
 
 local LOG   = "IrisWeaponMount.log"
@@ -113,7 +137,9 @@ end
 --   the feature was flaky. Own file, so it survives resets, reloads and rebuilds.
 local CFG = "IRIS/weapon_mount_cfg.json"
 local CFG_KEYS = { "disp_x", "disp_y", "disp_z", "disp_yaw", "disp_pitch", "disp_roll",
-                   "disp_scale", "label_h", "reach", "auto_equip", "display" }
+                   "disp_scale", "label_h", "reach", "auto_equip", "display",
+                   "grab_anim", "grab_bank", "grab_clip", "grab_frames",
+                   "place_out_clip", "place_out_frames", "place_back_clip", "place_back_frames" }
 local function _load_cfg()
     pcall(function()
         local c = json.load_file(CFG)
@@ -1004,6 +1030,84 @@ local function _iw_scan()
     end
 end
 
+-- ── the grab beat ────────────────────────────────────────────────────────────────────
+-- Play the reach animation, and hand the weapon over WHEN IT FINISHES. The job is queued
+-- from the emote's on_done, which IrisFarming guarantees fires exactly once on every path
+-- (normal finish, clip failure, or refusal because another emote is already running) - so
+-- the round trip can never be lost to a broken animation.
+-- ⛔ CROSS-FILE LAW (the dead rodeo rays, 08-09): `rawget(_G, name)` only resolves if the
+--   other file made it GLOBAL, and a nil fetch inside a guard fails SILENTLY and reads
+--   exactly like "the feature ran and did nothing". `_G.IrisFarming` is a real global table
+--   (IrisFarming.lua, bottom) - and the unavailable branch is LOGGED, never silent.
+-- kind = "take" (one reach, off the wall) or "place" (hand out -> the weapon appears -> hand back)
+local function _grab_then(job, kind)
+    if M.grab_anim == false then Q[#Q + 1] = job; return end
+    -- ⛔ ONE GRAB AT A TIME. Without this a second press mid-clip queues a second job: the
+    --   emote refuses (one is already running) and hands its on_done straight back, so the
+    --   action would fire twice. _mount/_retrieve both refuse a duplicate on their own, but
+    --   dropping the press here is the honest fix rather than relying on two later guards.
+    if IW.grab_until and os.clock() < IW.grab_until then
+        _log("press ignored: the grab animation is still playing")
+        return
+    end
+    local F = rawget(_G, "IrisFarming")
+    if not (F and type(F.emote) == "function") then
+        _log("grab anim: IrisFarming.emote unavailable - doing it instantly instead "
+             .. "(is IrisFarming.lua loaded, and does its bridge still export `emote`?)")
+        Q[#Q + 1] = job
+        return
+    end
+    local bank = math.floor(tonumber(M.grab_bank) or 60)
+    -- the weapon changes hands EXACTLY ONCE, whichever path gets here first (the mid-sequence
+    -- seam, the end of the sequence, or an outright failure). A double-fire would duplicate it.
+    local fired = false
+    local function hand_over()
+        if fired then return end
+        fired = true
+        Q[#Q + 1] = job
+    end
+    local function on_done()
+        hand_over()
+        IW.grab_until = nil     -- release the press latch only when the WHOLE gesture is over
+    end
+
+    local seq, total, on_first
+    if kind == "place" then
+        -- ⭐ Aurora's sequence: 6200 reaches out, 6202 brings the arm back.
+        -- ⭐⭐ 08-13 (Aurora: "can we have the item pickup happen at the same time as the
+        --   animation? If not then before is probably better than after"): the weapon lands on
+        --   the plaque as the FIRST clip starts, via the sequencer's on_first callback -- not
+        --   at the seam between the clips (a second late), and not at the button press (a
+        --   sheathe beat early, before she has reached for anything).
+        local f1 = math.floor(tonumber(M.place_out_frames) or 60)
+        local f2 = math.floor(tonumber(M.place_back_frames) or 180)
+        seq = { { bank, math.floor(tonumber(M.place_out_clip) or 6200), f1 },
+                { bank, math.floor(tonumber(M.place_back_clip) or 6202), f2 } }
+        total = f1 + f2
+        on_first = hand_over
+    else
+        -- ⭐ 08-13 round 2 (Aurora: "just tried the picking up off the wall, it didn't pick up
+        --   at the same time as the animation"). It was still granting on on_done, i.e. after
+        --   the whole 110-frame reach. TAKE now uses the same on_first seam as PLACE, so the
+        --   weapon leaves the plaque as she reaches for it, not once her arm is back down.
+        local f1 = math.floor(tonumber(M.grab_frames) or 110)
+        seq = { { bank, math.floor(tonumber(M.grab_clip) or 6005), f1 } }
+        total = f1
+        on_first = hand_over
+    end
+    -- the sheathe beat runs before the first clip, so the window is the clips + a margin. It is
+    -- only a press-eater, never a lock: if the emote dies the latch still expires on its own.
+    IW.grab_until = os.clock() + (total / 60.0) + 2.5
+    local ok = pcall(function()
+        F.emote(seq, "weapon plaque (" .. tostring(kind or "take") .. ")", on_done, on_first)
+    end)
+    if not ok then
+        _log("grab anim: emote call ERRORED - doing it instantly instead")
+        IW.grab_until = nil
+        hand_over()
+    end
+end
+
 local function _iw_input()
     if _blocked() then
         -- keep the edges primed so releasing inside a menu is not seen as a fresh press
@@ -1039,11 +1143,15 @@ local function _iw_input()
     _load()
     local k = _key(IW.target.p)
     if mounts[k] then
-        Q[#Q + 1] = { k = "retrieve", key = k }
+        _grab_then({ k = "retrieve", key = k }, "take")
     else
         local w = _equipped_weapon()
         if not w then last = "nothing equipped to hang up"; _log(last); return end
-        Q[#Q + 1] = { k = "mount", w = w }
+        -- ⚠ `w` is captured BEFORE the animation and used after it. That is deliberate and
+        --   safe: _mount re-reads the live StorageData off `w.sd` (unequip, then delete) and
+        --   refuses outright if the unequip does not take, so a weapon swapped mid-clip
+        --   cannot be silently deleted.
+        _grab_then({ k = "mount", w = w }, "place")
     end
 end
 
@@ -1216,6 +1324,7 @@ end)
 re.on_script_reset(function()
     Q = {}
     IW.target = nil
+    IW.grab_until = nil   -- a reset mid-clip must not leave the interact eating every press
     -- ⛔⛔ MUST clear the shared flag. The jump-block hook is PERMANENT (REFramework has no
     --   unhook) and a script reset ORPHANS it with its upvalues still live. Resetting while
     --   stood at a plaque would otherwise leave `at_plaque = true` forever, and the orphaned
@@ -1288,6 +1397,28 @@ re.on_draw_ui(function()
     local nlive = 0
     for _ in pairs(disp.live) do nlive = nlive + 1 end
     imgui.text(string.format("  %d display prop(s) live", nlive))
+
+    imgui.separator()
+    imgui.text("GRAB ANIMATION — the reach played when you hang or take a weapon:")
+    local gc = false
+    dc, M.grab_anim   = imgui.checkbox("play a grab animation", M.grab_anim ~= false); gc = gc or dc
+    dc, M.grab_bank   = imgui.drag_int("  bank (60 = liv_split gestures)", math.floor(tonumber(M.grab_bank) or 60), 1, 0, 200); gc = gc or dc
+    imgui.text("  TAKE (off the wall) - one reach:")
+    dc, M.grab_clip   = imgui.drag_int("  take clip", math.floor(tonumber(M.grab_clip) or 6005), 1, 0, 9999); gc = gc or dc
+    dc, M.grab_frames = imgui.drag_int("  take frames", math.floor(tonumber(M.grab_frames) or 110), 1, 10, 600); gc = gc or dc
+    imgui.text("  PLACE (onto the wall) - hand out, weapon appears, hand back:")
+    dc, M.place_out_clip    = imgui.drag_int("  hand-out clip",  math.floor(tonumber(M.place_out_clip) or 6200), 1, 0, 9999); gc = gc or dc
+    dc, M.place_out_frames  = imgui.drag_int("  hand-out frames", math.floor(tonumber(M.place_out_frames) or 60), 1, 5, 600); gc = gc or dc
+    dc, M.place_back_clip   = imgui.drag_int("  hand-back clip",  math.floor(tonumber(M.place_back_clip) or 6202), 1, 0, 9999); gc = gc or dc
+    dc, M.place_back_frames = imgui.drag_int("  hand-back frames", math.floor(tonumber(M.place_back_frames) or 180), 1, 5, 600); gc = gc or dc
+    imgui.text(string.format("  take %.2fs | place %.2fs + %.2fs (weapon lands on the seam)",
+        (tonumber(M.grab_frames) or 110) / 60.0,
+        (tonumber(M.place_out_frames) or 60) / 60.0,
+        (tonumber(M.place_back_frames) or 180) / 60.0))
+    if rawget(_G, "IrisFarming") == nil or type((rawget(_G, "IrisFarming") or {}).emote) ~= "function" then
+        imgui.text("  ⛔ IrisFarming.emote NOT reachable - the action still works, but instantly")
+    end
+    if gc then _save_cfg() end
 
     imgui.separator()
     local c

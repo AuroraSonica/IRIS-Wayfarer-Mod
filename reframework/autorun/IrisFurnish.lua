@@ -675,8 +675,10 @@ local function _start_ghost(entry, drive)
             end
         end)
     if not ok then ghost = nil; M.last = "no spawnable gimmick id for " .. entry.gid; return end
-    M.last = drive and (entry.label .. ": WASD/stick move, Z/X height, Q/E yaw, R/F pitch, T/G roll, Enter place, Esc cancel")
-        or ("ghosting " .. entry.label .. " - walk it into place, then PLACE")
+    -- the old keyboard-control litany duplicated the screen's hint strip (Aurora's
+    -- screenshot) - the status line now just names the piece
+    M.last = drive and (entry.label .. " stands before you. A locks it in")
+        or ("ghosting " .. entry.label .. " - walk it into place, then place")
 end
 
 -- categories + the PLACED management pseudo-category (Aurora v3 note 5)
@@ -741,7 +743,7 @@ local function _open_shop()
             if pr.owned ~= false and pr.built ~= false then
                 local dx, dz = (pr.ux or 0) - up.x, (pr.uz or 0) - up.z
                 local dd = dx * dx + dz * dz
-                if not nearest2 or dd < nearest2 then nearest2 = dd; anchor = { ux = pr.ux, uz = pr.uz } end
+                if not nearest2 or dd < nearest2 then nearest2 = dd; anchor = { ux = pr.ux, uz = pr.uz, name = pr.name } end
                 if dd < 35.0 ^ 2 then ok_here = true end
             end
         end
@@ -767,6 +769,469 @@ local function _open_shop()
     _world_pause(true)
     M.last = "decorating - the world holds its breath"
 end
+
+-- ══ ⭐⭐⭐ THE HOMESTEAD SCREEN (08-12): the decorate menu reborn in the Stable Screen's
+-- style. Three tabs: DECORATIONS | BUILD | ANIMALS. Same hotkey (numpad *), same open
+-- gate, same placement machinery underneath - this replaces the LOOK and adds the two
+-- new tabs. Draw kit ported from IrisStableUI (one imgui drawlist layer: pushed-font
+-- draw.text + filled_rects, call order = z order; colours authored ARGB through rc()).
+-- BUILD implements the iris-outbuildings-menu-handoff contract: browse _G.IrisForge.kits(),
+-- buy the plan -> a DRAWN wireframe footprint (never a spawned gimmick), place ->
+-- _G.IrisOutbuildings.place_site(). Obligations honored: (8) footprint mode drops the
+-- furnish world-pause and owns its own FSM-off with restore on every exit incl. reset;
+-- (9) footprint mode opens NO dialogs (construction dialogs are the engine side's);
+-- (16) no F-keys; (17) build placement clamps to M.build_radius, not the 25m decor clamp.
+local TABS = { "Decorations", "Build", "Animals" }   -- proper case everywhere (Aurora's mockup)
+local SCR = { tab = 1, brow = 1, arow = 1, fonts = { at_scale = nil } }
+local FP = { active = false }
+
+SCR.rc = function(argb)
+    local a = (argb >> 24) & 0xFF
+    local r = (argb >> 16) & 0xFF
+    local g = (argb >> 8) & 0xFF
+    local b = argb & 0xFF
+    return (a << 24) | (b << 16) | (g << 8) | r
+end
+SCR.screen = function()
+    local w, h = 1920.0, 1080.0
+    pcall(function()
+        local sz = imgui.get_display_size()
+        if sz and tonumber(sz.x) and tonumber(sz.x) > 0 then w, h = sz.x, sz.y end
+    end)
+    return w, h
+end
+SCR.scale = function()
+    local _, sh = SCR.screen()
+    return sh / 1080.0
+end
+SCR.ensure_fonts = function()
+    local sc = SCR.scale()
+    if SCR.fonts.at_scale == sc then return end
+    SCR.fonts.at_scale = sc
+    SCR.fonts.big, SCR.fonts.std, SCR.fonts.sym = nil, nil, nil
+    local file = "Sovngarde Light.ttf"
+    pcall(function()
+        SCR.fonts.big = imgui.load_font(file, math.floor(26 * sc + 0.5), { 0x0020, 0x00FF, 0 })
+        SCR.fonts.std = imgui.load_font(file, math.floor(17 * sc + 0.5), { 0x0020, 0x00FF, 0 })
+    end)
+    -- ♀/♂ live in a Unicode-rich face (Sovngarde carries neither - the Stable Screen's find)
+    for _, cand in ipairs({ "LinLibertine_R.ttf", "NotoSansJP-Regular.ttf" }) do
+        if not SCR.fonts.sym then
+            pcall(function()
+                SCR.fonts.sym = imgui.load_font(cand, math.floor(17 * sc + 0.5), { 0x2640, 0x2642, 0 })
+            end)
+        end
+    end
+end
+SCR.txt = function(s, x, y, argb, big)
+    local f = big and SCR.fonts.big or SCR.fonts.std
+    if f then imgui.push_font(f) end
+    pcall(function() draw.text(tostring(s), x, y, SCR.rc(argb)) end)
+    if f then imgui.pop_font() end
+end
+SCR.textw = function(s)
+    local w = nil
+    if SCR.fonts.std then imgui.push_font(SCR.fonts.std) end
+    pcall(function()
+        local sz = imgui.calc_text_size(tostring(s))
+        w = sz and tonumber(sz.x) or nil
+    end)
+    if SCR.fonts.std then imgui.pop_font() end
+    return w or (#tostring(s) * 8.0)
+end
+
+-- rows for the two new tabs (both fail soft: an absent engine side = an honest empty list)
+SCR.rows_build = function()
+    local t = {}
+    pcall(function()
+        local F9 = rawget(_G, "IrisForge")
+        for _, k in ipairs((F9 and F9.kits and F9.kits()) or {}) do t[#t + 1] = k end
+    end)
+    return t
+end
+SCR.rows_animals = function()
+    local t = {}
+    pcall(function()
+        local b9 = rawget(_G, "IrisGriffinBridge")
+        for _, r in ipairs((b9 and b9.stable_list and b9.stable_list()) or {}) do
+            if r.home then t[#t + 1] = r end
+        end
+    end)
+    return t
+end
+SCR.pc = function(s)
+    -- proper case: "ALL" -> "All", "hay barn" -> "Hay Barn" (Aurora: no shouting labels)
+    return (tostring(s or ""):lower():gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
+end
+SCR.cost_str = function(k)
+    local ti = tonumber(k.timber or k.cost_timber or (type(k.costs) == "table" and k.costs.timber))
+    local st = tonumber(k.stone or k.cost_stone or (type(k.costs) == "table" and k.costs.stone))
+    local parts = {}
+    if ti and ti > 0 then parts[#parts + 1] = math.floor(ti) .. " Timber" end
+    if st and st > 0 then parts[#parts + 1] = math.floor(st) .. " Stone" end
+    return #parts > 0 and table.concat(parts, " + ") or "plan"
+end
+
+-- ── FOOTPRINT MODE (the BUILD tab's placement) ──────────────────────────────────────────
+M.build_radius = M.build_radius or 60.0   -- obligation 17: plot-scale, not the 25m decor clamp
+SCR.fp_exit = function(msg)
+    FP.active = false
+    FP.kit = nil
+    FP.frozen = nil
+    _G.IrisFurnishFootprint = false
+    _fsm_enabled(true)
+    _world_pause(false)   -- the pause held since the shop opened releases HERE (balanced)
+    _cam("clear_target"); _cam("set_on", false)
+    UI.cam_go = nil
+    -- the siting ghost dies on EVERY exit (place, cancel, hotkey) - the raised building
+    -- comes later, from the site's gather flow, never from the preview
+    pcall(function()
+        if _G.IrisForge and _G.IrisForge.preview_clear then _G.IrisForge.preview_clear() end
+    end)
+    if msg then M.last = msg end
+end
+SCR.fp_start = function(kit)
+    local rp = _ppos()
+    if not rp then M.last = "no player"; return end
+    local fx, fz = _pfwd()
+    FP.active = true
+    FP.kit = kit
+    FP.px, FP.py, FP.pz = rp.x + fx * 6.0, rp.y, rp.z + fz * 6.0
+    FP.yaw = 0.0
+    FP.snap_at = 0.0
+    FP.hoff = 0.0   -- manual lift, PRESERVED across ground snaps (Aurora: "it keeps snapping back down")
+    FP.gy = nil     -- last probed ground y (render)
+    FP.anchor = UI.anchor
+    _G.IrisFurnishFootprint = true
+    -- ⭐ 08-12 (Aurora): raise the REAL kit as a walk-through ghost so the player sees the
+    -- actual building while siting (the wireframe only shows the pivot spread, which
+    -- overshoots). Spawns through the forge pump - it fades in over a few seconds.
+    pcall(function()
+        local dd = _delta()
+        if dd and _G.IrisForge and _G.IrisForge.preview_kit then
+            local ok9, why9 = _G.IrisForge.preview_kit(kit.key, FP.px + dd.x, FP.py + dd.y, FP.pz + dd.z, 0)
+            if not ok9 then _log("siting preview refused: " .. tostring(why9)) end
+        end
+    end)
+    _log("footprint mode: " .. tostring(kit.key or kit.label))
+    M.last = tostring(kit.label or kit.key) .. ": walk the footprint into place. A/Enter sets the site, B/Esc cancels"
+end
+-- the confirmed placement: called by the dialog reader's "fp" branch (Set it)
+SCR.fp_place = function()
+    local dd9 = _delta()
+    if not dd9 then FP.frozen = nil; return end
+    local ux, uy, uz = FP.px + dd9.x, FP.py + dd9.y, FP.pz + dd9.z
+    local ob = rawget(_G, "IrisOutbuildings")
+    if not (ob and ob.place_site) then
+        M.last = "the builder's ledger isn't loaded (IrisOutbuildings absent) - site not set"
+        FP.frozen = nil
+        return
+    end
+    local ok9, why9 = nil, nil
+    pcall(function() ok9, why9 = ob.place_site(FP.kit.key, ux, uy, uz, FP.yaw or 0) end)
+    _log(string.format("place_site %s at U(%.1f,%.1f,%.1f) yaw %.0f -> %s (%s)",
+        tostring(FP.kit.key), ux, uy, uz, FP.yaw or 0, tostring(ok9), tostring(why9)))
+    if ok9 then
+        SCR.fp_exit("site set: " .. tostring(FP.kit.label or FP.kit.key) .. ". Gather the materials there to raise it")
+    else
+        M.last = "the site refuses: " .. tostring(why9 or "no owned, built plot in range")
+        FP.frozen = nil
+    end
+end
+
+-- the box the wireframe draws: half-extents + height, read defensively from the kit's AABB
+SCR.fp_box = function()
+    local a = FP.kit and FP.kit.footprint_aabb or nil
+    local hx, hz, y0, y1 = 3.0, 3.0, 0.0, 3.0
+    pcall(function()
+        if type(a) ~= "table" then return end
+        if type(a.min) == "table" and type(a.max) == "table" then
+            hx = math.max(math.abs(tonumber(a.min.x) or -3.0), math.abs(tonumber(a.max.x) or 3.0))
+            hz = math.max(math.abs(tonumber(a.min.z) or -3.0), math.abs(tonumber(a.max.z) or 3.0))
+            y0 = tonumber(a.min.y) or 0.0
+            y1 = tonumber(a.max.y) or 3.0
+        elseif tonumber(a.hx) then
+            hx = tonumber(a.hx)
+            hz = tonumber(a.hz) or hx
+            y1 = tonumber(a.h) or 3.0
+        end
+    end)
+    return hx, hz, y0, y1
+end
+
+-- ── THE SCREEN draw (on_frame; the world stays visible whenever a placement is live) ────
+local COLS = {
+    dim = 0xC0000000, smoke = 0xF014141A, inset = 0x50000000,
+    gold = 0xFFC8A050, cream = 0xFFE8D8A8, body = 0xFFC8C8D0,
+    dimtxt = 0xFF9A9AA8, green = 0xFF58C878, red = 0xFFB05048,
+    rose = 0xFFE8B0D8, trough = 0xFF23232A, alive = 0xFFB8E8B8,
+}
+SCR.strip = function(lines)
+    -- a slim bottom band: placement modes need the WORLD, not a screen
+    local sw, sh = SCR.screen()
+    local sc = SCR.scale()
+    local H = (18 + #lines * 22) * sc
+    local Y = sh - H - 46.0 * sc
+    draw.filled_rect(0, Y, sw, H, SCR.rc(0xB0101016))
+    draw.filled_rect(0, Y, sw, 2.0 * sc, SCR.rc(COLS.gold))
+    for i, ln in ipairs(lines) do
+        SCR.txt(ln[1], 30.0 * sc, Y + (8 + (i - 1) * 22) * sc, ln[2] or COLS.body)
+    end
+end
+SCR.draw = function()
+    SCR.ensure_fonts()
+    if FP.active and FP.kit then
+        SCR.strip({
+            { "Siting: " .. tostring(FP.kit.label or FP.kit.key) .. "   (" .. SCR.cost_str(FP.kit) .. " to raise once the site is set)", COLS.cream },
+            { "Stick/WASD move   LT/RT or Q/E turn   Z/X or holdY+dpad height   right stick: camera", COLS.dimtxt },
+            { "A/Enter: set the site (confirm)   B/Esc: cancel", COLS.dimtxt },
+        })
+        return
+    end
+    if not UI.open then return end
+    -- ⭐ 08-13 (Aurora: "the native dialog goes behind the UI"): our drawlist paints over
+    -- the native GUI - while a dialog is up, the screen steps aside entirely
+    if dlg.open then return end
+    if ghost and (ghost.locked or ghost.frozen) then
+        SCR.strip({
+            { "Placing: " .. tostring(ghost.entry and ghost.entry.label or "?"), COLS.cream },
+            { "Stick/WASD move   LT/RT spin   holdX+dpad tilt   holdX+RT/LT scale   holdY+up/down or Z/X height", COLS.dimtxt },
+            { "A/Enter: place (confirm + pay)   R3/Backspace: reset angle   B: unlock", COLS.dimtxt },
+        })
+        return
+    end
+    local sw, sh = SCR.screen()
+    local sc = SCR.scale()
+    local W, H = 1000.0 * sc, 600.0 * sc
+    local X, Y = (sw - W) * 0.5, (sh - H) * 0.42
+    local pad = 16.0 * sc
+    draw.filled_rect(X - 3, Y - 3, W + 6, H + 6, SCR.rc(COLS.dim))
+    draw.filled_rect(X, Y, W, H, SCR.rc(COLS.smoke))
+    draw.filled_rect(X, Y, W, 2.0 * sc, SCR.rc(COLS.gold))
+    draw.filled_rect(X, Y + H - 2.0 * sc, W, 2.0 * sc, SCR.rc(COLS.gold))
+    -- ⭐ 08-12 (Aurora): the screen wears the PLOT'S name, proper case, not a generic banner
+    local title9 = "The Homestead"
+    pcall(function()
+        local n9 = UI.anchor and UI.anchor.name
+        if n9 and tostring(n9) ~= "" then title9 = SCR.pc(n9) end
+    end)
+    SCR.txt(title9, X + pad, Y + pad * 0.6, COLS.cream, true)
+    SCR.txt(tostring(_gold() or "?") .. " G", X + W - 140.0 * sc, Y + pad * 0.8, COLS.cream)
+    -- tab bar: the STABLE sits greyed at the left end (Aurora's mockup) so the one-menu
+    -- chain is visible - LB from Decorations really does land there
+    local tx = X + pad
+    local ty = Y + 52.0 * sc
+    SCR.txt("Stable", tx, ty, 0xFF6A6A78)
+    tx = tx + SCR.textw("Stable") + 34.0 * sc
+    for i, name in ipairs(TABS) do
+        local on = i == SCR.tab
+        SCR.txt(name, tx, ty, on and COLS.cream or COLS.dimtxt)
+        local tw = SCR.textw(name)
+        if on then draw.filled_rect(tx, ty + 22.0 * sc, tw, 2.0 * sc, SCR.rc(COLS.gold)) end
+        tx = tx + tw + 34.0 * sc
+    end
+    SCR.txt("[Q/E or LB/RB switch]", X + W - 190.0 * sc, ty, COLS.dimtxt)
+    local ly = ty + 40.0 * sc
+    local rh = 28.0 * sc
+    local well_h = H - (ly - Y) - 66.0 * sc
+    local max_vis = math.floor(well_h / rh)
+    local hint1, hint2 = "", ""
+    if SCR.tab == 1 then
+        local rows = _rows_for_cat()
+        local ac = _all_cats()
+        if UI.row > #rows then UI.row = math.max(1, #rows) end
+        SCR.txt("<  " .. SCR.pc(ac[UI.cat_i] or "All") .. "  >   (Left/Right or dpad)", X + pad, ly, COLS.gold)
+        ly = ly + 30.0 * sc
+        max_vis = math.floor((well_h - 30.0 * sc) / rh)
+        draw.filled_rect(X + pad, ly - 4.0 * sc, W - pad * 2, math.max(1, math.min(#rows, max_vis)) * rh + 8.0 * sc, SCR.rc(COLS.inset))
+        if #rows == 0 then
+            SCR.txt("Nothing in this category.", X + pad + 10.0 * sc, ly + 6.0 * sc, COLS.dimtxt)
+        else
+            local first = math.max(1, math.min(UI.row - math.floor(max_vis / 2), #rows - max_vis + 1))
+            for i = first, math.min(#rows, first + max_vis - 1) do
+                local e = rows[i]
+                local yy = ly + (i - first) * rh
+                if i == UI.row then draw.filled_rect(X + pad, yy - 2.0 * sc, W - pad * 2, rh - 2.0 * sc, SCR.rc(0x60C8A050)) end
+                local col = (i == UI.row) and 0xFFFFF0C8 or COLS.body
+                SCR.txt(e.label, X + pad + 10.0 * sc, yy, col)
+                local right = (e.dist and string.format("%.0fm", e.dist)) or (tostring(e.price) .. " G")
+                SCR.txt(right, X + W - pad - 110.0 * sc, yy, (i == UI.row) and COLS.cream or COLS.dimtxt)
+            end
+        end
+        if ac[UI.cat_i] == "PLACED" then
+            hint1 = "Up/Down pick   A/Enter: pick up (move, free)   X/Del: sell for half"
+            hint2 = "Left/Right category   Q/E tabs   B/Esc: leave"
+        else
+            hint1 = "Up/Down browse   Left/Right category   A: lock the piece in (the preview follows your selection)"
+            hint2 = "Q/E or LB/RB: tabs   B/Esc: leave"
+        end
+    elseif SCR.tab == 2 then
+        local rows = SCR.rows_build()
+        -- ⛔ 08-13 (Aurora: "can't get down to the commissioned option"): this clamp only
+        -- counted the PLANS, so every frame it shoved the cursor back off the commission
+        -- rows the input side had just reached. Clamp to plans + commissions.
+        local srows_n = 0
+        pcall(function()
+            local ob = rawget(_G, "IrisOutbuildings")
+            srows_n = #((ob and ob.sites and ob.sites()) or {})
+        end)
+        if SCR.brow > #rows + srows_n then SCR.brow = math.max(1, #rows + srows_n) end
+        draw.filled_rect(X + pad, ly - 4.0 * sc, W - pad * 2, well_h, SCR.rc(COLS.inset))
+        if #rows == 0 then
+            SCR.txt("No building plans registered yet.", X + pad + 10.0 * sc, ly + 6.0 * sc, COLS.body)
+            SCR.txt("The forge ledger is empty - the builder's side (IrisForge kits) hasn't arrived.", X + pad + 10.0 * sc, ly + 32.0 * sc, COLS.dimtxt)
+        else
+            for i = 1, math.min(#rows, max_vis - 4) do
+                local k = rows[i]
+                local yy = ly + (i - 1) * rh
+                if i == SCR.brow then draw.filled_rect(X + pad, yy - 2.0 * sc, W - pad * 2, rh - 2.0 * sc, SCR.rc(0x60C8A050)) end
+                SCR.txt(tostring(k.label or k.key), X + pad + 10.0 * sc, yy, (i == SCR.brow) and 0xFFFFF0C8 or COLS.body)
+                SCR.txt(SCR.cost_str(k), X + W - pad - 220.0 * sc, yy, (i == SCR.brow) and COLS.cream or COLS.dimtxt)
+            end
+            -- standing commissions share the cursor: X/Del on one cancels it (confirmed)
+            local sy = ly + math.min(#rows, max_vis - 4) * rh + 14.0 * sc
+            pcall(function()
+                local ob = rawget(_G, "IrisOutbuildings")
+                local sites = ob and ob.sites and ob.sites() or nil
+                if type(sites) == "table" and #sites > 0 then
+                    SCR.txt("Commissions", X + pad + 4.0 * sc, sy, 0xFFB8A070)
+                    sy = sy + 26.0 * sc
+                    for i9 = 1, math.min(#sites, 5) do
+                        local s9 = sites[i9]
+                        local on9 = SCR.brow == #rows + i9
+                        if on9 then draw.filled_rect(X + pad, sy - 2.0 * sc, W - pad * 2, rh - 2.0 * sc, SCR.rc(0x60C8A050)) end
+                        SCR.txt("  " .. tostring(s9.label or s9.kit_key or s9.key or "site"),
+                            X + pad + 4.0 * sc, sy, on9 and 0xFFFFF0C8 or COLS.body)
+                        SCR.txt(tostring(s9.state or s9.status or "gathering materials"),
+                            X + W - pad - 340.0 * sc, sy, on9 and COLS.cream or COLS.dimtxt)
+                        sy = sy + rh
+                    end
+                end
+            end)
+        end
+        hint1 = "Up/Down browse   A/Enter: buy the plan and walk its ghost into place (confirmed before it commits)"
+        hint2 = "X/Del on a commission: cancel it (materials return)   Q/E or LB/RB: tabs   B/Esc: leave"
+    else
+        local rows = SCR.rows_animals()
+        if SCR.arow > #rows then SCR.arow = math.max(1, #rows) end
+        local list_w = 340.0 * sc
+        draw.filled_rect(X + pad, ly - 4.0 * sc, list_w, well_h, SCR.rc(COLS.inset))
+        local rx = X + pad + list_w + pad
+        local rw = W - (rx - X) - pad
+        draw.filled_rect(rx, ly - 4.0 * sc, rw, well_h, SCR.rc(COLS.inset))
+        if #rows == 0 then
+            SCR.txt("No creatures live here yet.", X + pad + 10.0 * sc, ly + 6.0 * sc, COLS.body)
+            SCR.txt("Send a tamed friend home from the Stable Screen [O].", X + pad + 10.0 * sc, ly + 32.0 * sc, COLS.dimtxt)
+        else
+            local first = math.max(1, math.min(SCR.arow - math.floor(max_vis / 2), #rows - max_vis + 1))
+            for i = first, math.min(#rows, first + max_vis - 1) do
+                local r = rows[i]
+                local yy = ly + (i - first) * rh
+                if i == SCR.arow then draw.filled_rect(X + pad, yy - 2.0 * sc, list_w, rh - 2.0 * sc, SCR.rc(0x60C8A050)) end
+                local col = (i == SCR.arow) and 0xFFFFF0C8 or COLS.alive
+                local nm = tostring(r.name or "?")
+                SCR.txt(nm, X + pad + 8.0 * sc, yy, col)
+                local xoff = X + pad + 8.0 * sc + SCR.textw(nm)
+                local gs = (r.gender == "female" and "\u{2640}") or (r.gender == "male" and "\u{2642}") or nil
+                if gs and SCR.fonts.sym then
+                    imgui.push_font(SCR.fonts.sym)
+                    pcall(function() draw.text(gs, xoff + 5.0 * sc, yy,
+                        SCR.rc(r.gender == "female" and 0xFFE8A8C8 or 0xFFA8C8E8)) end)
+                    imgui.pop_font()
+                    xoff = xoff + 18.0 * sc
+                end
+                SCR.txt("  (" .. tostring(r.label or "?") .. ")", xoff, yy, col)
+            end
+            local r = rows[SCR.arow]
+            if r then
+                local gword = (r.gender == "female" and "Female") or (r.gender == "male" and "Male") or "?"
+                SCR.txt(tostring(r.name or "?") .. "  -  " .. gword .. " " .. tostring(r.label or "?"),
+                    rx + 10.0 * sc, ly + 2.0 * sc, COLS.cream, true)
+                local by = ly + 38.0 * sc
+                if type(r.carrying) == "table" then
+                    local due = ""
+                    pcall(function()
+                        local b9 = rawget(_G, "IrisGriffinBridge")
+                        local day9 = b9 and b9.breed_day and b9.breed_day() or nil
+                        local left9 = day9 and math.max(0, (tonumber(r.carrying.due_day) or 0) - day9) or nil
+                        due = left9 and ((left9 <= 0) and " - due NOW" or (" - due in " .. left9 .. " day" .. (left9 == 1 and "" or "s"))) or ""
+                    end)
+                    SCR.txt("Carrying " .. tostring(r.carrying.sire or "?") .. "'s young" .. due, rx + 10.0 * sc, by, COLS.rose)
+                    by = by + 26.0 * sc
+                end
+                if r.growth_mature then
+                    SCR.txt("Still growing (grown on day " .. tostring(r.growth_mature) .. ")", rx + 10.0 * sc, by, COLS.alive)
+                    by = by + 26.0 * sc
+                end
+                SCR.txt(type(r.home_pin) == "table" and "Spawn pin: set (spawns at its pinned spot)"
+                    or "Spawn pin: none (spawns near the house)", rx + 10.0 * sc, by, COLS.dimtxt)
+                by = by + 30.0 * sc
+                local hp, hpmax = tonumber(r.hp), tonumber(r.hp_max)
+                if hp and hpmax and hpmax > 0 then
+                    SCR.txt("Health", rx + 10.0 * sc, by, COLS.body)
+                    local bar_x, bar_w = rx + 80.0 * sc, rw - 220.0 * sc
+                    draw.filled_rect(bar_x, by + 5.0 * sc, bar_w, 10.0 * sc, SCR.rc(COLS.trough))
+                    local hf = math.max(0.0, math.min(1.0, hp / hpmax))
+                    draw.filled_rect(bar_x, by + 5.0 * sc, bar_w * hf, 10.0 * sc,
+                        SCR.rc(hf > 0.5 and COLS.green or (hf > 0.25 and COLS.gold or COLS.red)))
+                    SCR.txt(string.format("%d / %d", math.floor(hp), math.floor(hpmax)), bar_x + bar_w + 8.0 * sc, by, COLS.cream)
+                    by = by + 30.0 * sc
+                end
+                local iv = r.iv or {}
+                local line = ""
+                for _, k in ipairs({ "hp", "atk", "def", "spd", "size", "luck" }) do
+                    line = line .. string.upper(k) .. " " .. tostring(tonumber(iv[k]) or 0) .. "   "
+                end
+                SCR.txt("Bloodline:  " .. line, rx + 10.0 * sc, by, COLS.body)
+            end
+        end
+        hint1 = "Up/Down pick   A/C: call this one to you   P/X: set its spawn pin HERE"
+        hint2 = "R/Y: rename   H/dpad-right: back to the stable   Q/E tabs   B/Esc: leave"
+    end
+    SCR.txt(hint1, X + pad, Y + H - 48.0 * sc, COLS.dimtxt)
+    SCR.txt(hint2, X + pad, Y + H - 26.0 * sc, COLS.dimtxt)
+    if M.last and M.last ~= "" then
+        SCR.txt(tostring(M.last), X + pad, Y + H - 70.0 * sc, 0xFF9AE89A)
+    end
+end
+
+-- the DRAWN wireframe footprint: 12 gold edges through world_to_screen. ⛔ never a
+-- spawned gimmick (the contract's law); an off-screen endpoint just skips its edge.
+SCR.draw_footprint = function()
+    if not (FP.active and FP.kit) then return end
+    local hx, hz, y0, y1 = SCR.fp_box()
+    local cy = math.cos(math.rad(FP.yaw or 0))
+    local sy = math.sin(math.rad(FP.yaw or 0))
+    local function corner(dx, dz, dy)
+        local wx = FP.px + dx * cy + dz * sy
+        local wz = FP.pz - dx * sy + dz * cy
+        local p = nil
+        pcall(function() p = draw.world_to_screen(Vector3f.new(wx, (FP.py or 0) + dy, wz)) end)
+        return p
+    end
+    local c = {}
+    c[1], c[2], c[3], c[4] = corner(-hx, -hz, y0), corner(hx, -hz, y0), corner(hx, hz, y0), corner(-hx, hz, y0)
+    c[5], c[6], c[7], c[8] = corner(-hx, -hz, y1), corner(hx, -hz, y1), corner(hx, hz, y1), corner(-hx, hz, y1)
+    local col_base, col_top = SCR.rc(0xFFE8C878), SCR.rc(0xB0C8A050)
+    local function seg(a, b, col)
+        if not (a and b) then return end
+        if type(draw.line) == "function" then
+            pcall(function() draw.line(a.x, a.y, b.x, b.y, col) end)
+        else
+            -- no draw.line on this build: corner dots keep the footprint readable
+            pcall(function() draw.filled_rect(a.x - 2, a.y - 2, 4, 4, col) end)
+            pcall(function() draw.filled_rect(b.x - 2, b.y - 2, 4, 4, col) end)
+        end
+    end
+    seg(c[1], c[2], col_base); seg(c[2], c[3], col_base); seg(c[3], c[4], col_base); seg(c[4], c[1], col_base)
+    seg(c[5], c[6], col_top); seg(c[6], c[7], col_top); seg(c[7], c[8], col_top); seg(c[8], c[5], col_top)
+    seg(c[1], c[5], col_top); seg(c[2], c[6], col_top); seg(c[3], c[7], col_top); seg(c[4], c[8], col_top)
+end
+
+re.on_frame(function()
+    pcall(SCR.draw)
+    pcall(SCR.draw_footprint)
+end)
 
 -- ── placed furniture lifecycle (auto spawn/despawn by proximity; adopt-don't-duplicate) ──
 local live = {}       -- [placed index] = go
@@ -852,6 +1317,35 @@ re.on_application_entry("UpdateBehavior", function()
         if p ~= nil and p ~= dlg.baseline then dlg.baseline = p else p = nil end
         if p ~= nil and os.clock() - dlg.opened_at < 0.25 then p = nil end
         if p == nil and os.clock() - dlg.opened_at > 30.0 then _close_dialog(); dlg.phase = nil; return end
+        -- footprint SITE confirm (the Build tab's are-you-sure)
+        if dlg.phase == "fp" then
+            if p == 1 then
+                _close_dialog(); dlg.phase = nil
+                SCR.fp_place()
+            elseif p == 2 or p == 5 then
+                _close_dialog(); dlg.phase = nil
+                FP.frozen = nil   -- keep driving
+            end
+            return
+        end
+        -- commission CANCEL confirm (Build tab, X/Del on a site row)
+        if dlg.phase == "ob_cancel" then
+            if p == 1 then
+                _close_dialog()
+                local key9 = dlg.ob_key
+                dlg.ob_key, dlg.phase = nil, nil
+                pcall(function()
+                    local ok9, rt9, rs9 = _G.IrisOutbuildings.cancel_site(key9)
+                    M.last = ok9 and ("commission cancelled"
+                            .. (((rt9 or 0) + (rs9 or 0)) > 0
+                                and (" (" .. tostring(rt9) .. " Timber, " .. tostring(rs9) .. " Stone returned)") or ""))
+                        or "could not cancel (site not found)"
+                end)
+            elseif p == 2 or p == 5 then
+                _close_dialog(); dlg.ob_key, dlg.phase = nil, nil
+            end
+            return
+        end
         -- SELL confirm (Aurora: "we need a confirmation for selling too")
         if dlg.phase == "sell" then
             if p == 1 then          -- Sel0 = Sell it
@@ -985,7 +1479,18 @@ re.on_application_entry("UpdateBehavior", function()
 
     -- ── the DECORATOR (v3: paused menu, live preview, place many, manage placed) ─────────
     if _edge(tonumber(M.ui_key) or 0x6A) then
-        if UI.open then _close_shop() else _open_shop() end
+        if FP.active then SCR.fp_exit("build placement cancelled")
+        elseif UI.open then _close_shop() else _open_shop() end
+    end
+    -- ⭐ 08-12 ONE MENU: the Stable Screen hands off here (RB near a built plot). Consumed
+    -- on the game thread so _open_shop runs where every other opener runs.
+    if _G.IrisScreenHandoff == "furnish" and not UI.open and not FP.active and not dlg.open then
+        _G.IrisScreenHandoff = nil
+        SCR.tab = 1
+        -- swallow the arriving RB: the press that left the Stable edges HERE on the same
+        -- frame the screen opens, hopping Decorations -> Build (Aurora's report)
+        UI.handoff_guard = os.clock() + 0.35
+        _open_shop()
     end
     local cur = _pad_button()
     local gdown = cur & (~(PAD.prev or 0)); PAD.prev = cur
@@ -995,6 +1500,133 @@ re.on_application_entry("UpdateBehavior", function()
     local b_hit = _edge(0x1B) or _edge(0x08) or ghit(PAD.face.b)  -- Esc / Backspace / B
 
     _pump_jobs()   -- runs under OUR pause too (preview spawns; one-at-a-time, gentle)
+
+    -- ── deferred ANIMALS-tab actions: run on the first LIVE frame after the menu closed
+    -- (the Stable Screen's queue law: never touch bodies on a paused frame; expire loudly)
+    if M.qact and not UI.open then
+        local q = M.qact
+        if os.clock() - (tonumber(q.at) or 0) > 10.0 then
+            M.qact = nil
+            _log("animals action '" .. tostring(q.kind) .. "' EXPIRED unconsumed (dropped)")
+        elseif not UI.paused and not paused then
+            M.qact = nil
+            if q.kind == "call" then
+                local done = false
+                pcall(function()
+                    local hb = rawget(_G, "IrisHomesteadBox")
+                    if hb and hb.call_one then done = hb.call_one(q.id) == true end
+                    if not done and hb and hb.call_all then hb.call_all(); done = true end
+                end)
+                M.last = done and (tostring(q.name) .. " answers the call") or "no resident body to call right now"
+            elseif q.kind == "callback" then
+                local ok9, why9 = nil, nil
+                pcall(function()
+                    local b9 = rawget(_G, "IrisGriffinBridge")
+                    if b9 and b9.stable_call_back then ok9, why9 = b9.stable_call_back(q.id) end
+                end)
+                M.last = ok9 and (tostring(q.name) .. " returns to the stable")
+                    or ("could not call back: " .. tostring(why9 or "bridge missing"))
+            elseif q.kind == "rename" then
+                local ok9 = false
+                pcall(function()
+                    local T = rawget(_G, "IrisTaming")
+                    if T and T.open_rename then T.open_rename(q.id, q.name); ok9 = true end
+                end)
+                if not ok9 then M.last = "rename unavailable (IrisTaming not loaded)" end
+            end
+        end
+    end
+
+    -- ── FOOTPRINT MODE tick (BUILD tab): world UNPAUSED by design (obligation 8 - the
+    -- forge/collision pumps must run); the player FSM is ours until every exit path.
+    if FP.active then
+        if not FP.kit then SCR.fp_exit(nil); return end
+        if dlg.open then return end
+        if b_hit and not FP.frozen then SCR.fp_exit("build placement cancelled"); return end
+        _fsm_enabled(false)   -- re-assert: streaming can rebuild the human under us
+        if FP.frozen then return end   -- the confirm dialog owns the moment
+        pcall(function()
+            -- camera follows the ghost (the decorate law): target its first piece once up
+            local ago = nil
+            pcall(function() ago = _G.IrisForge and _G.IrisForge.preview_anchor and _G.IrisForge.preview_anchor() end)
+            if ago and UI.cam_go ~= ago then
+                UI.cam_go = ago
+                _cam("set_target", ago)
+                _cam("set_on", true)
+            end
+            if ago then _cam("set_heading", 0) end
+            local rrx, rry = _pad_axis_r()
+            if math.abs(rrx) > 0.15 then _cam("orbit", rrx * 3.0) end
+            if math.abs(rry) > 0.15 then _cam("zoom", -rry * 0.08) end
+            local fx, fz = _cam_fwd()
+            local rxv, rzv = fz, -fx
+            local mx, mz = 0.0, 0.0
+            if _kb(0x57) then mz = mz - 1 end   -- W = away from the camera (the ghost-drive law)
+            if _kb(0x53) then mz = mz + 1 end
+            if _kb(0x41) then mx = mx - 1 end
+            if _kb(0x44) then mx = mx + 1 end
+            local lx, lyx = _pad_axis_l()
+            if math.abs(lx) > 0.15 then mx = mx + lx end
+            if math.abs(lyx) > 0.15 then mz = mz - lyx end
+            local sp = 0.14
+            FP.px = FP.px + (fx * mz + rxv * mx) * sp
+            FP.pz = FP.pz + (fz * mz + rzv * mx) * sp
+            if _kb(0x51) or gheld(PAD.lt) then FP.yaw = (FP.yaw or 0) - 1.2 end
+            if _kb(0x45) or gheld(PAD.rt) then FP.yaw = (FP.yaw or 0) + 1.2 end
+            -- height: Z/X keys or HOLD Y + dpad (the decorate mapping; no tilt/scale on
+            -- purpose - a building only ever rises upright at true size).
+            -- ⛔ 08-12 (Aurora: "it keeps snapping back down"): the keys adjust an OFFSET
+            -- the ground snap respects - manual lift survives every re-probe. (The real
+            -- raise still ground-reach STRETCHES its legs to the dirt afterward.)
+            local ymod9 = gheld(PAD.face.y)
+            if _kb(0x5A) or (ymod9 and gheld(PAD.dpad.up)) then
+                FP.hoff = math.min(8.0, (FP.hoff or 0) + 0.05)
+                if not FP.gy then FP.py = (FP.py or 0) + 0.05 end
+            end
+            if _kb(0x58) or (ymod9 and gheld(PAD.dpad.down)) then
+                FP.hoff = math.max(-3.0, (FP.hoff or 0) - 0.05)
+                if not FP.gy then FP.py = (FP.py or 0) - 0.05 end
+            end
+            -- range: obligation 17 - plot-scale clamp, not the 25m decor clamp
+            local dd9 = _delta()
+            if FP.anchor and dd9 then
+                local ux, uz = FP.px + dd9.x, FP.pz + dd9.z
+                local ax, az = ux - FP.anchor.ux, uz - FP.anchor.uz
+                local m2 = ax * ax + az * az
+                local R = tonumber(M.build_radius) or 60.0
+                if m2 > R * R then
+                    local s = R / math.sqrt(m2)
+                    FP.px = (FP.anchor.ux + ax * s) - dd9.x
+                    FP.pz = (FP.anchor.uz + az * s) - dd9.z
+                end
+            end
+            -- ground snap through the homestead's proven probe (render x/z in, universal y out);
+            -- absent rig or no hit = keep the manual Z/X height, never a blind write
+            if os.clock() - (FP.snap_at or 0) > 0.15 and dd9 then
+                FP.snap_at = os.clock()
+                local cast9 = rawget(_G, "route3_cast_ground_below")
+                if type(cast9) == "function" then
+                    local hit9 = nil
+                    pcall(function() hit9 = cast9(FP.px, (FP.py + dd9.y) + 6.0, FP.pz) end)
+                    local hy9 = hit9 and tonumber(hit9.y) or nil
+                    if hy9 and math.abs((hy9 - dd9.y) - FP.py) < 8.0 then FP.gy = hy9 - dd9.y end
+                end
+            end
+            -- base = probed ground, lift = the player's offset (never fought, never lost)
+            if FP.gy then FP.py = FP.gy + (FP.hoff or 0.0) end
+            -- slide the siting ghost with the footprint (universal in; the forge converts)
+            if dd9 and _G.IrisForge and _G.IrisForge.preview_move then
+                _G.IrisForge.preview_move(FP.px + dd9.x, FP.py + dd9.y, FP.pz + dd9.z, FP.yaw or 0)
+            end
+        end)
+        if a_hit and not dlg.open then
+            -- confirm before committing (Aurora: "place should have an are-you-sure")
+            FP.frozen = true
+            _show_dialog("Set the " .. tostring(FP.kit.label or FP.kit.key) .. " site here?\n"
+                .. SCR.cost_str(FP.kit) .. " to raise it", "Set it", "Not yet", "fp")
+        end
+        return
+    end
 
     -- ⛔⛔ THE PRECISE EDITOR APPLIES **HERE**, NOT IN THE PANEL (Aurora: "the sliders aren't
     -- actually affecting"). Transform writes must happen on the game thread — postpatch law
@@ -1026,6 +1658,109 @@ re.on_application_entry("UpdateBehavior", function()
     end
 
     if UI.open then
+        -- ── TAB SWITCH (Q/E keys, LB/RB pad) - never while a piece is locked/being placed
+        if not (ghost and (ghost.locked or ghost.frozen or ghost.repick)) then
+            local tl = _edge(0x51) or ghit(PAD.lb)
+            local tr = _edge(0x45) or ghit(PAD.rb)
+            if (tl or tr) and os.clock() < (tonumber(UI.handoff_guard) or 0) then tl, tr = nil, nil end
+            if tl or tr then
+                if (tl and SCR.tab == 1) or (tr and SCR.tab == #TABS) then
+                    -- ⭐ ONE MENU (Aurora): sliding off either end lands back on THE STABLE
+                    _close_shop()
+                    _G.IrisScreenHandoff = "stable"
+                    return
+                end
+                SCR.tab = SCR.tab + (tr and 1 or -1)
+                UI.preview_want = nil
+                UI.last_sel = nil
+                if ghost then _drop_ghost(true) end   -- a browse preview dies with its tab
+                M.last = TABS[SCR.tab]
+            end
+        end
+        -- ── BUILD tab: browse the forge's kits, A buys the plan and enters footprint mode
+        if SCR.tab == 2 then
+            if b_hit and not dlg.open then _close_shop(); return end
+            local rows2 = SCR.rows_build()
+            local srows2 = {}
+            pcall(function()
+                local ob = rawget(_G, "IrisOutbuildings")
+                for _, s9 in ipairs((ob and ob.sites and ob.sites()) or {}) do srows2[#srows2 + 1] = s9 end
+            end)
+            local total2 = #rows2 + #srows2
+            if total2 > 0 then
+                if SCR.brow > total2 then SCR.brow = total2 end
+                if _rep(0x26, "u2") or ghit(PAD.dpad.up) then SCR.brow = ((SCR.brow - 2) % total2) + 1 end
+                if _rep(0x28, "d2") or ghit(PAD.dpad.down) then SCR.brow = (SCR.brow % total2) + 1 end
+                -- X/Del on a COMMISSION row: cancel it (confirmed; materials come back)
+                if (_edge(0x2E) or ghit(PAD.face.x)) and not dlg.open and SCR.brow > #rows2 then
+                    local s9 = srows2[SCR.brow - #rows2]
+                    if s9 then
+                        dlg.ob_key = s9.key
+                        _show_dialog("Cancel the " .. tostring(s9.label) .. " commission?\n"
+                            .. "Whatever was given comes back.", "Cancel it", "Keep it", "ob_cancel")
+                    end
+                end
+                if a_hit and not dlg.open and SCR.brow <= #rows2 then
+                    local kit = rows2[SCR.brow]
+                    if kit then
+                        -- leave the menu WITHOUT _close_shop: the FSM stays ours AND the
+                        -- pause stays held (Aurora: siting behaves exactly like decorate;
+                        -- the forge pump carries a footprint exception so the ghost can
+                        -- still be born under the pause)
+                        if ghost then _drop_ghost(true) end
+                        UI.open = false; _G.IrisFurnishUIOpen = false
+                        UI.preview_want = nil
+                        _cam("clear_target"); _cam("set_on", false)
+                        SCR.fp_start(kit)
+                        if not FP.active then
+                            -- refused (no player mid-transition): give everything back
+                            _world_pause(false)
+                            _fsm_enabled(true)
+                        end
+                    end
+                end
+            end
+            return
+        end
+        -- ── ANIMALS tab: the residents as first-class citizens (actions queue and run live)
+        if SCR.tab == 3 then
+            if b_hit and not dlg.open then _close_shop(); return end
+            local rows3 = SCR.rows_animals()
+            if #rows3 > 0 then
+                if SCR.arow > #rows3 then SCR.arow = #rows3 end
+                if _rep(0x26, "u3") or ghit(PAD.dpad.up) then SCR.arow = ((SCR.arow - 2) % #rows3) + 1 end
+                if _rep(0x28, "d3") or ghit(PAD.dpad.down) then SCR.arow = (SCR.arow % #rows3) + 1 end
+                local r3 = rows3[SCR.arow]
+                if r3 then
+                    if _edge(0x50) or ghit(PAD.face.x) then
+                        -- spawn pin = a pure record write (safe under pause): where you stand NOW
+                        pcall(function()
+                            local up9 = _pupos()
+                            local b9 = rawget(_G, "IrisGriffinBridge")
+                            if up9 and b9 and b9.set_home_pin then
+                                b9.set_home_pin(r3.id, up9.x, up9.y, up9.z)
+                                M.last = tostring(r3.name) .. "'s spawn pin set where you stand"
+                            else
+                                M.last = "spawn pins unavailable (bridge missing)"
+                            end
+                        end)
+                    end
+                    if a_hit or _edge(0x43) then
+                        M.qact = { kind = "call", id = r3.id, name = r3.name, at = os.clock() }
+                        _close_shop(); return
+                    end
+                    if _edge(0x52) or ghit(PAD.face.y) then
+                        M.qact = { kind = "rename", id = r3.id, name = r3.name, at = os.clock() }
+                        _close_shop(); return
+                    end
+                    if _edge(0x48) or ghit(PAD.dpad.right) then
+                        M.qact = { kind = "callback", id = r3.id, name = r3.name, at = os.clock() }
+                        _close_shop(); return
+                    end
+                end
+            end
+            return
+        end
         local rows = _rows_for_cat()
         local ac = _all_cats()
         local in_placed = ac[UI.cat_i] == "PLACED"
@@ -1035,8 +1770,10 @@ re.on_application_entry("UpdateBehavior", function()
         -- ⭐ arrow keys drive the tabs too (Aurora 2026-08-08): up/down already browsed rows,
         -- but changing category was [ / ] only, which nobody guesses. Left/Right are the
         -- obvious keyboard mirror of LB/RB and cost nothing to accept alongside the brackets.
-        local cat_l = _edge(0xDB) or _edge(0x25) or ghit(PAD.lb)   -- [ / Left / LB
-        local cat_r = _edge(0xDD) or _edge(0x27) or ghit(PAD.rb)   -- ] / Right / RB
+        -- ⭐ 08-12: LB/RB moved up to TAB switching (the Homestead Screen); categories are
+        -- now dpad left/right on the pad, [ ] and arrow Left/Right unchanged on the keys
+        local cat_l = _edge(0xDB) or _edge(0x25) or ghit(PAD.dpad.left)    -- [ / Left / dpad
+        local cat_r = _edge(0xDD) or _edge(0x27) or ghit(PAD.dpad.right)   -- ] / Right / dpad
         -- ── LOCK-IN two-stage flow (Aurora: "I've pressed the wrong button and lost the
         -- item a few too many times"): BROWSING = nav lives, steering dead. A locks the
         -- piece IN: nav dead, steering lives. A again places; B unlocks back to browsing.
@@ -1338,6 +2075,9 @@ end)
 
 -- ── the SHOP SCREEN (d2d, the customize screen's visual language) ────────────────────────
 function iris_furnish_draw()
+    -- ⭐ RETIRED 08-12: THE HOMESTEAD SCREEN (SCR.draw, on_frame) replaced this d2d panel.
+    -- The function stays registered and parseable; it simply yields the frame.
+    if true then return end
     if not UI.open then return end
     if not (_G.d2d and d2d.fill_rect and d2d.text) then return end
     local sw, sh = 1920, 1080
@@ -1442,7 +2182,8 @@ _G.IrisFurnish = {
 re.on_script_reset(function()
     -- refs only (destroy-on-reset CTD law); standing furniture gets ADOPTED next pass.
     -- NEVER leave the player FSM-frozen OR the world OUR-paused (both = softlock laws).
-    if UI.open or (ghost and ghost.drive) then _fsm_enabled(true) end
+    if UI.open or (ghost and ghost.drive) or FP.active then _fsm_enabled(true) end
+    FP.active = false; FP.kit = nil; _G.IrisFurnishFootprint = false
     _world_pause(false)
     pcall(function() if _G.IrisCreatureCam then _G.IrisCreatureCam.clear_target(); _G.IrisCreatureCam.set_on(false) end end)
     UI.open = false; _G.IrisFurnishUIOpen = false

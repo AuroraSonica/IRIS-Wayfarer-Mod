@@ -63,6 +63,10 @@ local slots = {}      -- [owner] = { text, prio, dist, pos, go, at }
 _G.IrisPrompt = _G.IrisPrompt or {}
 _G.IrisPrompt.set = function(owner, text, prio, dist, pos, go)
     if not owner then return end
+    -- ⛔ 08-13: while seated on a rodeo mount (rodeo publishes IrisRiddenNow) no
+    -- world-B prompt is accepted - sow/cookpot/tame/sign are all ground-life acts.
+    -- Publishers re-set every frame, so prompts return the instant you dismount.
+    if rawget(_G, "IrisRiddenNow") then slots[owner] = nil; return end
     if text == nil or text == "" then slots[owner] = nil; return end
     slots[owner] = { text = tostring(text), prio = tonumber(prio) or 0,
                      dist = tonumber(dist) or 1e9, pos = pos, go = go, at = os.clock() }

@@ -163,6 +163,17 @@ if S.costume then S.costume.seat = nil end
 S.gait_walk_bank, S.gait_walk_id = nil, nil
 S.gait_run_bank, S.gait_run_id = nil, nil
 S.gait_dash_bank, S.gait_dash_id = nil, nil
+-- ⭐ 08-13 LOAD HYGIENE (the stale-state trap's second bite - "RT tries to pick him
+-- up"): S survives script resets but its managed wrappers DIE. A costume carrying a
+-- dead horse_go silently disables the press-to-mount block (valid() reads false), so
+-- the native catch deadlifts the mount instead. A costume can never legitimately
+-- survive a reload - drop it, and the stale seat flag with it (the documented
+-- ride_pose_on trap). Re-arm with the panel button after any reset.
+S.costume = nil
+S.ride_pose_on = false
+S.wyrm_atk_until, S.wyrm_atk_hold, S.wyrm_btn_prev = nil, nil, nil
+-- 08-13 Shadow-mount CTD guard: the costume is gone, so release the scale easer too
+_G.IrisScaleHoldAddr = nil
 
 local reflog = log  -- capture REFramework's log API before shadowing it
 local function log(message)
@@ -641,6 +652,20 @@ local function seat_cfg(key, default)
         local base = C[key]
         if base == nil then return default end
         return tonumber(base) or default
+    end
+    -- ⭐ 08-13 WYRM (Aurora: "sliders for the cat positioning, the arms need to come
+    -- down"): wyrm tuning NEVER touches the horse's - saved <key>_wyrm wins; until a
+    -- wyrm slider moves, it inherits the horse's resolved value as the starting guess
+    -- (the griffin sub-variant inheritance pattern). Covers the SEAT and the HAND
+    -- MAGNET alike (hand_grip_up/fwd/width resolve through here).
+    if S.costume and S.costume.wyrm_kind then
+        -- 08-13 PER-SPECIES SEAT (Aurora: "if they both adjust the same way one will
+        -- break the other"): <key>_wyrm_wolf / <key>_wyrm_cat win; the old shared
+        -- <key>_wyrm (her wolf tune) is the fallback so nothing she set is lost.
+        local wv = C[key .. "_wyrm_" .. tostring(S.costume.wyrm_kind)]
+        if wv == nil then wv = C[key .. "_wyrm"] end
+        if wv == nil then wv = SEAT_DEFAULTS[key .. "_wyrm"] end
+        if wv ~= nil then return tonumber(wv) or default end
     end
     -- r52 (Aurora: "if we're using the non-static ride pose for calm
     -- we need to use the same sliders" -- the calm offsets were tuned
@@ -1533,6 +1558,7 @@ end
 local function costume_stop()
     local costume = S.costume
     S.costume = nil
+    _G.IrisScaleHoldAddr = nil -- scale easer resumes (08-13 crash guard)
     if not costume then return end
     if S.ride_pose_on then
         S.ride_pose_on = false
@@ -1852,6 +1878,15 @@ local function costume_start_oxless(record)
                  horse_go = record.game_object,
                  horse_character = character, last_gait = nil,
                  oxless = true, record = record, muted_wwise = {}}
+    -- ⛔ 08-13 Shadow-mount CTD, ladder step 1 (v2 - TIMED): the easer's LocalScale
+    -- write at the exact mount moment was the last mod action before the crash. v1
+    -- held for the whole costume life - but auto-arm keeps a costume on any nearby
+    -- wolf/cat, so the native ScaleMediator stomped them back toward 1.0 with nobody
+    -- on duty (Aurora: "they were so much bigger before"). Now the hold is a short
+    -- WINDOW around the two churn moments only: arming (think-stop/FSM-off, here)
+    -- and the mount vault (seat_mount). Steady-state easer writes resume in between.
+    _G.IrisScaleHoldAddr = { addr = object_address(record.game_object),
+                             untilt = os.clock() + 2.5 }
     S.ride_pose_on = false
     S.mount_climb_since = nil
     S.status = "OXLESS mount ready - press E/RT beside it"
@@ -1876,6 +1911,291 @@ local function ready_tamed_mount(record)
     S.status = "TAMED - stand beside your horse and press E/RT to mount"
     return true
 end
+
+-- ⭐⭐ 08-13 WYRM MOUNT (Aurora: the horse mount on Wyrmlife-grown wolves + big cats).
+-- The 07-24 verdict pre-blessed this port: "oxless mount = SPECIES-AGNOSTIC - wolves/
+-- pumas need only seat joint + gait ids + seat-fit + scale." One port, two id families:
+-- wolf ch260, cat ch223 (atlases ch260000/ch223000, both textbook: walk 0:100,
+-- run 0:200, dash 0:300, idle 0:0). Only a WYRM-GROWN live companion qualifies - the
+-- ritual's size is what makes a back worth sitting on.
+-- GLOBAL function (⛔ the main chunk rides the 200-local ceiling - the file's own law).
+function iris_wyrm_mount_start(quiet)
+    local b = rawget(_G, "IrisGriffinBridge")
+    if not b then if not quiet then S.status = "wyrm mount: bridge not loaded" end return false end
+    local ch = nil
+    pcall(function() ch = b.griffin and b.griffin() end)
+    if not ch then if not quiet then S.status = "wyrm mount: no companion is out" end return false end
+    local go = nil
+    pcall(function() go = ch:call("get_GameObject") end)
+    if not valid(go) then if not quiet then S.status = "wyrm mount: no body" end return false end
+    local id = ""
+    pcall(function() id = tostring(ch:call("get_CharaIDString")) end)
+    -- ⭐ 08-13 receipts: HER "wolf" Shadow lives on the CAT chassis (ch223000_00 - the
+    -- IRIS conversion). The CHASSIS decides the moveset, whatever the soul is called.
+    local kind = (id:find("^ch260") and "wolf") or (id:find("^ch223") and "cat") or nil
+    if not kind then
+        if not quiet then
+            S.status = "wyrm mount: companion is not a wolf or great cat (" .. tostring(id) .. ")"
+        end
+        return false
+    end
+    local wyrm = false
+    pcall(function()
+        for _, r in ipairs(b.stable_list() or {}) do
+            if r.live and r.wyrm then wyrm = true end
+        end
+    end)
+    if not wyrm then
+        if not quiet then
+            S.status = "wyrm mount: this friend is not wyrm-grown - too small to bear a rider"
+        end
+        return false
+    end
+    pcall(function() log.info("[IrisHorseRodeo] WYRM MOUNT arming on " .. tostring(id)) end)
+    local record = { game_object = go, kind = kind, tamed = true, wyrm_mount = true }
+    if S.costume then costume_stop() end
+    costume_start_oxless(record)
+    if not S.costume then S.status = "wyrm mount: costume refused"; return false end
+    S.costume.record = record
+    S.costume.tamed = true
+    S.costume.wyrm_kind = kind
+    -- their OWN legs: the native locomotion loops, straight from the atlases
+    S.costume.gaits = { walk = { 0, 100 }, run = { 0, 200 }, dash = { 0, 300 } }
+    -- 08-13 (Aurora: "randomly growling constantly, angry pose"): the think-stop
+    -- freezes whatever clip was playing, and a companion wolf's default is the AGGRO
+    -- STALK with the growl baked into the loop. Arm into the neutral idle instead.
+    pcall(function()
+        local motion = S.costume.horse_character:call("get_Motion")
+        local layer = motion and motion:call("getLayer", 0)
+        if layer then
+            layer:call(
+                "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                0, 0, 0.0, 0.4, 1, 1)
+        end
+    end)
+    S.mount_press_latch = grab_pressed()
+    S.status = "WYRM MOUNT ready - stand beside your " .. kind .. " and press E/RT"
+    return true
+end
+
+function iris_wyrm_mount_stop()
+    if S.costume and S.costume.wyrm_kind then
+        costume_stop()
+        S.status = "wyrm mount released - your friend is their own again"
+        return true
+    end
+    return false
+end
+
+-- ⭐⭐ RIDDEN ATTACKS (Aurora: "X and Y at least, LT optional - browse the atlas"):
+-- atlas-verified one-shots painted through the same force_hold lane the bucks use.
+-- Wolf: X = bite (50:20), Y = the lion jump-slam (50:401), LT = the HOWL (0:4610).
+-- Cat:  X = bite (50:50), Y = the jump-bite lunge (18:410), LT = the yowl (0:4610).
+-- ⚠ v1 = the ANIMATION (lunges and bites that read on camera); real damage lives in
+-- native attack nodes (the griffin combat-kit law) - a later arc, stated honestly.
+function iris_wyrm_attack_tick()
+    local costume = S.costume
+    if not (costume and costume.wyrm_kind and S.ride_pose_on) then
+        S.wyrm_btn_prev = nil
+        return
+    end
+    local now = os.clock()
+    if S.wyrm_atk_until and now > S.wyrm_atk_until then
+        S.wyrm_atk_until = nil
+        if S.wyrm_atk_hold then
+            S.wyrm_atk_hold = nil
+            costume.force_hold = nil
+            costume.last_gait = nil   -- gait re-pick resumes locomotion
+        end
+    end
+    if not S.wyrm_pad then
+        -- resolve by ENUM NAME once (the mask-guess trap; the furnish ladder's law)
+        local names = {}
+        pcall(function()
+            local t = sdk.find_type_definition("via.hid.GamePadButton")
+            for _, f in ipairs(t:get_fields()) do
+                pcall(function() names[f:get_name()] = f:get_data() end)
+            end
+        end)
+        local function pick(...)
+            for _, n in ipairs({ ... }) do if names[n] then return names[n] end end
+            return 0
+        end
+        S.wyrm_pad = { x = pick("Action", "RLeft"), y = pick("Special", "RUp", "Triangle"),
+                       lt = pick("LTrigBottom", "L2") }
+    end
+    local btn = 0
+    pcall(function()
+        local gp = sdk.get_native_singleton("via.hid.GamePad")
+        local td = sdk.find_type_definition("via.hid.GamePad")
+        local dev = sdk.call_native_func(gp, td, "get_MergedDevice")
+        btn = dev and math.floor(dev:call("get_Button") or 0) or 0
+    end)
+    local kb_t, kb_g, kb_h = false, false, false
+    pcall(function()
+        kb_t = reframework:is_key_down(0x54) == true   -- T = light
+        kb_g = reframework:is_key_down(0x47) == true   -- G = heavy
+        kb_h = reframework:is_key_down(0x48) == true   -- H = howl
+    end)
+    local down = {
+        light = kb_t or (S.wyrm_pad.x ~= 0 and (btn & S.wyrm_pad.x) ~= 0),
+        heavy = kb_g or (S.wyrm_pad.y ~= 0 and (btn & S.wyrm_pad.y) ~= 0),
+        voice = kb_h or (S.wyrm_pad.lt ~= 0 and (btn & S.wyrm_pad.lt) ~= 0),
+    }
+    local prev = S.wyrm_btn_prev or {}
+    S.wyrm_btn_prev = down
+    if S.wyrm_atk_until then return end   -- one move at a time
+    local moves = (costume.wyrm_kind == "wolf") and {
+        light = { 50, 20, 1.2 },
+        heavy = { 50, 401, 2.4 },
+        voice = { 0, 4610, 2.6 },
+    } or {
+        light = { 50, 50, 1.2 },
+        heavy = { 18, 410, 2.2 },
+        voice = { 0, 4610, 2.6 },
+    }
+    for _, slot in ipairs({ "heavy", "light", "voice" }) do
+        if down[slot] and not prev[slot] then
+            local m = moves[slot]
+            costume.force_hold = true
+            S.wyrm_atk_hold = true
+            S.wyrm_atk_until = now + m[3]
+            costume.cmd_bank, costume.cmd_clip = m[1], m[2]
+            costume.last_gait = nil
+            pcall(function()
+                local motion = costume.horse_character:call("get_Motion")
+                local layer = motion and motion:call("getLayer", 0)
+                if layer then
+                    layer:call(
+                        "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                        m[1], m[2], 0.0, 0.25, 1, 1)
+                end
+            end)
+            S.need_rootmotion_kill = true
+            -- 08-13 RIDDEN CAT VOICE: the think-stop silences the cat's native vocal
+            -- triggers, so speak through the Wild Cats audio graph directly
+            pcall(function()
+                local capi = rawget(_G, "__iris_wild_cats_api")
+                if capi and capi.is_cat and capi.play
+                    and capi.is_cat(costume.horse_go) then
+                    capi.play(slot == "voice" and "growl" or "attack",
+                        costume.horse_go)
+                end
+            end)
+            break
+        end
+    end
+end
+-- ⭐ AUTO-ARM (08-13, "still can't ride it" - the panel button was a ritual nobody
+-- should need): whenever the LIVE companion is a wyrm-grown wolf/cat within 8m and no
+-- costume is armed, the saddle readies itself quietly. E/RT then just works.
+function iris_wyrm_auto_arm()
+    if os.clock() < (S.wyrm_arm_at or 0) then return end
+    S.wyrm_arm_at = os.clock() + 1.0
+    -- ⭐ 08-13 (Aurora: "still doing the growl... it wasn't happening before" - and
+    -- she is right about WHY): the costume's think-stop freezes the wolf in whatever
+    -- clip his AI was playing, and a companion wolf's follow posture is the aggro
+    -- stalk with the growl looping in the clip. The 8m arm meant he was frozen
+    -- basically always. Now: arm only at TOUCH range (2.4m - the mount press gate is
+    -- 4.5m, so E/RT still just works), and AUTO-RELEASE when you walk away without
+    -- riding - his own AI returns, he stands/follows/breathes naturally.
+    local b = rawget(_G, "IrisGriffinBridge")
+    local ch = nil
+    pcall(function() ch = b and b.griffin and b.griffin() end)
+    if S.costume then
+        -- release the parked (unridden) wyrm costume once you leave its side
+        if S.costume.wyrm_kind and not S.ride_pose_on then
+            local go1 = S.costume.horse_go
+            if not valid(go1) then iris_wyrm_mount_stop() return end
+            local pp1 = universal_pos(player_game_object())
+            local wp1 = universal_pos(go1)
+            if pp1 and wp1 and distance(pp1, wp1) > 5.0 then
+                iris_wyrm_mount_stop()
+            end
+        end
+        return
+    end
+    if not ch then return end
+    local go = nil
+    pcall(function() go = ch:call("get_GameObject") end)
+    if not valid(go) then return end
+    local id = ""
+    pcall(function() id = tostring(ch:call("get_CharaIDString")) end)
+    if not (id:find("^ch260") or id:find("^ch223")) then return end
+    local pp = universal_pos(player_game_object())
+    local wp = universal_pos(go)
+    if not (pp and wp) or distance(pp, wp) > 2.4 then return end
+    iris_wyrm_mount_start(true)
+end
+-- ⭐⭐ 08-13 DRIFT CANCEL (Aurora: "moving forward it also goes sideways"): the wolf's
+-- native loops carry root motion with LATERAL/banked components the horse's authored
+-- clips never had (root-motion kill is default-off - root travel IS the mover). Keep
+-- the forward travel, erase the sideways remainder: per frame, project the body's
+-- actual movement onto its forward axis and write back the lateral part.
+-- LateUpdateBehavior (the phase law: positions never in UpdateBehavior/PrepareRendering);
+-- registered after costume_tick so the cancel runs post-pin.
+function iris_wyrm_drift_cancel()
+    local costume = S.costume
+    if not (costume and costume.wyrm_kind and S.ride_pose_on)
+        or C.wyrm_drift_cancel == false then
+        S.wyrm_drift = nil
+        return
+    end
+    pcall(function()
+        local tf = costume.horse_go:call("get_Transform")
+        local p = tf:call("get_Position")
+        local nowc = os.clock()
+        local prev = S.wyrm_drift
+        S.wyrm_drift = { x = p.x, y = p.y, z = p.z, t = nowc }
+        if not prev then return end
+        local dx, dz = p.x - prev.x, p.z - prev.z
+        local d2 = dx * dx + dz * dz
+        if d2 > 25.0 then return end   -- a teleport: not ours
+        local jmp = costume.jump
+        if jmp then
+            -- LEAP ("goes way too far, no height"): the jump clip carries big
+            -- FORWARD root motion on top of the arc integrator's hspeed. Cancel
+            -- lateral, clamp this frame's forward travel to the arc's own speed:
+            -- the clip keeps the look, the integrator keeps the map.
+            local az = tf:call("get_AxisZ")
+            local fx, fz = az.x, az.z
+            local fl = math.sqrt(fx * fx + fz * fz)
+            if fl < 0.001 then return end
+            fx, fz = fx / fl, fz / fl
+            local fwd = dx * fx + dz * fz
+            local lx, lz = dx - fx * fwd, dz - fz * fwd
+            local back = 0.0
+            local dtc = math.min(0.15,
+                math.max(0.0, nowc - (tonumber(prev.t) or nowc)))
+            local maxf = ((tonumber(jmp.hspeed) or 0.0) + 0.3) * dtc
+            if fwd > maxf then back = fwd - maxf end
+            if (lx * lx + lz * lz) < 1e-6 and back <= 0.0 then return end
+            local nx = p.x - lx - fx * back
+            local nz = p.z - lz - fz * back
+            tf:call("set_Position", Vector3f.new(nx, p.y, nz))
+            S.wyrm_drift = { x = nx, y = p.y, z = nz, t = nowc }
+            return
+        end
+        -- ⛔ 08-13 v4: ground-frame cancellation MOVED INTO THE DRIVE TICK itself
+        -- (see the drive block). This LateUpdate callback raced the drive across
+        -- phases and ate the real commanded step as "contamination" - Aurora:
+        -- "movement is kinda non-existent". Jump frames only from here on (the
+        -- leap clamp above is field-approved and phase-safe: the integrator owns
+        -- jump position in this same phase).
+    end)
+end
+re.on_application_entry("UpdateBehavior", function()
+    -- ⭐ 08-13 THE MOUNTED TRUTH: while seated on ANY rodeo mount (horse, unicorn,
+    -- wolf, cat...) ground-life interactions must stand down - taming prompts,
+    -- sowing, cookpots, the stable UI (opening it mid-ride teleported Aurora under
+    -- the ground and killed the cat). Consumers read rawget(_G, "IrisRiddenNow").
+    _G.IrisRiddenNow = (S.ride_pose_on == true) and true or nil
+    pcall(iris_wyrm_attack_tick)
+    pcall(iris_wyrm_auto_arm)
+end)
+re.on_application_entry("LateUpdateBehavior", function()
+    pcall(iris_wyrm_drift_cancel)
+end)
 
 -- kill ROOT MOTION on the shell (07-23 "the horse kind of shakes now"):
 -- the gait clips shove the shell's root forward every frame and the pin
@@ -2629,6 +2949,13 @@ local function costume_tick()
                         local api = rawget(_G, "__iris_wild_horses_api")
                         jpk = api and api.jump_pack and api.jump_pack()
                     end)
+                    -- ⭐ 08-13 WYRM MOUNT (Aurora: "the jump has no animation"):
+                    -- the horse pack means nothing to a wolf body - the wyrm
+                    -- costume brings its own atlas-verified leap
+                    -- (jump_front 0:423, landing_front 0:401)
+                    if costume.wyrm_kind then
+                        jpk = { bank = 0, jump = 423, land = 401 }
+                    end
                     -- 08-06 round 2 (Aurora: "must clear these fences easily"
                     -- + the log showed gallop jumps launching at speed 4.8):
                     -- snappier arc (1.2s), a REAL minimum lunge regardless of
@@ -2864,14 +3191,47 @@ local function costume_tick()
                         end)
                     end
                     if face_d and not ledge_top then
-                        local keep = math.max(0.0, face_d - 1.2)
-                        if keep < travel then
-                            ex = jp.x + jf.x * keep
-                            ez = jp.z + jf.z * keep
-                            travel_clamped = true
+                        -- ⭐ 08-12 (Aurora: "so I can actually jump over this
+                        -- fence"): a LOW obstacle is not a wall. Re-cast the
+                        -- same ray at APEX height -- if the air is clear up
+                        -- there, the arc carries the horse over the top
+                        -- (fences, rails, low hedges). Only a face that is
+                        -- ALSO solid at apex height still shortens the leap.
+                        local clear_above = false
+                        pcall(function()
+                            local ray = rawget(_G, "route3_ray")
+                            local ensure = rawget(_G, "route3_ensure_ray")
+                            local mkv = rodeo_vec3
+                            if not (ray and ensure and ensure() and mkv) then
+                                return
+                            end
+                            local apex = jp.y - ody
+                                + (tonumber(C.jump_height) or 1.65) + 0.25
+                            ray.filter:set_Group(0)
+                            ray.filter:set_Layer(2)
+                            ray.filter:set_MaskBits(0)
+                            ray.result:clear()
+                            ray.query:call("setRay(via.vec3, via.vec3)",
+                                mkv(jp.x - odx, apex, jp.z - odz),
+                                mkv(ex - odx, apex, ez - odz))
+                            ray.method:call(ray.system, ray.query, ray.result)
+                            clear_above =
+                                (ray.result:get_NumContactPoints() or 0) <= 0
+                        end)
+                        if clear_above then
                             log(string.format(
-                                "ride jump: wall at %.1fm, travel %.1f -> %.1fm",
-                                face_d, travel, keep))
+                                "ride jump: low obstacle at %.1fm, apex clear"
+                                .. " -- flying over", face_d))
+                        else
+                            local keep = math.max(0.0, face_d - 1.2)
+                            if keep < travel then
+                                ex = jp.x + jf.x * keep
+                                ez = jp.z + jf.z * keep
+                                travel_clamped = true
+                                log(string.format(
+                                    "ride jump: wall at %.1fm, travel %.1f -> %.1fm",
+                                    face_d, travel, keep))
+                            end
                         end
                     elseif ledge_top then
                         -- ⭐ r65 (Aurora: "it'll launch you really far onto the
@@ -2947,6 +3307,30 @@ local function costume_tick()
                         seq = "start",
                         gather = tonumber(C.jump_gather_secs) or 0.18,
                     }
+                    -- ⭐ 08-13 WYRM LEAP SHAPE (Aurora: "doesn't go high enough,
+                    -- moves a bit too far forward"): the arc's numbers were the
+                    -- horse's fence-clearing tune. Wyrm keys: height up, travel
+                    -- reined in; ballistic v0 re-derived so physics agree.
+                    if costume.wyrm_kind then
+                        local j = costume.jump
+                        j.height = tonumber(C.wyrm_jump_height) or 2.2
+                        local jt = tonumber(C.wyrm_jump_travel) or 0.7
+                        j.x1 = j.x0 + (j.x1 - j.x0) * jt
+                        j.z1 = j.z0 + (j.z1 - j.z0) * jt
+                        j.hspeed = (tonumber(j.hspeed) or 0) * jt
+                        if j.maxd and j.maxd < 1e8 then j.maxd = j.maxd * jt end
+                        if tonumber(j.g) and j.g > 0 then
+                            j.v0 = math.sqrt(2.0 * j.g * j.height)
+                        end
+                        -- 08-13 ridden cat voice: a short call on take-off
+                        pcall(function()
+                            local capi = rawget(_G, "__iris_wild_cats_api")
+                            if capi and capi.is_cat and capi.play
+                                and capi.is_cat(costume.horse_go) then
+                                capi.play("alert", costume.horse_go)
+                            end
+                        end)
+                    end
                     if jpk then
                         -- ⭐⭐⭐ 08-09 r71 -- THREE-PHASE JUMP, the griffin's shape.
                         -- (Aurora: "the clip isn't good though, it looks
@@ -3039,7 +3423,11 @@ local function costume_tick()
                         costume.nose_prev = nil
                     end
                 end)
+                -- ⭐ 08-13: on a WYRM mount X/Y belong to the beast's own moves
+                -- (iris_wyrm_attack_tick) - the horse kick played horse clips
+                -- on a wolf ("the Y is doing the horse kick still")
                 local kick_down = can_drive and pad_kick
+                    and not costume.wyrm_kind
                 if kick_down and not S.kick_latch and not costume.kick
                     and not costume.jump then
                     S.kick_latch = true
@@ -3168,6 +3556,7 @@ local function costume_tick()
                 -- strike (circle + party heal) is delegated to the wild-horses
                 -- API. Mirrors the kick's shape: latch, planted reins, phases.
                 local bless_down = can_drive and pad_bless
+                    and not costume.wyrm_kind
                 if bless_down and not S.bless_latch and not costume.kick
                     and not costume.jump and not costume.bless then
                     S.bless_latch = true
@@ -3724,6 +4113,40 @@ local function costume_tick()
                     rot.x, rot.y, rot.z, rot.w = qx, qy, qz, qw
                     ox_tf:call("set_Rotation", rot)
                 end
+                -- ⭐ 08-13 WYRM VEER (Aurora: "moves forward but also goes sideways"):
+                -- the wolf/cat loop clips carry root YAW as well as lateral root motion.
+                -- The LateUpdate drift cancel removes the sideways slide, but yaw rotates
+                -- the forward axis itself - a slow curve reads as "forward" every frame
+                -- and survives the cancel. Steering only writes rotation while turning,
+                -- so while driving STRAIGHT nothing owned the heading. Wyrm only: latch
+                -- the commanded heading whenever turning or stopped, re-assert it every
+                -- straight moving frame. Horse clips are yaw-clean and stay untouched.
+                if costume.wyrm_kind then
+                    -- ⭐ 08-13 v5 FULL YAW OWNERSHIP (Aurora: "rotate isn't going far
+                    -- enough" + forward slows in turns): the latch couldn't tell
+                    -- steering from clip root yaw, so root yaw BIASED every turn.
+                    -- Now the drive owns heading as a NUMBER: steering moves the
+                    -- number, the body is set from it every tick - the same exact
+                    -- ownership the translation got in v4. Root yaw is orphaned.
+                    local hy = costume.wyrm_yaw
+                    if not hy then
+                        local az5 = ox_tf:call("get_AxisZ")
+                        hy = math.atan(az5.x, az5.z)
+                    end
+                    if turn ~= 0 then
+                        local dash5 = math.max(0.1, tonumber(C.speed_dash) or 9.5)
+                        local sfrac5 = math.max(0.0, math.min(1.0,
+                            (tonumber(costume.cur_speed) or 0.0) / dash5))
+                        local rate5 = (tonumber(C.wyrm_turn_rate) or 110.0)
+                            * (1.0 - sfrac5 * (tonumber(C.turn_speed_falloff) or 0.40))
+                        hy = hy + math.rad(-turn * rate5 * dt)
+                    end
+                    costume.wyrm_yaw = hy
+                    local rot5 = ox_tf:call("get_Rotation")
+                    rot5.x, rot5.y, rot5.z, rot5.w =
+                        0.0, math.sin(hy * 0.5), 0.0, math.cos(hy * 0.5)
+                    ox_tf:call("set_Rotation", rot5)
+                end
                 -- commanded gait + target speed from input
                 local target_speed, gait = 0.0, 0
                 if up or pad_move or pad_gallop then
@@ -3735,6 +4158,20 @@ local function costume_tick()
                         target_speed, gait = (C.speed_walk or 1.6), 100
                     elseif pad_move and not up and stick_y < 0.85 then
                         target_speed, gait = (C.speed_walk or 1.6), 100
+                    end
+                end
+                -- ⭐ 08-13 WYRM PACE (Aurora: "forward movement is kinda
+                -- non-existent"): with root motion now fully cancelled the body
+                -- moves at the drive's speed ALONE - and these were horse numbers.
+                -- A wolf's sprint stride wants more ground per second or it runs
+                -- on the spot. Sliders in the WYRM SEAT + PACE panel block.
+                if costume.wyrm_kind and target_speed > 0.0 then
+                    if gait == 300 then
+                        target_speed = tonumber(C.wyrm_speed_dash) or 11.0
+                    elseif gait == 100 then
+                        target_speed = tonumber(C.wyrm_speed_walk) or 2.2
+                    else
+                        target_speed = tonumber(C.wyrm_speed_run) or 6.0
                     end
                 end
                 -- EASED velocity (07-23 "teleports slightly on a nudge"):
@@ -3788,9 +4225,31 @@ local function costume_tick()
                 if cur > 0.02 and not costume.jump then
                     local fwd = ox_tf:call("get_AxisZ")
                     local pos = ox_tf:call("get_UniversalPosition")
+                    -- ⭐ 08-13 v4 IN-TICK ROOT-MOTION CANCEL (v3's LateUpdate
+                    -- canceller raced the drive across phases and ate the real
+                    -- step - "movement kinda non-existent"). Same tick = no race:
+                    -- whatever moved the body since the LAST drive tick beyond the
+                    -- step we commanded is clip root motion - remove it, then walk.
+                    if costume.wyrm_kind and C.wyrm_drift_cancel ~= false then
+                        local pv, ds = costume.wyrm_prev_upos, costume.drive_step
+                        if pv then
+                            local rx = pos.x - pv.x - (ds and tonumber(ds.x) or 0.0)
+                            local rz = pos.z - pv.z - (ds and tonumber(ds.z) or 0.0)
+                            local r2 = rx * rx + rz * rz
+                            if r2 > 1e-10 and r2 < 25.0 then
+                                pos.x, pos.z = pos.x - rx, pos.z - rz
+                            end
+                        end
+                    end
                     pos.x = pos.x + fwd.x * cur * dt
                     pos.z = pos.z + fwd.z * cur * dt
                     ox_tf:call("set_UniversalPosition", pos)
+                    costume.drive_step = { x = fwd.x * cur * dt,
+                                           z = fwd.z * cur * dt }
+                    costume.wyrm_prev_upos = { x = pos.x, z = pos.z }
+                else
+                    costume.drive_step = nil
+                    costume.wyrm_prev_upos = nil
                 end
                 -- r57 GROUND & GRAVITY (subsumes the r34 bridge fix;
                 -- Aurora: "gallop off an edge and it kind of floats
@@ -4638,16 +5097,19 @@ local function costume_tick()
                     -- semantic gait -> Lyra's REAL horse gaits, baked in
                     -- (Aurora 07-23): bank 901 walk=1 trot=2 gallop=3.
                     -- Sliders still override for lab work.
+                    -- ⭐ 08-13 WYRM MOUNT: a costume with its OWN gait table
+                    -- (wolf/cat native locomotion) outranks the horse bank
                     local bank, clip = 0, target
+                    local g9 = costume.gaits
                     if target == 100 then
-                        bank = S.gait_walk_bank or 901
-                        clip = S.gait_walk_id or 1
+                        bank = (g9 and g9.walk and g9.walk[1]) or S.gait_walk_bank or 901
+                        clip = (g9 and g9.walk and g9.walk[2]) or S.gait_walk_id or 1
                     elseif target == 200 then
-                        bank = S.gait_run_bank or 901
-                        clip = S.gait_run_id or 2
+                        bank = (g9 and g9.run and g9.run[1]) or S.gait_run_bank or 901
+                        clip = (g9 and g9.run and g9.run[2]) or S.gait_run_id or 2
                     elseif target == 300 then
-                        bank = S.gait_dash_bank or 901
-                        clip = S.gait_dash_id or 3
+                        bank = (g9 and g9.dash and g9.dash[1]) or S.gait_dash_bank or 901
+                        clip = (g9 and g9.dash and g9.dash[2]) or S.gait_dash_id or 3
                     end
                     costume.cmd_bank, costume.cmd_clip = bank, clip
                     pcall(function()
@@ -4661,6 +5123,21 @@ local function costume_tick()
                     end)
                     -- changeMotion may reset layer root-motion state
                     S.need_rootmotion_kill = true
+                    -- ⭐ 08-13 WYRM CADENCE (Aurora: "focus on movement"): scale the
+                    -- clip's play speed so paws match the ground - per-gait, saved,
+                    -- 1.0 = authored pace. Wyrm-gated: the horse's own speed lever
+                    -- stays untouched.
+                    if costume.wyrm_kind then
+                        pcall(function()
+                            local f = 1.0
+                            if target == 100 then f = tonumber(C.wyrm_pace_walk) or 1.0
+                            elseif target == 200 then f = tonumber(C.wyrm_pace_run) or 1.0
+                            elseif target == 300 then f = tonumber(C.wyrm_pace_dash) or 1.0 end
+                            local motion = costume.horse_character:call("get_Motion")
+                            local layer = motion and motion:call("getLayer", 0)
+                            if layer then layer:call("set_Speed", f) end
+                        end)
+                    end
                 end
                 costume.last_pos = {x = ox_pos.x, y = ox_pos.y, z = ox_pos.z}
                 costume.last_t = now
@@ -6362,6 +6839,12 @@ local function seat_mount()
     if not (valid(player_go) and S.costume
         and valid(S.costume.horse_go)) then return end
     if S.ride_pose_on then return end
+    -- 08-13 crash guard window 2: no scale writes on the body during the vault
+    -- (the crash lived at exactly this moment - endClimb trio + seat + scale write)
+    pcall(function()
+        _G.IrisScaleHoldAddr = { addr = object_address(S.costume.horse_go),
+                                 untilt = os.clock() + 4.0 }
+    end)
     -- ⛔⛔ 08-10 r97 -- NO MOUNTING A DOWNED HORSE. (Aurora: "you can mount the
     -- downed horse" -- still, after r67.) My r67 gate went into the GRIFFIN's
     -- griffin_rt_mount_tick, but horses never take that path: they have their
@@ -8283,6 +8766,19 @@ local function tame_tick()
     local now = os.clock()
     local n_down = false
     pcall(function() n_down = iris_kb(0x4E) end)
+    -- 08-12 (Aurora: "B to tame isn't working on horses/unicorns"): pad B/Circle joins N
+    -- (mask 0x40080, the taming standard) -- gated on a live rite or an AIMED claim
+    -- (focused_wild_horse publishes it key-free), so plain dashing never arms a horse
+    if not n_down and (S.tame ~= nil or rawget(_G, "__iris_horse_taming_claim_addr") ~= nil) then
+        pcall(function()
+            local gp9 = sdk.get_native_singleton("via.hid.GamePad")
+            local td9 = sdk.find_type_definition("via.hid.GamePad")
+            local dev9 = gp9 and td9 and sdk.call_native_func(gp9, td9, "get_MergedDevice")
+            if not dev9 then dev9 = gp9 and td9 and sdk.call_native_func(gp9, td9, "getMergedDevice(System.UInt32)", 0) end
+            local mask9 = dev9 and tonumber(dev9:call("get_Button")) or 0
+            n_down = (math.floor(mask9) & 0x40080) ~= 0
+        end)
+    end
     local tame = S.tame
     -- RITUAL MUSIC (08-06, Aurora): the horse rite sings like every other
     -- tame -- publish the shared mode IrisRitualMusic watches. Claimed only
@@ -8840,6 +9336,11 @@ re.on_frame(function()
     S.focused_wild_horse = focus
     rawset(_G, "__iris_horse_taming_claim_addr",
         focus and object_address(focus.game_object) or nil)
+    -- 08-13 (Aurora: "make sure the B to tame notification appears over the Horse/Unicorn"):
+    -- publish the GameObject too, not just its address. IrisTaming owns every tame marker and the
+    -- native B prompt, and it cannot draw over an address -- it needs the object. Additive; the
+    -- addr key keeps its existing readers.
+    rawset(_G, "__iris_horse_taming_claim_go", focus and focus.game_object or nil)
     if S.costume_stop_requested then
         S.costume_stop_requested = nil
         if S.ride_pose_on then seat_dismount() end
@@ -9975,6 +10476,70 @@ re.on_draw_ui(function()
             "gallop speed m/s##spd_d", C.speed_dash or 9.5, 3.0, 20.0)
         if s3 then C.speed_dash = sv3; save_config() end
     else
+        if imgui.button("WYRM MOUNT: ready the wyrm-grown companion (wolf / great cat)") then
+            iris_wyrm_mount_start()
+        end
+        imgui.same_line()
+        if imgui.button("release##wyrm_rel") then iris_wyrm_mount_stop() end
+        imgui.text("  ridden moves: X/T bite   Y/G heavy   LT/H howl (anims v1; damage = a later arc)")
+        -- ⭐ 08-13 (Aurora: "I don't know where these sliders are"): ALWAYS visible,
+        -- own section, and rider position split per species - wolf's tune is the
+        -- cat's starting point but they never move together again.
+        if imgui.tree_node("WOLF / CAT SLIDERS (wyrm mount)") then
+            local wdc, wdv = imgui.checkbox("drift cancel (kill the sideways slide)##wyrm_dc",
+                C.wyrm_drift_cancel ~= false)
+            if wdc then C.wyrm_drift_cancel = wdv; save_config() end
+            imgui.text("MOVEMENT + LEAP (shared - same chassis, same legs):")
+            local wdefs = {
+                { "wyrm_speed_walk", "walk speed (m/s)", 0.8, 4.0 },
+                { "wyrm_speed_run", "run speed (m/s)", 2.0, 9.0 },
+                { "wyrm_speed_dash", "sprint speed (m/s)", 5.0, 16.0 },
+                { "wyrm_turn_rate", "turn rate (deg/s)", 40.0, 220.0 },
+                { "wyrm_jump_height", "leap height (m)", 1.0, 4.0 },
+                { "wyrm_jump_travel", "leap distance (1.0 = horse tune)", 0.3, 1.5 },
+                { "wyrm_pace_walk", "walk cadence (paws vs ground)", 0.5, 2.0 },
+                { "wyrm_pace_run", "run cadence", 0.5, 2.0 },
+                { "wyrm_pace_dash", "sprint cadence", 0.5, 2.0 },
+            }
+            for _, wd in ipairs(wdefs) do
+                local wdef0 = 0.0
+                if wd[1]:find("pace") then wdef0 = 1.0
+                elseif wd[1] == "wyrm_jump_height" then wdef0 = 2.2
+                elseif wd[1] == "wyrm_jump_travel" then wdef0 = 0.7
+                elseif wd[1] == "wyrm_speed_walk" then wdef0 = 2.2
+                elseif wd[1] == "wyrm_speed_run" then wdef0 = 6.0
+                elseif wd[1] == "wyrm_speed_dash" then wdef0 = 11.0
+                elseif wd[1] == "wyrm_turn_rate" then wdef0 = 110.0 end
+                local wcur = tonumber(C[wd[1]]) or wdef0
+                local wch, wv2 = imgui.slider_float(wd[2] .. "##" .. wd[1], wcur, wd[3], wd[4])
+                if wch then C[wd[1]] = wv2; save_config() end
+            end
+            local sdefs = {
+                { "seat_above_joint", "seat height", -0.5, 1.5 },
+                { "seat_fwd", "seat forward/back", -1.5, 1.5 },
+                { "seat_side", "seat side", -0.8, 0.8 },
+                { "hand_grip_up", "hands height (DOWN = drag left)", -0.6, 0.6 },
+                { "hand_grip_fwd", "hands forward", -0.6, 0.9 },
+                { "hand_grip_width", "hands width", 0.0, 0.8 },
+            }
+            for _, wkind in ipairs({ "wolf", "cat" }) do
+                imgui.separator()
+                imgui.text(wkind == "wolf" and "WOLF rider position:"
+                    or "CAT (puma/panther) rider position:")
+                for _, sd in ipairs(sdefs) do
+                    local k9 = sd[1] .. "_wyrm_" .. wkind
+                    local cur9 = tonumber(C[k9])
+                    if cur9 == nil then cur9 = tonumber(C[sd[1] .. "_wyrm"]) end
+                    if cur9 == nil then
+                        cur9 = tonumber(SEAT_DEFAULTS[sd[1] .. "_wyrm"]) or 0.0
+                    end
+                    local ch9, v9 = imgui.slider_float(sd[2] .. "##" .. k9,
+                        cur9, sd[3], sd[4])
+                    if ch9 then C[k9] = v9; save_config() end
+                end
+            end
+            imgui.tree_pop()
+        end
         if imgui.button("OXLESS MOUNT: ready the nearest horse (no ghost)") then
             local player_pos = universal_pos(player_game_object())
             local best, best_d = nil, 50.0

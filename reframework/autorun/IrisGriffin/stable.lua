@@ -478,8 +478,37 @@ function griffin_tamed_tick()
                 S.route3_scale_target = nil
                 sgo = nil
             end
+            -- ⛔ 08-13: a perch stand-down lived here for one round and is REMOVED again. Aurora's
+            -- spec is that the SIZE GENE is the only thing that sizes a creature, on the ground and
+            -- on her shoulder alike -- so this easer must keep owning scale while a body is perched.
+            -- Standing it down handed the property to whoever wrote next, which is the opposite of
+            -- one-owner. IrisTaming no longer writes scale on the perch path at all, so there is
+            -- nothing here to yield to.
         end
-        if sgo then
+        -- ⛔ 08-13 Shadow-mount CTD (crash ladder step 1): the rodeo publishes
+        -- _G.IrisScaleHoldAddr while its costume owns a body (think-stop + seat +
+        -- mount transition). This easer's LocalScale write on that body at the exact
+        -- mount moment was the last mod action before the crash. Hold the WRITE but
+        -- KEEP the target armed (never retire - the ScaleMediator-stomper law);
+        -- writes resume the frame the rodeo releases the hold.
+        -- (v2 08-13: the hold is now a TIMED window {addr, untilt} - v1's whole-costume
+        -- hold let the ScaleMediator shrink armed wolves/cats back toward 1.0)
+        if sgo and rawget(_G, "IrisScaleHoldAddr") ~= nil then
+            pcall(function()
+                local h = rawget(_G, "IrisScaleHoldAddr")
+                if type(h) == "table" then
+                    if sgo:get_address() == h.addr
+                        and os.clock() < (tonumber(h.untilt) or 0.0) then
+                        sgo = false
+                    end
+                elseif sgo:get_address() == h then
+                    sgo = false
+                end
+            end)
+        end
+        if sgo == false then
+            -- held by the rodeo costume: write nothing this frame, target stays live
+        elseif sgo then
             pcall(function()
                 -- ⭐ 08-11 SIZE GENE: stored targets stay BASE; the IV multiplies only here,
                 -- at application (0.86 small .. 1.15 large, gene 15 = species-true)
@@ -495,6 +524,12 @@ function griffin_tamed_tick()
                 local snap_due = (tonumber(S.route3_scale_snap_at) or 0.0) > 0.0
                     and now >= (tonumber(S.route3_scale_snap_at) or 0.0)
                 local nx = snap_due and want or (cx + (want - cx) * 0.02)
+                -- 08-13 (Aurora: "just appear at their scale rather than grow/shrink
+                -- to it"): a body still at exactly 1.0 is FRESH from spawn - snap it
+                -- straight to size. The ease remains for live growth (wyrmfeeding).
+                if math.abs(cx - 1.0) < 0.001 and math.abs(want - 1.0) > 0.05 then
+                    nx = want
+                end
                 if snap_due or math.abs(nx - want) < 0.005 then
                     nx = want
                     -- ⛔ 08-12 (tiny Quoth, the "was 1.00" receipts): NEVER retire the

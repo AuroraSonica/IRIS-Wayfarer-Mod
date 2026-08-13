@@ -215,7 +215,10 @@ local M = {
     -- ch299003_B = the BULL (excluded by the token), ch299221 = Chicken, ch299220 = Rooster
     -- (excluded - roosters don't lay). The SCAN probe verifies the live GO names if these miss.
     milk_ids = "ch299003_A", egg_ids = "ch299221",
-    animal_range = 4.0,
+    -- 08-13 4.0 -> 7.0 (Aurora: "can't get milk from the cow"): the scan measures to
+    -- the GO PIVOT, and a size-gened cow's pivot sits metres from the flank you stand
+    -- at - tiny Clucky passed, the mountain failed. Call sites also floor at 7.
+    animal_range = 7.0,
     -- ── monster guard: no aggressive spawns near any plot ──
     monster_guard = true,
     monster_guard_r = 120,   -- metres around every plot (Aurora: "100m+")
@@ -2188,14 +2191,24 @@ end
 -- every path - normal finish, clip failure, or the chore not starting at all - because by the
 -- time we're called the cost is already paid (ingredients deleted / day-key marked); a broken
 -- emote must never eat the goods.
-local function _chore_start(seq, label, on_done)
+-- on_first (optional, 08-13): fires the instant the FIRST clip starts playing, i.e. after the
+-- sheathe beat, not at the button press. Added for the weapon plaque (Aurora: "can we have the
+-- item pickup happen at the same time as the animation?"). ⛔ Do NOT do this by calling the
+-- work before _chore_start -- the sheathe beat means the clip is still ~1.3s away at that
+-- point, so the item would visibly move before she has even reached for it.
+local function _chore_start(seq, label, on_done, on_first)
     if wat.stage or chore.stage then
         _log("chore '" .. tostring(label) .. "': another emote is running - skipped")
+        if on_first then pcall(on_first) end
         if on_done then pcall(on_done) end
         return
     end
-    if not seq or #seq == 0 then if on_done then pcall(on_done) end return end
-    chore.done = on_done
+    if not seq or #seq == 0 then
+        if on_first then pcall(on_first) end
+        if on_done then pcall(on_done) end
+        return
+    end
+    chore.done, chore.first = on_done, on_first
     -- the same sheathe beat as watering: our dialog pauses the world, and a clip painted on the
     -- unpause frame is eaten by the FSM resuming (the deed-sign law)
     pcall(function()
@@ -2221,14 +2234,27 @@ local function _chore_pump()
             _pfsm(true)
             for _, g in ipairs(chore.wp or {}) do pcall(function() g:call("set_Enabled", true) end) end
             chore.wp, chore.stage, chore.seq = nil, nil, nil
+            local f0 = chore.first; chore.first = nil
+            if f0 then pcall(f0) end
             local d = chore.done; chore.done = nil
             if d then pcall(d) end   -- grant anyway: the cost is already paid
             return
         end
+        -- ⭐ 08-13 the first clip is now actually playing -- this is "at the same time as the
+        --   animation", as opposed to at the button press (a sheathe beat earlier).
+        local f1 = chore.first; chore.first = nil
+        if f1 then pcall(f1) end
         chore.stage, chore.at = "play", os.clock()
     elseif chore.stage == "play" then
         local c = chore.seq[chore.i]
         if dt >= (c[3] or 120) / 60.0 then
+            -- ⭐ 08-13 OPTIONAL PER-STEP CALLBACK, seq entry = {bank, clip, frames, on_step}.
+            --   Fires as THIS clip ends, i.e. exactly on the seam between two clips. Added for
+            --   the weapon plaque (Aurora: "hand out 6200 > item place > hand return 6202") --
+            --   the sword must appear on the wall AT the seam, not after the hand comes back.
+            --   The alternative, two separate emote calls, re-runs the 1.3s sheathe beat and
+            --   re-freezes the FSM between them = a visible hitch mid-gesture.
+            if type(c[4]) == "function" then pcall(c[4]) end
             if chore.i < #chore.seq then
                 chore.i = chore.i + 1
                 local nc = chore.seq[chore.i]
@@ -2961,7 +2987,7 @@ local function _ani_eligible(a)
 end
 local function _try_animal_produce()
     if M.animal_produce == false then return false end
-    for _, a in ipairs(_scan_animals(M.animal_range or 4.0)) do
+    for _, a in ipairs(_scan_animals(math.max(tonumber(M.animal_range) or 7.0, 7.0))) do
         local kind = (_match_tokens(a.name, M.milk_ids) and "milk")
                   or (_match_tokens(a.name, M.egg_ids) and "egg") or nil
         if kind then
@@ -4581,7 +4607,7 @@ re.on_frame(function()
             anivis.at = os.clock()
             anivis.near = nil
             if M.animal_produce ~= false then
-                for _, a in ipairs(_scan_animals(M.animal_range or 4.0)) do
+                for _, a in ipairs(_scan_animals(math.max(tonumber(M.animal_range) or 7.0, 7.0))) do
                     local kind = (_match_tokens(a.name, M.milk_ids) and "Milk")
                               or (_match_tokens(a.name, M.egg_ids) and "Collect egg") or nil
                     -- 08-11: dead or wild animals get no label (and thus no jump gate /
@@ -5984,6 +6010,12 @@ end)
 
 -- ⚠ `beds` hands back the LIVE table, so callers hold real bed references (IrisPawnIdle relies
 --   on that to water the exact bed it walked to). `water` is the pawn-side entry point.
+-- ⭐ 08-13 `emote` (Aurora: "a small grab animation for picking up/putting down a weapon on
+--   your wall"). IrisWeaponMount drives the SAME sequencer the chores use rather than growing
+--   its own FSM freeze - one implementation of the hold/restore means one place a softlock can
+--   ever be fixed. Contract: emote(seq, label, on_done) where seq = { {bank, clip, frames}, ... }
+--   and on_done fires EXACTLY ONCE on every path (finish, clip failure, or refusal because
+--   another emote is running) - so a caller may safely defer real work to it.
 _G.IrisFarming = { beds = function() return beds end, save = _save, till = _hoe_strike,
-                   aim = _aim_latch, water = pawn_water }
+                   aim = _aim_latch, water = pawn_water, emote = _chore_start }
 _log(string.format("IrisFarming loaded: %d bed(s), %d crop types, day %s", #beds, #M.crops, tostring(_today())))

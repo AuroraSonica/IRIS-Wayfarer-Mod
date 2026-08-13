@@ -655,9 +655,21 @@ local wild = { hp = {}, cache = nil, felled = {} }
 local WILD_FELLED_TTL = 600.0
 local function _wild_is_felled(key)
     local t = wild.felled[key]
-    if not t then return false end
-    if os.clock() - t > WILD_FELLED_TTL then wild.felled[key] = nil; return false end
-    return true
+    if t then
+        if os.clock() - t > WILD_FELLED_TTL then wild.felled[key] = nil
+        else return true end
+    end
+    -- ⭐ 08-13 HOMESTEAD PERMANENCE: a spot IrisTreeClear holds down forever (chopped near
+    -- an owned plot, any session) is never choppable again - no ghost timber off an
+    -- invisible trunk. Rock keys ("R..." prefix) fail the number match and pass through.
+    local perm = false
+    pcall(function()
+        local TC = rawget(_G, "IrisTreeClear")
+        if not (TC and TC.is_perm_felled) then return end
+        local xs, zs = tostring(key):match("^(%-?[%d%.]+)_(%-?[%d%.]+)$")
+        if xs then perm = TC.is_perm_felled(tonumber(xs), tonumber(zs)) == true end
+    end)
+    return perm
 end
 M.wild_trees = true
 M.wild_hits = 3
@@ -843,6 +855,16 @@ local function _wild_tree_strike(pp, fwd, cone_cos)
         wild.hp[key] = nil
         wild.cache = nil
         wild.felled[key] = os.clock()   -- the ledger, not the API, decides "already felled"
+        -- ⭐ 08-13 HOMESTEAD PERMANENCE (Aurora): a fell near an owned plot records into
+        -- IrisTreeClear's persistent ledger (it re-hides the cluster FOREVER, across
+        -- sessions) - and this session's felled stamp becomes effectively immortal too
+        pcall(function()
+            local TC = rawget(_G, "IrisTreeClear")
+            if TC and TC.record_foliage_fell and TC.record_foliage_fell(pos.x, pos.y, pos.z) then
+                wild.felled[key] = os.clock() + 1e9
+                M.last = "wild tree FELLED - and near your homestead, it stays down for good"
+            end
+        end)
         -- hide the WHOLE cluster at the spot (co-located twin instances included), remember the
         -- indices, and keep re-asserting: setVisibility alone is flaky + streaming re-shows it (Aurora 07-24)
         local idxs = _hide_foliage_cluster(best.comp, pos.x, pos.z, M.wild_fell_radius or 1.0)
@@ -2118,6 +2140,26 @@ local X_TO_Y = {
     ["Job05_LongRangeAttack"] = "Job05_LongRangeHeavyAttack",
 }
 mine.block_skills = true
+-- ⛔⛔ ROTATION-PIN ROUTE IS CLOSED (built and reverted 2026-08-13, the same night).
+-- Aurora asked for the hoe to always till at the reticule: with homestead creatures about, the
+-- swing was landing on the nearest chicken instead. THE DIAGNOSIS STILL STANDS and is the reason
+-- this note exists — the swing is TWO requests, Job05_Prepare*RangeAttack then
+-- Job05_*RangeHeavyAttack, and DD2 turns the Arisen onto its acquired auto-target during the
+-- WINDUP. The farm aim latch further down fires on the RELEASE, so it faithfully freezes a facing
+-- the game has already swung onto the bird. The ring, _snap_spot and do_till are all innocent:
+-- one poisoned input, three correct consumers. Note this only started in 08-2026 — the "FALSE
+-- PREMISE" note below records that a farm plot has nothing to lock onto, which was true right up
+-- until livestock arrived. (Line refs rot; grep the phrase.)
+-- ⛔ WHAT DOES NOT WORK: pinning the facing by writing set_Rotation on the player's ROOT
+-- TRANSFORM every LateUpdateBehavior, the way `pin_pos` pins XZ. Aurora, minutes after it went in:
+-- "now the player just goes invisible after a swing and nothing actually happens - it's way
+-- worse." (Videos/2026-08-13 04-06-02.mkv.) The body vanished and the strike stopped landing.
+-- ⇒ THE ASYMMETRY IS THE LESSON: position and rotation are NOT interchangeable just because
+--   they sit on the same transform and the same phase. set_Position here is proven safe; set_
+--   Rotation here is not. Any retry must leave the player's root rotation alone — go at the
+--   target acquisition, or at the latch TIMING alone (latching on the windup costs no transform
+--   write at all), and never assume a proven write for one channel licenses it for another.
+
 pcall(function()
     local m = sdk.find_type_definition("app.ActionManager")
         :get_method("requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)")

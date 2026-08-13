@@ -290,8 +290,14 @@ local function _detach(owner)
         local names = {}
         for _, m in ipairs(td:get_methods()) do
             local l = tostring(m:get_name()):lower()
+            -- ⛔ THIS FILTER USED TO END AT "stop", AND THAT IS EXACTLY WHY THE RESTORE HALF
+            -- OF THE JACK LIFECYCLE WENT UNFOUND FOR MONTHS: `restartOwnerProcess` and
+            -- `enableOwnerFSM` contain none of those words, so the dump confidently reported
+            -- "exactly three release-ish methods" and everyone believed it.
+            -- ⭐ LAW: a FILTERED method dump is not an API inventory. Widen it, or dump it all.
             if l:find("reject") or l:find("cancel") or l:find("unjack") or l:find("release")
-               or l:find("detach") or l:find("exit") or l:find("stop") then
+               or l:find("detach") or l:find("exit") or l:find("stop") or l:find("restart")
+               or l:find("enable") or l:find("owner") or l:find("jack") then
                 names[#names + 1] = tostring(m:get_name())
             end
         end
@@ -305,17 +311,29 @@ local function _detach(owner)
     end)
     if not aj then return end
 
-    -- ⛔ `reject(owner)` REMOVED. Its parameter type was never verified — I passed a
-    -- GameObject on a guess. A native call with a mismatched argument type is a classic
-    -- hard-crash, and we had an unexplained CTD; removing an unproven guessed call is cheap
-    -- insurance. rejectSelf + stopOwnerProcess are both parameterless, both proven, and the
-    -- pair already restored her controls in the field. Do not re-add reject() without first
-    -- reading its real signature off the type definition.
-    local r1, r2
+    -- ⛔⛔ CORRECTED 2026-08-13 from il2cpp_dump.json (authoritative signatures).
+    -- The comment that used to live here was wrong on BOTH counts:
+    --   • `stopOwnerProcess` is NOT parameterless — it is
+    --     stopOwnerProcess(System.Boolean isJackBaseLayer) — AND it is the ENTRY-side
+    --     teardown. Calling it on release re-stops the very thing we want restarted,
+    --     with whatever undefined bool happened to be in the register.
+    --   • `reject` is reject(via.GameObject RequestOwner, System.Boolean isRequestIdle)
+    --     — TWO args. The old caution was right; the guessed SHAPE was wrong.
+    -- app.AdjustJack has a SYMMETRIC lifecycle:
+    --   ENTRY  doJack -> disableOwnerFSM(bool) + stopOwnerProcess(bool)
+    --                  + clearMotionsWithoutBaseLayer() + clearActionManager()
+    --   EXIT   enableOwnerFSM()  +  restartOwnerProcess(bool isRequestIdle)
+    -- "Owner" = the JACKED BODY, not the gimmick (AdjustJack.OwnerFSM IS app.Human.Fsm).
+    -- Detaching WITHOUT the exit half is what left Aurora a GHOST: no collision, and no
+    -- weapon draw — sheathe/draw is an ACTION, so a cleared-and-never-restarted
+    -- ActionManager silently eats the request.
+    -- This exact sequence already ships at GriffinRideProbe - Iris.lua:25129-25131.
+    local r1, r2, r3
     pcall(function() r1 = aj:call("rejectSelf") end)
-    pcall(function() r2 = aj:call("stopOwnerProcess") end)
-    _log(string.format("  detach: rejectSelf=%s stopOwnerProcess=%s",
-        tostring(r1), tostring(r2)))
+    pcall(function() r2 = aj:call("restartOwnerProcess", true) end)
+    pcall(function() r3 = aj:call("enableOwnerFSM") end)
+    _log(string.format("  detach: rejectSelf=%s restartOwnerProcess=%s enableOwnerFSM=%s",
+        tostring(r1), tostring(r2), tostring(r3)))
     tape.ours = false
 end
 
@@ -2181,8 +2199,11 @@ re.on_draw_ui(function()
                 local aj = pawn and pawn:call("get_GameObject")
                     :call("getComponent(System.Type)", sdk.typeof("app.AdjustJack"))
                 if aj then
+                    -- the EXIT half of the jack lifecycle, never the entry-side teardown:
+                    -- stopOwnerProcess(bool) re-stops what we are trying to restart.
                     pcall(function() aj:call("rejectSelf") end)
-                    pcall(function() aj:call("stopOwnerProcess") end)
+                    pcall(function() aj:call("restartOwnerProcess", true) end)
+                    pcall(function() aj:call("enableOwnerFSM") end)
                     _log("pawn released")
                 end
             end)

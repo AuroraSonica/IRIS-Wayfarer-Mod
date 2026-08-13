@@ -189,6 +189,8 @@ local C = {
     -- ⛔ Never default to a player joint name like L_Breast: it does not exist here.
     unicorn_efx_joint = "",
     unicorn_efx_migr3 = false,    -- one-shot: manual->bone-attach migration done
+    unicorn_efx_migr4 = false,    -- one-shot: buried-lift bump done
+    blessing_migr1 = false,       -- one-shot: haste-spot -> Healing Spot idx 17
     unicorn_efx_interval = 0.35,  -- re-seat cadence: element 11 ignores every follow
                                   -- mechanism, ONLY a fresh fire re-places it -- so
                                   -- fast re-fires ARE the position lock (07 recipe:
@@ -231,7 +233,9 @@ local C = {
     -- real prize (bonus on top of the native kill award). Aurora 08-11.
     unicorn_kill_exp = 10000,
     -- Aurora's pick 08-11 via NicksDevtools shell caster: jobmagic index 24.
-    blessing_shell_idx = 24,
+    blessing_shell_idx = 17,      -- ヒーリングスポット "Healing Spot" (the mage's
+                                  -- green Halidom ring; 22-24 are the RED haste
+                                  -- spots -- named by the 08-12 catalog dump)
     blessing_shell_path =
         "AppSystem/shell/userdata/humanshellparamdata_jobmagic.user",
 }
@@ -275,12 +279,23 @@ local function load_config()
     if not C.unicorn_efx_migr3 then
         C.unicorn_efx_migr3 = true
         C.unicorn_efx_auto = true
-        -- 08-12 (Aurora: bone-attach "makes the sparkle disappear"): at the
-        -- Hip joint a 0.4m lift lands INSIDE the back -- the buried-emitter
-        -- law. Start clear of the body; the Lift slider fine-tunes live.
+    end
+    -- 08-12 (Aurora: bone-attach "makes the sparkle disappear"): at the Hip
+    -- joint a 0.4m lift lands INSIDE the back -- the buried-emitter law.
+    -- Own one-shot (migr3 had already been consumed when this shipped, so
+    -- nesting it there silently skipped the bump). Lift slider fine-tunes.
+    if not C.unicorn_efx_migr4 then
+        C.unicorn_efx_migr4 = true
         if (C.unicorn_efx_lift or 0.4) <= 0.45 then
             C.unicorn_efx_lift = 0.75
         end
+    end
+    -- 08-12 catalog verdict: her saved idx 24 = ホーリーシャイン / the earlier
+    -- red ring was the HASTE spot family. 17 = ヒーリングスポット, the actual
+    -- green healing ring. One-shot the saved value across.
+    if not C.blessing_migr1 then
+        C.blessing_migr1 = true
+        if C.blessing_shell_idx ~= 17 then C.blessing_shell_idx = 17 end
     end
     C.unicorn_efx_interval = math.max(0.25, math.min(30.0, C.unicorn_efx_interval))
     -- migration: the old auto-bolt scale ran 1.5-5.0 (line-multiple semantics);
@@ -999,61 +1014,21 @@ function UNI.spawn_efx(address)
         effect_id.IsElementIDOnly = false
         local transform = target:call("get_Transform")
         local rotation = transform:call("get_Rotation")
-        -- ⭐ "BOLT IT TO THE HORN" (Aurora, after the first head-turn): follow mode
-        -- tracks the joint's POSITION but the offset vec3 stays fixed in WORLD
-        -- orientation -- so a dipped head swings the horn away from the sparkle.
-        -- Fix: capture the dialled offset in JOINT-LOCAL space once (against the
-        -- joint's rotation at calibration), then re-express it through the joint's
-        -- CURRENT rotation on every re-fire. At the panel's re-fire cadence the
-        -- sparkle re-glues itself continuously, so it turns WITH the head.
-        local off = Vector3f.new(C.unicorn_efx_ox or 0.0, C.unicorn_efx_oy or 0.0,
-            C.unicorn_efx_oz or 0.0)
-        if C.unicorn_efx_auto then
-            -- 08-11 FINAL v2: attach-to-BONE with a user dropdown -- Aurora
-            -- picks the joint empirically, ZERO offset, no math. The panel's
-            -- bone combo kills + re-fires on change so every pick shows
-            -- immediately.
-            -- ⛔ zero offset = the sparkle fires INSIDE the body mesh, buried
-            -- and invisible (field-proven: manual mode's stray offsets were
-            -- the only reason it was ever visible). Lift it clear of the bone,
-            -- plus the world trims for fine placement.
-            -- ⛔ 08-12 (Aurora, element 3: "appearing to its left or behind"):
-            -- the offset vec3 is WORLD-fixed, so any X/Z trim points at a
-            -- COMPASS direction, not a horse direction -- as she turns, the
-            -- sparkle reads left/behind/front. Auto mode is therefore
-            -- VERTICAL-ONLY (up is up at every heading); X/Z trims belong to
-            -- manual mode alone.
-            off = Vector3f.new(
-                0.0,
-                (C.unicorn_efx_oy or 0.0) + (C.unicorn_efx_lift or 0.4),
-                0.0)
-            joint = (C.unicorn_efx_joint ~= "" and C.unicorn_efx_joint)
-                or "Head_0"
-            entry.joint = joint
-            R.efx_bolt_debug = string.format(
-                "bone-attach: %s, lift %.2f", joint, C.unicorn_efx_lift or 0.4)
-        else
-            pcall(function()
-                local jj = transform:call("getJointByName(System.String)", joint)
-                local jr = jj and jj:call("get_Rotation")
-                if jr then
-                    local key = string.format("%.3f|%.3f|%.3f", off.x, off.y, off.z)
-                    if entry.off_key ~= key or not entry.local_off then
-                        -- sliders moved (or first fire): what the user SEES now is the
-                        -- truth -- capture it relative to the joint's current rotation
-                        entry.local_off = UNI.qrot(jr, off, true)
-                        entry.off_key = key
-                    end
-                    off = UNI.qrot(jr, entry.local_off, false)
-                end
-            end)
-        end
+        -- ⭐⭐ 08-12 DEVTOOLS PARITY (Aurora: "remove the sliders etc and just
+        -- make the effect on the horse"): this is the EXACT call Nick's Efx
+        -- player makes in Follow mode -- ZERO offset, the joint, engine
+        -- follow (EfxPlayer.lua:58-67). That call is what she auditioned and
+        -- SAW riding the creature. Every extra this module ever added --
+        -- world trims, lift, joint-local capture, vertical-only detours --
+        -- is deleted. The offsets were the burial AND the wander.
+        joint = (C.unicorn_efx_joint ~= "" and C.unicorn_efx_joint) or "Hip"
+        entry.joint = joint
         container = mgr:call(
             "requestEffect(via.effect.script.EffectID, via.vec3, via.Quaternion, "
             .. "via.GameObject, System.String, "
             .. "via.effect.script.EffectManager.WwiseTriggerInfo)",
             effect_id,
-            off,
+            Vector3f.new(0.0, 0.0, 0.0),
             rotation,
             target,                  -- the ENGINE tracks this GameObject
             joint,
@@ -3771,9 +3746,14 @@ rawset(_G, "__iris_wild_horses_api", {
         local want = nil
         pcall(function()
             local rec = REGISTRY[object_address(game_object)]
-            if rec and rec.variant == "unicorn" then
-                want = tonumber(rec.base_hp) or tonumber(C.unicorn_hp) or 1000
-            end
+            if not rec then return end
+            -- 08-12 Bloodlines: base_hp (IV-scaled pool) wins for ANY horse;
+            -- unicorns fall back to their species pool when no gene is known
+            want = tonumber(rec.base_hp)
+                or (rec.variant == "unicorn"
+                    and (tonumber(C.unicorn_hp) or 1000)) or nil
+            -- a gene-less plain horse has no scaled pool: leave the bar native
+            if want and want <= 250.5 then want = nil end
         end)
         return want
     end,
@@ -3801,6 +3781,9 @@ rawset(_G, "__iris_wild_horses_api", {
             local circle = Vector3f.new(
                 p.x + fwd.x * 1.6, p.y, p.z + fwd.z * 1.6)
             RP.spawn_circle(go, circle, rot)
+            -- Aurora 08-12: the blessing deserves the kick's full-throated
+            -- neigh, not the soft nicker
+            pcall(function() play_category("hurt", go) end)
             RP.start_hot(circle)   -- 08-12: heal-over-time zone
         end)
         return "HoT started"
@@ -4025,10 +4008,36 @@ function RP.tick_heal(go, center)
         local max = RP.native_max_hp(go)
         if not (hp and max) then why = "no hp/max read"; return end
         if hp <= 0 then why = "dead"; return end
-        if hp >= max then why = "already full"; return end
+        -- ⭐ 08-12 (Aurora: "Lyra didn't get healed... she's got the lowered
+        -- total HP -- maybe the blessing could fix that, seeing as it's
+        -- special?"): the LOSS GAUGE. When current hp sits at a REDUCED
+        -- ceiling below the original max, ordinary healing is powerless --
+        -- only camps and allheal draughts mend the grey. A unicorn's
+        -- blessing absolutely should: raise ReducedMaxHp toward the original
+        -- by the same tick fraction, then heal into the reclaimed room.
+        local mended = false
+        pcall(function()
+            local orig = tonumber(hc:call("get_OriginalMaxHp"))
+            local red = tonumber(hc:call("get_ReducedMaxHp"))
+            if orig and red and red < orig - 0.5 then
+                local lift = orig * (C.blessing_hot_pct or 0.08)
+                hc:call("set_ReducedMaxHp", math.min(orig, red + lift))
+                local back = tonumber(hc:call("get_ReducedMaxHp"))
+                if back and back > red + 0.5 then
+                    mended = true
+                    max = back
+                end
+            end
+        end)
+        if hp >= max then
+            healed = mended
+            why = mended and "loss gauge mended" or "already full"
+            return
+        end
         local amount = max * (C.blessing_hot_pct or 0.08)
         healed = set_hp(go, math.min(max, hp + amount))
-        why = healed and "healed" or "set_hp refused"
+        why = healed and (mended and "gauge mended + healed" or "healed")
+            or "set_hp refused"
     end)
     return healed, why
 end
@@ -4437,12 +4446,16 @@ function RP.blessing_tick()
                     sw = tonumber(ds.x) or sw
                     sh = tonumber(ds.y) or sh
                 end
+                -- Alegreya = the closest legal match to DD2's own UI serif
+                -- (Aurora 08-12: "use the ingame text font"); per-call face
+                -- override, bundled .ttf filenames resolve in d2d (07-23 law)
                 local amount = math.floor(C.unicorn_kill_exp or 10000)
                 font.text(string.format("+%d XP", amount),
-                    sw * 0.745, sh * 0.175, 0xFFF2E3B8, 24)
+                    sw * 0.745, sh * 0.175, 0xFFF2E3B8, 24, nil,
+                    "Alegreya.ttf")
                 font.text("Unicorn Felled",
                     sw * 0.745, sh * 0.175 + 30.0 * (sh / 1080.0),
-                    0xFFB9E8FF, 17)
+                    0xFFB9E8FF, 17, nil, "Alegreya.ttf")
             end)
         else
             RP.bounty_toast_until = nil
@@ -4496,7 +4509,8 @@ function RP.blessing_tick()
             end)
             circle = circle or b.pos
             RP.spawn_circle(go, circle, b.rot)
-            pcall(function() play_category("nicker", go) end)
+            -- Aurora 08-12: the kick's neigh ("hurt" whinny), not the nicker
+            pcall(function() play_category("hurt", go) end)
             -- 08-12: heal-over-time zone (Aurora's design), not instant heal
             RP.start_hot(circle)
         end
@@ -4706,6 +4720,21 @@ re.on_frame(function()
                 local addr = object_address(root)
                 local rec = addr and REGISTRY[addr]
                 if not rec then return end
+                -- ⭐ 08-12 BLOODLINES SYNC (Aurora): the HP gene scales the
+                -- effective pool -- SAME curve as IrisIV.mults (1 + g/30*0.5).
+                -- rec.base_hp is the reserved IV slot the damage hook and
+                -- both HP displays already honor; idempotent per restore tick.
+                pcall(function()
+                    local gene = info.iv and tonumber(info.iv.hp)
+                    if gene then
+                        local pool = (want == "unicorn")
+                            and (tonumber(C.unicorn_hp) or 1000) or 250.0
+                        rec.base_hp =
+                            math.floor(pool * (1.0 + gene / 30.0 * 0.5) + 0.5)
+                    end
+                    -- SIZE gene rides the same sync; the scale guard applies it
+                    rec.size_gene = info.iv and tonumber(info.iv.size) or nil
+                end)
                 local live = (rec.variant == "unicorn") and "unicorn" or "horse"
                 if live == want then return end
                 if want == "unicorn" then
@@ -5038,11 +5067,24 @@ re.on_frame(function()
     for _, record in pairs(REGISTRY) do
         if record.kind == "horse" and valid(record.game_object) then
             pcall(function()
+                -- ⭐ 08-12 BLOODLINES SIZE: this guard IS the one scale owner
+                -- for horse bodies (the IV easer stands down for ch299011 by
+                -- design -- the 08-09 two-owner vibration war). So the SIZE
+                -- gene applies HERE: the shared calculator's mount band gives
+                -- roughly -7%..+12.5% around C.horse_scale -- a Towering
+                -- Specimen genuinely towers, without breaking the seat.
+                local target = C.horse_scale
+                local gene = tonumber(record.size_gene)
+                if gene and iris_size_mult_for then
+                    target = target * (tonumber(iris_size_mult_for(
+                        record.species or "ch299011", gene, C.horse_scale))
+                        or 1.0)
+                end
                 local transform = record.game_object:call("get_Transform")
                 local scale = transform:call("get_LocalScale")
-                if math.abs((scale.x or 0) - C.horse_scale) > 0.01 then
+                if math.abs((scale.x or 0) - target) > 0.01 then
                     transform:call("set_LocalScale", Vector3f.new(
-                        C.horse_scale, C.horse_scale, C.horse_scale))
+                        target, target, target))
                 end
             end)
         end
@@ -5306,39 +5348,21 @@ re.on_draw_ui(function()
             "Re-fire every (s)", C.unicorn_efx_interval, 0.25, 10.0, "%.2f")
         if changed then C.unicorn_efx_interval = value; save_config() end
 
-        changed, value = imgui.checkbox(
-            "Attach to BONE (auto -- no tuning)##uni_efx_auto", C.unicorn_efx_auto)
-        if changed then C.unicorn_efx_auto = value; save_config() end
-        if C.unicorn_efx_auto then
-            local names = UNI.bone_names or UNI.list_bones()
-            if #names == 0 then
-                imgui.text("  (no live unicorn -- spawn one, then Refresh bones)")
-            else
-                local sel = 1
-                for i, n in ipairs(names) do
-                    if n == C.unicorn_efx_joint then sel = i; break end
-                end
-                changed, value = imgui.combo(
-                    "Attach bone##uni_efx_bone", sel, names)
-                if changed and names[value] then
-                    C.unicorn_efx_joint = names[value]
-                    save_config()
-                    for address, e in pairs(S.unicorns) do
-                        e.next_efx = 0.0
-                        e.joint = nil
-                        UNI.kill_efx(address)
-                    end
-                end
+        -- 08-12 (Aurora: "remove the sliders etc and just make the effect on
+        -- the horse"): the fire is now devtools-parity -- zero offset, engine
+        -- follow at the chosen bone. Placement = pick a bone, nothing else.
+        local names = UNI.bone_names or UNI.list_bones()
+        if #names == 0 then
+            imgui.text("  (no live unicorn -- spawn one, then Refresh bones)")
+        else
+            local sel = 1
+            for i, n in ipairs(names) do
+                if n == C.unicorn_efx_joint then sel = i; break end
             end
-            imgui.same_line()
-            if imgui.button("Refresh bones##uni_efx_bones") then
-                UNI.list_bones()
-            end
-            changed, value = imgui.slider_float(
-                "Lift above bone (m)", C.unicorn_efx_lift or 0.4,
-                -1.0, 2.0, "%.2f")
-            if changed then
-                C.unicorn_efx_lift = value
+            changed, value = imgui.combo(
+                "Attach bone##uni_efx_bone", sel, names)
+            if changed and names[value] then
+                C.unicorn_efx_joint = names[value]
                 save_config()
                 for address, e in pairs(S.unicorns) do
                     e.next_efx = 0.0
@@ -5347,40 +5371,10 @@ re.on_draw_ui(function()
                 end
             end
         end
-        changed, value = imgui.slider_float(
-            "Position along horn", C.unicorn_efx_tip, 0.0, 2.0, "%.2f")
-        if changed then C.unicorn_efx_tip = value; save_config() end
-        imgui.text("  (0 = horn base, 1 = tip, 2 = floating past the tip;")
-        imgui.text("   trim sliders below = WORLD-axis nudge on the anchor -- tune it")
-        imgui.text("   ONCE on any unicorn and it holds for every horse, any facing;")
-        imgui.text("   Y is up; X/Z are compass axes. Re-fires INSTANTLY per change)")
-        if R.efx_bolt_debug then imgui.text("  " .. R.efx_bolt_debug) end
-
-        -- Trim in the horse-body frame; every nudge kills + re-fires the emitter so
-        -- the feedback loop is immediate (slider-lag made hand-tuning impossible).
-        local function refire_now()
-            for address, e in pairs(S.unicorns) do
-                e.next_efx = 0.0
-                UNI.kill_efx(address)
-            end
+        imgui.same_line()
+        if imgui.button("Refresh bones##uni_efx_bones") then
+            UNI.list_bones()
         end
-        changed, value = imgui.slider_float(
-            "Trim X (world)", C.unicorn_efx_ox, -3.0, 3.0, "%.2f")
-        if changed then C.unicorn_efx_ox = value; save_config(); refire_now() end
-        changed, value = imgui.slider_float(
-            "Trim up (Y)", C.unicorn_efx_oy, -3.0, 3.0, "%.2f")
-        if changed then C.unicorn_efx_oy = value; save_config(); refire_now() end
-        changed, value = imgui.slider_float(
-            "Trim Z (world)", C.unicorn_efx_oz, -3.0, 3.0, "%.2f")
-        if changed then C.unicorn_efx_oz = value; save_config(); refire_now() end
-        changed, value = imgui.slider_float(
-            "Sparkle scale", C.unicorn_efx_scale, 0.05, 6.0, "%.2f")
-        if changed then C.unicorn_efx_scale = value; save_config() end
-        changed, value = imgui.slider_float(
-            "Skip intro (frames/s)", C.unicorn_efx_skip, 0.0, 120.0, "%.1f")
-        if changed then C.unicorn_efx_skip = value; save_config() end
-        imgui.text("  (scale + skip are BEST EFFORT -- the status line below says")
-        imgui.text("   which method took. If it says NO API, use Dump effect API.)")
 
         if imgui.button("Re-fire sparkle now##uni_efx_refire") then
             for address, e in pairs(S.unicorns) do

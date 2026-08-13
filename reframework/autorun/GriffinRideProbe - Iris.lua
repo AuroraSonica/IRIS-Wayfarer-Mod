@@ -253,7 +253,28 @@ local DEFAULT = {
     route3_air_seat_cam = true, -- seat-owned flight chase camera (the native one has no ride view without a climb)
     route3_air_seat_cam_dist = 9.0,
     route3_air_seat_cam_height = 3.0,
-    route3_air_seat_anchor_up = 9.0, -- automatic round-35 anchor raise at drake scale (shake/fade kill)
+    route3_air_seat_anchor_up = 2.5, -- v13: back to the July value (9.0 leaked into the rendered body)
+    route3_drake_cam_dist = 15.0, -- v14: native camera BaseDistance while mounted on the drake
+    -- ⭐⭐⭐ v17 LEVITATE HOLD (the architecture flip). v12-v16 held her as a PUPPET (FSM off,
+    -- controller off, think-stop) and lost: with no action system to own her, the game fell back
+    -- to HighFall every frame and something under it dragged her -Y ~2.5m/frame forever (diag:
+    -- act=HighFall the whole flight, 1200+ vetoed re-requests, micro-jumps to the end). Nick's
+    -- flight mod proves the opposite approach on THIS engine, THIS player body, at altitude,
+    -- smoothly: leave everything ALIVE and put her in the game's own airborne state -- sorcerer
+    -- LEVITATE (JobMagicUser_StartLevitate, Param.MaxKeepSec patched past the 6s cap,
+    -- UpDownMode=3) -- then write her position per frame. A levitating player does not fall, is
+    -- not HighFall, bills no fall damage, and keeps a normal camera. Untick = the old puppet.
+    route3_air_seat_levitate = true,
+    -- v18: levitate is a SPELL, so it arrives with a hum, a glow and a caster float pose. We only
+    -- ever wanted its no-fall state, so mute/hide/repose it: sweep her GameObject tree for the
+    -- effect + sound components while the seat holds, and paint the cling clip over the float.
+    route3_air_seat_quiet = true,
+    -- ⛔ v19: OFF, and it must stay off unless something changes. Painting the cling clip while
+    -- the FSM is ALIVE cancels the levitate ACTION -- recorder tape: engage row reads
+    -- act=JobMagicUser_StartLevitate with 0 micro-jumps, the next row is FallLoop and the storm
+    -- is back for the rest of the flight. changeMotion competes with the action system for the
+    -- same layer; in puppet mode that was free (no action system left alive to lose).
+    route3_air_seat_lev_pose = false,
     route3_rider_lock_write_character = false, -- unsafe diagnostic: logical writes fight climb/camera ownership
     route3_rider_joint_anchor_enabled = false, -- used only by the parked transform-puppet experiment
     route3_rider_anchor_joint = "Neck_1", -- 07-16 field-tuned default: neck seat rides the
@@ -9495,6 +9516,15 @@ function griffin_species_profile_apply(key)
         p.route3_air_seat = key:find("ch257", 1, true) ~= nil
         migrated = true
     end
+    -- v13 (Aurora: "a long R3 descend has the drake start doing a take off animation"):
+    -- 5210 IS her takeoff clip -- it was the landing-descent pick back when nothing else
+    -- painted airborne. 5100 (the glide loop) paints reliably now (v10+ field-proven).
+    -- Era-guarded on the air-seat key existing (v11 law: value matches need era guards).
+    if key:find("ch257", 1, true) and p.route3_air_seat ~= nil
+        and math.floor(tonumber(p.route3_landing_descent_clip) or -1) == 5210 then
+        p.route3_landing_descent_clip = 5100
+        migrated = true
+    end
     -- ⭐ v11 2026-08-12 REPAIR: v3 re-fired after v10 (its glide==5100 trigger matched v10's
     -- intended value) and clobbered three v10 values on the very next auto-apply. Restore them.
     -- Signature = post-v10 (nodes cleared) but ascend dead -- exactly the clobbered state.
@@ -10939,6 +10969,13 @@ local function dismount_griffin()
     S.route3_air_seat_on = false
     S.route3_air_seat_air_since = nil
     S.route3_air_relatch_check_at = nil
+    if S.route3_airseat_cam_parked == true then
+        S.route3_airseat_cam_parked = nil
+        pcall(function()
+            griffin_loopcam_cam_switch(tonumber(S.route3_loopcam_game_ct) or 0)
+            S.route3_loopcam_cam_ct = nil
+        end)
+    end
     -- 07-24 IRIS PUPPET SEAT: release the rodeo seat FIRST (it restores
     -- the player body/pose/camera); the rest of this teardown then finds
     -- an ordinary standing player.
@@ -11075,6 +11112,13 @@ local function stop_ride_only(reason)
     S.route3_air_seat_air_since = nil
     S.route3_air_relatch_check_at = nil
     S.route3_abort_veto_off_until = os.clock() + 3.0
+    if S.route3_airseat_cam_parked == true then
+        S.route3_airseat_cam_parked = nil
+        pcall(function()
+            griffin_loopcam_cam_switch(tonumber(S.route3_loopcam_game_ct) or 0)
+            S.route3_loopcam_cam_ct = nil
+        end)
+    end
     if route3_quick_burst_active and route3_quick_burst_active() then
         pcall(function() route3_quick_burst_end(tostring(reason or "ride stopped")) end)
     end
@@ -14585,6 +14629,28 @@ if rel_method then
             if not (a and b) then return retval end
             local a_mount = mounts[a] == true or same_obj(a, S.griffin)
             local b_mount = mounts[b] == true or same_obj(b, S.griffin)
+            -- ⭐ 08-13 (the hoe vs Clucky; Aurora: "summoned pets never draw swings"):
+            -- mounts{} is WRAPPER-keyed and resident bodies registered with the box's
+            -- wrappers matched nothing here - friends on paper, prey in practice. The
+            -- box publishes live resident CHARACTER addresses; match those too (the
+            -- HoldWolf address pattern).
+            if not (a_mount or b_mount) then
+                local ra = rawget(_G, "IrisResidentChAddrs")
+                if ra then
+                    pcall(function()
+                        if ra[a:get_address()] then a_mount = true end
+                        if ra[b:get_address()] then b_mount = true end
+                        -- RECEIPT (throttled): does the swing's targeting even ASK this
+                        -- hook about residents? A missing line during a homing swing =
+                        -- the acquisition lives elsewhere (TargetSelector/hate side).
+                        if (a_mount or b_mount)
+                            and os.clock() > (tonumber(rawget(_G, "IrisResRelLogAt")) or 0) then
+                            _G.IrisResRelLogAt = os.clock() + 2.0
+                            log.info("[GriffinRideProbe (IRIS)] rel hook asked about a RESIDENT - answering FRIEND")
+                        end
+                    end)
+                end
+            end
             local a_proxy = same_obj(a, S.route3_proxy)
             local b_proxy = same_obj(b, S.route3_proxy)
             if not (a_mount or b_mount or a_proxy or b_proxy) then return retval end
@@ -15063,6 +15129,26 @@ if action_request_method then
                 if not S.mounted then return sdk.PreHookResult.CALL_ORIGINAL end
                 table.insert(S.player_action_history, 1, node)
                 while #S.player_action_history > 8 do table.remove(S.player_action_history) end
+                -- ⭐ v15 AIR-SEAT FALL-ACTION KILL (Nick levitate recipe: cancel HighFall at the
+                -- request door). The -Y storm on the drake survived every component kill (FSM,
+                -- CC, AdjustTerrain, ghost physics, fall-kill belief) because the ACTION system
+                -- requests fall/cling actions straight through them -- a live fall action steps
+                -- her down 1.5-3.6m per frame (log: pure -Y micro-jumps), and its fall state is
+                -- the landing death bill. While the seat owns her, no fall-family action may run.
+                -- Gate is S.route3_air_seat_on, which release() drops BEFORE the ground placement
+                -- + latch, so the touchdown latch actions pass untouched.
+                if S.route3_air_seat_on == true then
+                    -- v16: our own neutral-action eviction request must pass untouched
+                    if S.route3_self_action == true then return sdk.PreHookResult.CALL_ORIGINAL end
+                    local lo2 = node:lower()
+                    if lo2:find("fall", 1, true) or lo2:find("land", 1, true)
+                        or lo2:find("cling", 1, true) or lo2:find("climb", 1, true) then
+                        S.route3_air_fall_veto = (tonumber(S.route3_air_fall_veto) or 0) + 1
+                        S.route3_air_fall_veto_last = node
+                        S.route3_air_fall_veto_at = os.clock()
+                        return sdk.PreHookResult.SKIP_ORIGINAL
+                    end
+                end
                 if S.native_climb_mount then
                     local rider_blocked = false
                     if C.native_climb_block_player_actions then
@@ -15829,7 +15915,9 @@ function griffin_rider_fall_kill_tick(seat)
     -- FallingStuckStopper to her current position, every pin pass. No native system
     -- is disabled -- this is belief injection, so dismount needs no restore (the
     -- controller re-learns real ground on its first native update).
-    if S.route3_rider_puppet_on ~= true or not seat then return end
+    -- v17: also runs under the levitate-hold air seat (puppet off, seat on) -- a levitating
+    -- rider still needs the ground-belief feed so no rescue/landing bill can wake up.
+    if (S.route3_rider_puppet_on ~= true and S.route3_air_seat_on ~= true) or not seat then return end
     local player = get_player()
     if not player then return end
     local rec, lp = nil, nil
@@ -22645,15 +22733,25 @@ function griffin_rider_neutral_motion_tick()
         motion = pgo and get_component(pgo, "via.motion.Motion") or nil
     end
     if not motion then return end
+    -- ⭐ v14b (Aurora: "keep the grabbed-onto-the-monster position"): the LOOK and the SYSTEM
+    -- are separable. The climb system stays dead in drake flight, but its POSE is just a clip
+    -- the player owns: b20:100 mount-wait -- the braced two-hand grip, July-verified "upright/
+    -- GOOD" (its b20:0 sibling is the spread-eagle; never pin that one). Pinned playing, so
+    -- she breathes and grips instead of standing.
+    local tb, tc = 0, 0
+    if S.route3_air_seat_on == true
+        and tostring(C.route3_air_seat_pose_mode or "cling") == "cling" then
+        tb, tc = 20, 100
+    end
     pcall(function()
         local layer = motion:call("getLayer", 0)
         if not layer then return end
         local bank = tonumber(layer:call("get_MotionBankID")) or -1
         local clip = tonumber(layer:call("get_MotionID")) or -1
-        if bank ~= 0 or clip ~= 0 then
+        if bank ~= tb or clip ~= tc then
             layer:call(
                 "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
-                0, 0, 0.0, 0.0, 1, 1)
+                tb, tc, 0.0, 8.0, 1, 1)
         elseif type(S.route3_rider_hip_rest) ~= "table" then
             -- neutral clip confirmed live: capture Hip's seated local ONCE as the
             -- yaw-follow rest (capturing on an unconfirmed clip would bake a climb
@@ -24268,6 +24366,13 @@ function griffin_rt_mount_tick()
             local _, ago = reacquire_griffin()
             local same = (ago ~= nil) and (ggo ~= nil) and ago:get_address() == ggo:get_address()
             grown = same and rec and rec.wyrm and (tonumber(rec.wyrm.to) or 1.0) >= ((tonumber(C.wyrm_mount_scale) or 1.85) - 0.05)
+            -- ⛔ 08-13 (Shadow launched skyward, no vault): wyrm-grown WOLVES + GREAT CATS
+            -- ride the RODEO saddle now (the horse architecture, IrisHorseRodeo wyrm
+            -- mount). This climb-mount's teleport+latch on their unclimbable backs was
+            -- the pet-launch class reborn - the griffin path stands down for those bands.
+            if grown and (mnm:find("ch260", 1, true) or mnm:find("ch223", 1, true)) then
+                grown = false
+            end
         end)
         if not (mnm:find("ch253", 1, true) or mnm:find("ch257", 1, true) or grown) then
             S.route3_smart_mount_status = "mount refused: " .. mnm .. " is not a mount species"
@@ -25614,7 +25719,16 @@ _G.iris_camswitch_veto_fn = function(args)
     local ok, ret = pcall(function()
         local ct = tonumber(sdk.to_int64(args[3])) or -1
         S.route3_camswitch_last = string.format("%s ct=%d", os.date("%H:%M:%S"), ct)
-        if ct == 1 and S.mounted == true then
+        -- ⛔⛔ v21 THE STUCK CAMERA, NAMED: THIS VETO WAS EATING OUR OWN HAND-BACK. The cinematic
+        -- returns the view by calling griffin_loopcam_cam_switch(game_ct) -- the FOUR-arg overload,
+        -- i.e. straight into this hook -- and when the recorded type is 1 (Usually) we vetoed our
+        -- own restore, so the shot never gave the camera back. The `node_lock_at ~= nil` arm has no
+        -- time limit, which is why it stranded rather than recovered. Our own switches are now
+        -- always allowed (the flag the passive recorder already sets), and the veto stands down
+        -- entirely under the air seat, where Usually IS the ride camera rather than the close-up.
+        -- The cinematic itself is untouched -- Aurora wants the shot, she wants it to hand back.
+        if ct == 1 and S.mounted == true and S.route3_air_seat_on ~= true
+            and S.route3_loopcam_switching ~= true then
             local w = math.max(tonumber(S.route3_simple_rise_until) or 0.0,
                 tonumber(S.route3_simple_dive_until) or 0.0)
             if S.route3_node_lock_at ~= nil or os.clock() < w + 1.5 then
@@ -25863,6 +25977,24 @@ end
 -- bookkeeping skipped = state desync -> rescue fade). Forced OFF at load (flight-anim-toggle
 -- law); the hook stays as an opt-in instrument only.
 C.route3_climb_abort_veto = false
+-- ⛔ v13: the round-9 climb-flag FIELD PIN is RETIRED (flight-anim-toggle law). It never cured
+-- anything (426 re-trues, symptoms unchanged) and at landing it LIES to the air seat's
+-- re-latch verification (pin forces the getter true whether or not the ground climb landed
+-- = Aurora's broken-landing screenshot). The air seat replaced its whole reason to exist.
+C.route3_climbfield_pin = false
+-- v13 heal: the v12c anchor raise to 9m was chasing a fade the camera park later solved --
+-- and it LEAKS into the rendered body (Aurora's rider-floating-ahead screenshot). Back to
+-- the July value; only heal the exact value my own default wrote.
+if tonumber(C.route3_air_seat_anchor_up) == 9.0 then C.route3_air_seat_anchor_up = 2.5 end
+-- v13b heals: the removed v12b "anchor height" slider left 20.0 (its max) in the config --
+-- THE actual floating-rider value (my 9.0 heal missed this second key). And the camera
+-- height slider at 0.0 buries the view under the drake's wings on a body this size.
+if tonumber(C.route3_rider_logic_anchor_air) == 20.0 then C.route3_rider_logic_anchor_air = 2.5 end
+if tonumber(C.route3_air_seat_cam_height) == 0.0 then C.route3_air_seat_cam_height = 3.0 end
+-- ⛔ v14: the mod-owned chase cam is RETIRED (flight-anim-toggle law) -- no stick input on
+-- her pad, wrong feel, park/hand-back seams. The NATIVE camera + a BaseDistance override
+-- (iris_shakeoff_calm_tick) replaces it: native control + collision, just farther out.
+C.route3_air_seat_cam = false
 _G.iris_onabort_veto_fn = function(args)
     local ok, ret = pcall(function()
         if S.mounted ~= true or C.route3_climb_abort_veto ~= true then return nil end
@@ -25950,8 +26082,112 @@ if _G.IRIS_SHAKEOFF_HOOKED == nil then
         end
     end)
 end
+function iris_camdist_restore()
+    -- put back EVERY distance field we overrode on every controller (address-keyed originals)
+    if type(S.route3_camdist_saved) ~= "table" then return end
+    for _, rec in pairs(S.route3_camdist_saved) do
+        for _, t in ipairs(rec.fields or {}) do
+            pcall(function() t.obj:set_field(t.name, t.orig) end)
+        end
+    end
+    S.route3_camdist_saved = nil
+end
+
+-- ⭐⭐⭐ v18 CAMERA DISTANCE, FOUND BY ENUMERATION (Aurora: "still a bit too zoomed in ... we need
+-- to move it quite a bit back"). v14-v17 wrote <BaseDistance> and the log PROVED the write landed
+-- on the live controller (app.UsuallyCameraController, 5.5 -> 15.0) with no visible change: that
+-- field simply is not the operative distance on this controller. So stop guessing names -- ask the
+-- type what it has. Every float field whose name mentions Distance (minus the clamps/rates, which
+-- would fight or break the solver) gets our value, and the FULL field dump lands in
+-- data/<MOD>_camfields.json so the next pass can be surgical instead of broad.
+function iris_drake_cam_distance_apply(cc, want)
+    local addr = cc:get_address()
+    if type(S.route3_camdist_saved) ~= "table" then S.route3_camdist_saved = {} end
+    local rec = S.route3_camdist_saved[addr]
+    if rec == nil then
+        rec = { obj = cc, fields = {}, names = {} }
+        local tname = "?"
+        pcall(function() tname = cc:get_type_definition():get_full_name() end)
+        local dump = {}
+        -- ⭐ v19: ONE LEVEL DEEPER. The v18 dump only recorded numbers, and the whole controller
+        -- turned out to hold exactly one distance number (<BaseDistance>=5.5) whose write the log
+        -- proved lands and does nothing. So the operative distance lives in a sub-object the
+        -- numbers-only dump stepped straight past. Walk managed fields one level down too, dump
+        -- their numbers under "field.sub", and treat any distance-shaped number found there as a
+        -- write target (each remembers its OWN owner object, so restore still works).
+        local function is_distance_name(fn)
+            local low = fn:lower()
+            return low:find("distance", 1, true) ~= nil
+                and not (low:find("min", 1, true) or low:find("max", 1, true)
+                    or low:find("rate", 1, true) or low:find("speed", 1, true)
+                    or low:find("time", 1, true) or low:find("ratio", 1, true)
+                    or low:find("limit", 1, true))
+        end
+        local function collect(obj, prefix, depth)
+            local td = nil
+            pcall(function() td = obj:get_type_definition() end)
+            while td do
+                for _, f in ipairs(td:get_fields() or {}) do
+                    local fn = f:get_name()
+                    if fn and not f:is_static() then
+                        local v = nil
+                        pcall(function() v = obj:get_field(fn) end)
+                        if type(v) == "number" then
+                            dump[prefix .. fn] = v
+                            if is_distance_name(fn) then
+                                rec.fields[#rec.fields + 1] = { obj = obj, name = fn, orig = v }
+                                rec.names[#rec.names + 1] = string.format("%s%s=%.2f", prefix, fn, v)
+                            end
+                        elseif depth < 1 and type(v) == "userdata" then
+                            local sub = nil
+                            pcall(function() sub = v:get_type_definition():get_full_name() end)
+                            if sub then
+                                dump[prefix .. fn] = "<" .. sub .. ">"
+                                collect(v, prefix .. fn .. ".", depth + 1)
+                            end
+                        end
+                    end
+                end
+                td = td:get_parent_type()
+            end
+        end
+        pcall(function() collect(cc, "", 0) end)
+        S.route3_camdist_saved[addr] = rec
+        S.route3_camfield_note = tname .. " -> " ..
+            ((#rec.names > 0) and table.concat(rec.names, ", ") or "NO distance field found")
+        pcall(function() log.info("[GriffinRide] cam distance fields on " .. S.route3_camfield_note) end)
+        pcall(function()
+            local all = S.route3_camfields_dump
+            if type(all) ~= "table" then all = {}; S.route3_camfields_dump = all end
+            all[tname] = dump
+            json.dump_file(MOD .. "_camfields.json", all)
+        end)
+    end
+    for _, t in ipairs(rec.fields) do
+        pcall(function() t.obj:set_field(t.name, want) end)
+    end
+end
+
 function iris_shakeoff_calm_tick()
-    if S.mounted ~= true then S.route3_drake_addr = nil; return end
+    if S.mounted ~= true then
+        S.route3_drake_addr = nil
+        if S.route3_camdist_saved ~= nil then pcall(iris_camdist_restore) end
+        return
+    end
+    -- ⭐ v14 NATIVE CAMERA, PROPER DISTANCE (replaces the mod-owned chase cam): the close-up
+    -- was never a mode -- the live controller's <BaseDistance> is 5.5m, which is INSIDE a
+    -- drake-sized silhouette. Override it while mounted on her; the native camera keeps its
+    -- stick control + collision avoidance and simply orbits farther out. Restored on
+    -- dismount/unmount (address-keyed originals).
+    if S.route3_mount_is_drake == true and C.route3_drake_cam_dist ~= false then
+        pcall(function()
+            local cm = sdk.get_managed_singleton("app.CameraManager")
+            local mc = cm and cm._MainCameraControllers and cm._MainCameraControllers[0]
+            local cc = mc and mc:get_field("_CurrentCameraController")
+            if not cc then return end
+            iris_drake_cam_distance_apply(cc, tonumber(C.route3_drake_cam_dist) or 15.0)
+        end)
+    end
     -- ⭐⭐⭐ ROUND 9 -- PIN THE FIELD (2026-08-12): the stamina bar RATCHETING to the 466 hard
     -- floor on the drake (and never on the griffin) is on-screen proof IsClimbOnCharacter
     -- blinks false constantly during drake flight. Getter pin failed (native readers bypass),
@@ -26081,6 +26317,66 @@ if _G.IRIS_FADEVETO_HOOKED == nil then
         end)
     end
 end
+-- v12e: OBSERVE-ONLY counter on the event-fade channel (the fade may not be a GUI fade)
+_G.iris_evfade_fn = function()
+    pcall(function()
+        S.route3_evfade_count = (tonumber(S.route3_evfade_count) or 0) + 1
+        S.route3_evfade_last = os.clock()
+    end)
+end
+if _G.IRIS_EVFADE_HOOKED == nil then
+    _G.IRIS_EVFADE_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.AppEventFade")
+        local m = td and td:get_method("requestFadeOut")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_evfade_fn
+                if f then f(args) end
+            end)
+        end
+    end)
+end
+-- v12g: the LAST named fade channel -- app.MainFlowManager.requestFade (the game-flow fade
+-- that deaths/warps/rescues ride; GUI + event channels measured 0 while fades showed).
+-- Veto while seated + airborne, count always. DemoMediator observed for completeness.
+_G.iris_mfade_fn = function(args)
+    local ok, ret = pcall(function()
+        S.route3_mfade_count = (tonumber(S.route3_mfade_count) or 0) + 1
+        S.route3_mfade_last = os.clock()
+        if S.route3_air_seat_on == true and S.airborne == true
+            and C.route3_air_seat_fade_kill ~= false then
+            S.route3_mfade_veto_count = (tonumber(S.route3_mfade_veto_count) or 0) + 1
+            return sdk.PreHookResult.SKIP_ORIGINAL
+        end
+        return nil
+    end)
+    if ok then return ret end
+end
+if _G.IRIS_MFADE_HOOKED == nil then
+    _G.IRIS_MFADE_HOOKED = true
+    pcall(function()
+        local td = sdk.find_type_definition("app.MainFlowManager")
+        local m = td and td:get_method("requestFade")
+        if m then
+            sdk.hook(m, function(args)
+                local f = _G.iris_mfade_fn
+                if f then return f(args) end
+            end)
+        end
+    end)
+    pcall(function()
+        local td = sdk.find_type_definition("app.DemoMediator")
+        local m = td and td:get_method("requestFade")
+        if m then
+            sdk.hook(m, function(args)
+                pcall(function()
+                    S.route3_dfade_count = (tonumber(S.route3_dfade_count) or 0) + 1
+                end)
+            end)
+        end
+    end)
+end
 
 -- ⭐⭐⭐ AIR-PHASE ROOT SEAT (v12, 2026-08-12, work-order build). Ten instrumented rounds proved
 -- the native monster-climb is geometrically unable to hold a rider on the drake in flight (grip
@@ -26089,22 +26385,230 @@ end
 -- flying griffin) + route3_rider_pin_late's flat ROOT seat (S-scoped rigid gate) own her; at
 -- touchdown the puppet releases and the PROVEN latch (griffin_fire_player_climb_latch) restores
 -- the symptom-free ground climb. Per-species via profile key route3_air_seat (drake true).
+-- ⭐ v16 FALL-ACTION EVICTION (diag convicted it by name: act=HighFall the ENTIRE flight,
+-- 1200+ re-requests vetoed but the LIVE action never died -- vetoing requests cannot cancel
+-- a running action, and the running HighFall is the -Y storm + the drag into the drake's body
+-- that jams the camera). Cure = evict it through the sanctioned door: requestActionCore
+-- priority 10 "NormalLocomotion" on HER ActionManager (Nick's levitate exits airborne into
+-- this node routinely -- player-safe). The request veto then keeps fall-family from returning.
+function iris_air_seat_player_action(node, priority, layer)
+    -- Nick's h.set_node verbatim: requestActionCore(priority=0, node, layer=0) on the PLAYER's
+    -- own ActionManager. S.route3_self_action makes our own request bypass this file's player
+    -- action blocks (the climb-block list and the v15 fall-family veto).
+    local fired = false
+    pcall(function()
+        local pl = get_player()
+        local am = pl and pl:call("get_ActionManager")
+        if not am then am = pl and pl:get_field("<ActionManager>k__BackingField") end
+        if not am then return end
+        S.route3_self_action = true
+        pcall(function()
+            am:call("requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                tonumber(priority) or 0, tostring(node), tonumber(layer) or 0)
+            fired = true
+        end)
+        S.route3_self_action = false
+    end)
+    return fired
+end
+
+function iris_air_seat_neutral_action()
+    S.route3_air_neutral_fired = (tonumber(S.route3_air_neutral_fired) or 0) + 1
+    iris_air_seat_player_action("NormalLocomotion", 0, 0)
+end
+
+-- ⭐⭐ v18 QUIET SWEEP: levitate's hum + glow. Both ride components on HER GameObject tree, the
+-- same place the round-24 child-prop sweep found the staff colliders, so the same walk finds them.
+-- Disable-and-track (never touch anything already off), restore the exact set on release. The
+-- names of everything we catch go to the log ONCE per ride: if the hum survives, that list is the
+-- evidence for where it actually lives (a scene-level efx, not her body).
+function iris_air_seat_quiet_sweep(on)
+    local pl = get_player()
+    local pgo = char_go(pl)
+    if not pgo then return end
+    if on ~= true then
+        for _, c in ipairs(S.route3_air_quiet_off or {}) do
+            pcall(function() c:call("set_Enabled", true) end)
+        end
+        S.route3_air_quiet_off = nil
+        return
+    end
+    S.route3_air_quiet_off = S.route3_air_quiet_off or {}
+    local found = {}
+    local function consider(go)
+        pcall(function()
+            local comps = go:call("get_Components")
+            for _, c in ipairs(system_array_to_table(comps) or {}) do
+                local nm = ""
+                pcall(function() nm = c:get_type_definition():get_full_name() end)
+                local low = nm:lower()
+                if low:find("effect", 1, true) or low:find("efx", 1, true)
+                    or low:find("wwise", 1, true) or low:find("sound", 1, true) then
+                    local en = nil
+                    pcall(function() en = c:call("get_Enabled") end)
+                    if en == true then
+                        pcall(function() c:call("set_Enabled", false) end)
+                        S.route3_air_quiet_off[#S.route3_air_quiet_off + 1] = c
+                        found[#found + 1] = nm
+                    end
+                end
+            end
+        end)
+    end
+    consider(pgo)
+    pcall(function()
+        local tf = pgo:call("get_Transform")
+        local function walk(node, depth)
+            if depth > 4 then return end
+            local child = nil
+            pcall(function() child = node:call("get_Child") end)
+            while child do
+                pcall(function()
+                    local go = child:call("get_GameObject")
+                    if go then consider(go) end
+                end)
+                walk(child, depth + 1)
+                local nxt = nil
+                pcall(function() nxt = child:call("get_Next") end)
+                child = nxt
+            end
+        end
+        if tf then walk(tf, 0) end
+    end)
+    if #found > 0 then
+        S.route3_air_quiet_note = string.format("muted %d (total %d)", #found, #S.route3_air_quiet_off)
+        pcall(function() log.info("[GriffinRide] air-seat quiet sweep disabled: "
+            .. table.concat(found, ", ")) end)
+    end
+end
+
+-- ⭐⭐⭐ v17 LEVITATE HOLD tick. Nick's recipe exactly: keep MaxKeepSec past the native 6s cap
+-- and UpDownMode=3 (his comment: keeps the anim stable under puppeting) every frame, and
+-- re-request the levitate action whenever it lapses. Field names come from his working mod, but
+-- every access is shielded + multi-form (property vs backing field) because a wrong name here
+-- would silently no-op -- the failure mode this whole session kept hitting.
+function iris_air_seat_levitate_tick()
+    local pl = get_player()
+    if not pl then return end
+    local lc = nil
+    pcall(function() lc = pl:call("get_Human"):call("get_LevitateCtrl") end)
+    if not lc then
+        S.route3_air_lev_state = "NO LevitateCtrl"
+        return
+    end
+    local active = nil
+    pcall(function() active = lc:call("get_IsActive") end)
+    -- keep it alive: 10000s cap (native 6s) + stable up/down mode
+    local kept = false
+    pcall(function() lc.Param.MaxKeepSec = 10000.0; kept = true end)
+    if not kept then
+        pcall(function()
+            local prm = lc:get_field("Param")
+            if prm then
+                pcall(function() prm:set_field("MaxKeepSec", 10000.0); kept = true end)
+                if not kept then prm:set_field("<MaxKeepSec>k__BackingField", 10000.0); kept = true end
+            end
+        end)
+    end
+    local okmode = false
+    pcall(function() lc.UpDownMode = 3; okmode = true end)
+    if not okmode then pcall(function() lc:set_field("UpDownMode", 3) end) end
+    local now = os.clock()
+    -- ⭐⭐ v19 SELF-HEAL. get_IsActive() is NOT a sufficient health check: the v18 tape shows the
+    -- controller reporting active for a whole flight while the ACTION had already fallen back to
+    -- FallLoop/HighFall -- so "levitate active" sat on the panel through the entire storm. The
+    -- honest signal is the game asking to fall: a fall-family request means the levitate action
+    -- is gone, whatever the controller says. Re-arm on either, so losing it can cost a moment
+    -- instead of a flight.
+    local falling = (tonumber(S.route3_air_fall_veto_at) or 0.0) > now - 0.35
+    if (active ~= true or falling) and now >= (tonumber(S.route3_air_lev_next) or 0.0) then
+        S.route3_air_lev_next = now + 0.3
+        S.route3_air_lev_fired = (tonumber(S.route3_air_lev_fired) or 0) + 1
+        iris_air_seat_player_action("JobMagicUser_StartLevitate", 0, 0)
+    end
+    if active == true and not falling then
+        S.route3_air_lev_state = "LEVITATE holding"
+    else
+        S.route3_air_lev_state = string.format("%s -- re-arming x%d%s",
+            falling and "LOST (fall requests)" or "not active",
+            tonumber(S.route3_air_lev_fired) or 0,
+            kept and "" or " (MaxKeepSec WRITE FAILED)")
+    end
+end
+
+-- ⭐⭐ v21 SEAT-POINT FORENSICS. The recorder settled the position question: micro-jumps froze
+-- (237, then flat), i.e. she sits EXACTLY where we write her -- nothing is dragging her any more,
+-- the seat POINT is simply in the wrong place. We anchor to the joint named "root" and add
+-- +2.3m; on the griffin that lands on the back because its root sits at ground level, and the
+-- drake's evidently does not. Dump every joint with its height above the root ONCE per engage:
+-- the joint whose offset matches the saddle is the anchor this seat should have used all along.
+function iris_air_seat_dump_joints()
+    local _, go = reacquire_griffin()
+    local gtf = go and transform_of(go)
+    if not gtf then return end
+    local rj = managed_call(gtf, "getJointByName", "root")
+    local rp = rj and managed_call(rj, "get_Position")
+    local out, n = {}, 0
+    pcall(function()
+        local joints = gtf:call("get_Joints")
+        for _, j in ipairs(system_array_to_table(joints) or {}) do
+            local nm, p = nil, nil
+            pcall(function() nm = j:call("get_Name") end)
+            pcall(function() p = j:call("get_Position") end)
+            if nm and p then
+                n = n + 1
+                out[tostring(nm)] = string.format("dy=%+.2f dx=%+.2f dz=%+.2f",
+                    (tonumber(p.y) or 0) - (tonumber(rp and rp.y) or 0),
+                    (tonumber(p.x) or 0) - (tonumber(rp and rp.x) or 0),
+                    (tonumber(p.z) or 0) - (tonumber(rp and rp.z) or 0))
+            end
+        end
+    end)
+    S.route3_air_joint_note = string.format("%d joints dumped (root %s)", n,
+        rp and "found" or "MISSING -- seat is on the fallback!")
+    pcall(function() json.dump_file(MOD .. "_drakejoints.json",
+        { note = "offsets are metres from the 'root' joint, render space", joints = out }) end)
+    pcall(function() log.info("[GriffinRide] " .. S.route3_air_joint_note) end)
+end
+
 function iris_air_seat_engage()
     if S.route3_air_seat_on == true then return true end
     if iris_puppet_seat_active() then return false end
-    -- open the abort grace BEFORE the puppet's own climb-abort so no round-6/8 hook resists it
+    -- open the abort grace BEFORE the climb-abort so no round-6/8 hook resists it
     S.route3_abort_veto_off_until = os.clock() + 1.0
-    local ok = false
-    pcall(function() ok = route3_rider_puppet(true) end)
-    if ok ~= true then
-        S.route3_air_seat_status = "engage FAILED: puppet refused"
-        return false
+    S.route3_air_lev_mode = (C.route3_air_seat_levitate ~= false)
+    S.route3_air_lev_fired = 0
+    S.route3_air_lev_next = 0.0
+    if S.route3_air_lev_mode == true then
+        -- ⭐⭐⭐ v17 LEVITATE HOLD: everything stays ALIVE (FSM, controller, think). She leaves the
+        -- climb and immediately enters the game's own airborne state instead of a puppet void.
+        -- The pin still writes her seat every frame (Nick moves a levitating player by exactly
+        -- these transform writes), but nothing is fighting it now: no fall, so no -Y storm.
+        local aborted = nil
+        pcall(function() aborted = route3_abort_native_climb(get_player()) end)
+        S.route3_rider_puppet_abort = tostring(aborted)
+        S.route3_air_seat_on = true
+        pcall(iris_air_seat_levitate_tick)
+        -- the spell's efx/sfx spawn WITH the action, so sweep just after it starts (and again
+        -- per tick below -- late arrivals are the whole reason the round-38 ghost verifier exists)
+        if C.route3_air_seat_quiet ~= false then pcall(iris_air_seat_quiet_sweep, true) end
+        pcall(iris_air_seat_dump_joints)
+    else
+        local ok = false
+        pcall(function() ok = route3_rider_puppet(true) end)
+        if ok ~= true then
+            S.route3_air_seat_status = "engage FAILED: puppet refused"
+            return false
+        end
+        S.route3_air_seat_on = true
+        -- v16: the abort dropped her from the climb mid-air -- the game answers with HighFall
+        -- immediately. Evict before it owns the flight. (Puppet mode only; levitate replaces it.)
+        pcall(iris_air_seat_neutral_action)
     end
-    -- route3_abort_native_climb (inside the puppet) cleared both ride flags -- re-assert them:
-    -- every input-starve / drive / restart gate keys on these (reviewer issue 2)
+    -- the climb abort cleared both ride flags -- re-assert them: every input-starve / drive /
+    -- restart gate keys on these (reviewer issue 2)
     S.native_climb_mount = true
     S.player_climb_on_character = true
-    S.route3_air_seat_on = true
     S.route3_air_seat_t0 = os.clock()
     S.route3_air_relatch_check_at = nil
     S.route3_air_relatch_tries = 0
@@ -26120,6 +26624,18 @@ function iris_air_seat_engage()
             safe_run("griffin_rider_hand_magnet", griffin_rider_hand_magnet_apply)
         end)
     end
+    -- v14b pose modes: "cling" (default -- the authentic b20:100 grab-on grip, painted by the
+    -- neutral pin, no rs_anim_lab needed) or "wilds" (the MH Wilds riding loop via NB_Pose).
+    if tostring(C.route3_air_seat_pose_mode or "cling") == "wilds" then
+        pcall(function()
+            local pose = _G.NB_Pose
+            if type(pose) == "table" and type(pose.play) == "function" then
+                local clip = tostring(C.route3_wilds_rider_pose_clip or "rs_wilds_ride_neutral")
+                local okp = pose.play(clip, "Arisen", "Full", true, 1.0, true)
+                S.route3_air_seat_pose = okp ~= false
+            end
+        end)
+    end
     S.route3_air_seat_status = "AIR SEAT: climb released, root seat live"
     status("air seat engaged (flight)")
     return true
@@ -26132,6 +26648,19 @@ function iris_air_seat_release(reason)
     S.route3_air_ground_since = nil
     -- teardown grace: nothing of ours may resist the native transition (issues 8/13)
     S.route3_abort_veto_off_until = os.clock() + 3.0
+    -- ⭐ v17: leave LEVITATE the way Nick's mod does (his B-button exit), or she keeps floating
+    -- after the ride. Fires with the seat flag already false, so the fall veto no longer eats it.
+    if S.route3_air_lev_mode == true then
+        S.route3_air_lev_mode = nil
+        S.route3_air_lev_state = "released"
+        pcall(function()
+            iris_air_seat_player_action("NormalLocomotion", 0, 0)
+            iris_air_seat_player_action("UpperBodyDefault", 0, 1)
+        end)
+    end
+    -- give her her effects and her voice back, always (statue-hazard law: teardown is
+    -- unconditional, never gated on the flag that got us here)
+    pcall(iris_air_seat_quiet_sweep, false)
     -- restore the fall reporter BEFORE the puppet release (a grounded rider needs it)
     if S.route3_air_seat_at_off == true then
         S.route3_air_seat_at_off = nil
@@ -26141,16 +26670,51 @@ function iris_air_seat_release(reason)
             if at then at:call("setEnable", true) end
         end)
     end
+    -- v12g: stop the ride pose with the seat
+    if S.route3_air_seat_pose == true then
+        S.route3_air_seat_pose = nil
+        pcall(function()
+            local pose = _G.NB_Pose
+            if type(pose) == "table" and type(pose.stop) == "function" then pose.stop() end
+        end)
+    end
+    -- v12f: hand the camera controller back (parked for the flight chase view), resuming
+    -- from a sane chase pose (the cinematic's own return-park trick) instead of wherever
+    -- the last flight frame left it
+    if S.route3_airseat_cam_parked == true then
+        S.route3_airseat_cam_parked = nil
+        pcall(function()
+            local _, go2 = reacquire_griffin()
+            local rp = go2 and transform_render_pos(go2)
+            if rp then
+                local yw = yaw_from_transform(go2) or S.heading_yaw or 0.0
+                griffin_loopcam_write_lookat(
+                    (tonumber(rp.x) or 0.0) - math.sin(yw) * 7.5,
+                    (tonumber(rp.y) or 0.0) + 3.2,
+                    (tonumber(rp.z) or 0.0) - math.cos(yw) * 7.5,
+                    rp.x, (tonumber(rp.y) or 0.0) + 1.5, rp.z)
+            end
+        end)
+        pcall(function()
+            griffin_loopcam_cam_switch(tonumber(S.route3_loopcam_game_ct) or 0)
+            S.route3_loopcam_cam_ct = nil
+        end)
+    end
     pcall(function() route3_rider_puppet(false) end)
     S.route3_air_seat_status = "released: " .. tostring(reason or "?")
     if S.mounted ~= true then return end
-    -- GROUND RE-LATCH: she is already at the seat position (the pin wrote her there);
-    -- fire the proven latch and schedule a REAL-read verification (issue 13: while seated
-    -- the S-flag lies on purpose, so verify against the live getter only after release)
+    -- GROUND RE-LATCH (v13): PLACE her at the ground seat FIRST -- the landing settle moves
+    -- the body under a rider left at the last flight seat (Aurora's arm-in-the-leg-gap
+    -- screenshot), and startClimb grabs the NEAREST surface, so placement decides the grip.
     pcall(function()
         local player = get_player()
         local _, ggo = reacquire_griffin()
         if not (player and ggo) then return end
+        local seat = route3_root_space_seat_position(ggo,
+            tonumber(C.route3_seat_offset_x) or 0.0,
+            tonumber(C.route3_seat_offset_y) or 2.3,
+            tonumber(C.route3_seat_offset_z) or 1.6)
+        if seat then set_character_transform(player, seat, nil) end
         S.route3_air_relatch_status = griffin_fire_player_climb_latch(player, ggo)
     end)
     S.route3_air_relatch_check_at = os.clock() + 0.8
@@ -26206,9 +26770,36 @@ function iris_air_seat_tick()
         S.route3_air_ground_since = nil
         -- PER-TICK LIFE-SUPPORT (reviewer issue 1: the puppet alone is half a machine --
         -- these are the pose-tick puppet-branch re-assertions, seat-scoped):
-        if S.route3_rider_puppet_on == true then
-            if griffin_set_player_fsm_enabled(false) then S.route3_rider_fsm_off = true end
-            pcall(griffin_rider_neutral_motion_tick)
+        if S.route3_air_lev_mode == true then
+            -- ⭐ v17 LEVITATE HOLD: the action system stays alive and OWNS her airborne state.
+            -- No FSM kill, no eviction loop -- the levitate state is itself the answer to
+            -- "what is she doing up here".
+            pcall(iris_air_seat_levitate_tick)
+            -- ⛔ v19: the clip paint is OFF by default and is what broke v18 -- it cancels the
+            -- levitate action (see the config note). Left behind a checkbox only so the pose
+            -- can be re-tested if a non-competing route to it ever turns up.
+            if C.route3_air_seat_lev_pose == true
+                and tostring(C.route3_air_seat_pose_mode or "cling") == "cling" then
+                pcall(griffin_rider_neutral_motion_tick)
+            end
+            -- v18: re-sweep for late-spawning glow/hum components (~2/s, cheap)
+            if C.route3_air_seat_quiet ~= false
+                and now >= (tonumber(S.route3_air_quiet_next) or 0.0) then
+                S.route3_air_quiet_next = now + 0.5
+                pcall(iris_air_seat_quiet_sweep, true)
+            end
+        else
+            if S.route3_rider_puppet_on == true then
+                if griffin_set_player_fsm_enabled(false) then S.route3_rider_fsm_off = true end
+                pcall(griffin_rider_neutral_motion_tick)
+            end
+            -- v16: if fall-family requests hit the veto in the last half second, the action
+            -- system is still fighting for her -- re-evict (rate-limited; act column verifies)
+            if (tonumber(S.route3_air_fall_veto_at) or 0.0) > now - 0.5
+                and now >= (tonumber(S.route3_air_neutral_next) or 0.0) then
+                S.route3_air_neutral_next = now + 0.4
+                pcall(iris_air_seat_neutral_action)
+            end
         end
         -- v12c FALL-DETECTOR KILL (Nick levitate recipe, [[nick-devtools-reusable-recipes]]):
         -- AdjustTerrain is the player's terrain-snap/fall reporter -- the clean "stop treating
@@ -26236,8 +26827,104 @@ function iris_air_seat_tick()
         -- per-frame chase park behind the seat via the proven look-at writer (camtrace law:
         -- loopcam-style writes hold to present, stolen_m = 0.00). Stands aside while the
         -- rise cinematic owns the camera; stops writing the instant the seat releases.
+        -- ⭐ v12e FLIGHT RECORDER: per-frame worst-step accumulators (shake = a max single-frame
+        -- jump; a 0.5s sample would smooth it away) + a half-second row ring dumped to
+        -- data/<MOD>_airseat_diag.json. One flight convicts the shake and the fade by data.
+        pcall(function()
+            local _, g3 = reacquire_griffin()
+            local dp = g3 and transform_render_pos(g3)
+            if dp then
+                local lp = S.route3_airseat_fr_lastp
+                if type(lp) == "table" then
+                    local d2 = (dp.x - lp.x)^2 + (dp.y - lp.y)^2 + (dp.z - lp.z)^2
+                    if d2 > (tonumber(S.route3_airseat_fr_maxdrake2) or 0.0) then
+                        S.route3_airseat_fr_maxdrake2 = d2
+                    end
+                end
+                S.route3_airseat_fr_lastp = { x = dp.x, y = dp.y, z = dp.z }
+            end
+            local cam = sdk.get_primary_camera()
+            local xf = cam and cam:call("get_GameObject"):call("get_Transform")
+            local p = xf and xf:call("get_Position")
+            if p then
+                local lc = S.route3_airseat_fr_lastcam
+                if type(lc) == "table" then
+                    local d2 = (p.x - lc.x)^2 + (p.y - lc.y)^2 + (p.z - lc.z)^2
+                    if d2 > (tonumber(S.route3_airseat_fr_maxcam2) or 0.0) then
+                        S.route3_airseat_fr_maxcam2 = d2
+                    end
+                end
+                S.route3_airseat_fr_lastcam = { x = p.x, y = p.y, z = p.z }
+                local cw = S.route3_camtrace_write
+                if type(cw) == "table" then
+                    local st = math.sqrt((p.x - cw.x)^2 + (p.y - cw.y)^2 + (p.z - cw.z)^2)
+                    if st > (tonumber(S.route3_airseat_fr_maxsteal) or 0.0) then
+                        S.route3_airseat_fr_maxsteal = st
+                    end
+                end
+            end
+        end)
+        if now >= (tonumber(S.route3_airseat_diag_at) or 0.0) then
+            S.route3_airseat_diag_at = now + 0.5
+            pcall(function()
+                -- v15: live fall meter -- if this climbs, the landing bill is still accruing
+                -- and the fall-action veto is not the whole story
+                local fallh = "?"
+                pcall(function()
+                    local rec = get_player():get_field("<PosRotRecorder>k__BackingField")
+                    local lp2 = rec and rec:get_field("LandingProcessor")
+                    local fi = lp2 and lp2:get_field("FallInfo")
+                    local v = fi and tonumber(fi:call("get_FallHeight"))
+                    if v then fallh = string.format("%.1f", v) end
+                end)
+                local row = {
+                    fallh = fallh,
+                    fveto = string.format("%d:%s", tonumber(S.route3_air_fall_veto) or 0,
+                        tostring(S.route3_air_fall_veto_last or "-")),
+                    nfired = tonumber(S.route3_air_neutral_fired) or 0,
+                    lev = tostring(S.route3_air_lev_state or "(puppet mode)"),
+                    anchor = tostring(S.route3_rider_lock_status or "-"),
+                    act = tostring(_G.IrisPlayerActionNode or "-"),
+                    t = string.format("%.1f", now),
+                    seat = S.route3_air_seat_on == true,
+                    air = S.airborne == true,
+                    st = tostring(S.route3_air_seat_status or "-"),
+                    vib = string.format("%d/%d", tonumber(S.route3_camvib_veto_count) or 0,
+                        tonumber(S.route3_camvib_count) or 0),
+                    gfade = string.format("%d/%d", tonumber(S.route3_fade_veto_count) or 0,
+                        tonumber(S.route3_fade_req_count) or 0),
+                    evfade = tonumber(S.route3_evfade_count) or 0,
+                    mfade = string.format("%d/%d", tonumber(S.route3_mfade_veto_count) or 0,
+                        tonumber(S.route3_mfade_count) or 0),
+                    dfade = tonumber(S.route3_dfade_count) or 0,
+                    rb_blocked = tonumber(S.route3_rider_rollback_blocked) or 0,
+                    microjumps = tonumber(S.route3_rider_microjumps) or 0,
+                    rescues = tonumber(S.route3_rider_rescue_count) or 0,
+                    cam_maxstep = string.format("%.2f", math.sqrt(tonumber(S.route3_airseat_fr_maxcam2) or 0.0)),
+                    drake_maxstep = string.format("%.2f", math.sqrt(tonumber(S.route3_airseat_fr_maxdrake2) or 0.0)),
+                    cam_steal = string.format("%.2f", tonumber(S.route3_airseat_fr_maxsteal) or 0.0),
+                }
+                S.route3_airseat_fr_maxcam2 = 0.0
+                S.route3_airseat_fr_maxdrake2 = 0.0
+                S.route3_airseat_fr_maxsteal = 0.0
+                local ring = S.route3_airseat_diag_ring
+                if type(ring) ~= "table" then ring = {}; S.route3_airseat_diag_ring = ring end
+                ring[#ring + 1] = row
+                if #ring > 240 then table.remove(ring, 1) end
+                json.dump_file(MOD .. "_airseat_diag.json", ring)
+            end)
+        end
+        -- ⭐ v12f -- NICK'S SWITCH (the recorder's verdict: cam_steal 5-8m EVERY sample = the
+        -- native follow controller re-posing our camera each frame; the 30m spikes inside
+        -- geometry are the "fades"). The cinematic holds at steal 0.00 because it PARKS the
+        -- controller (switchCamera(2)) before writing -- same law here: park, then write.
         if C.route3_air_seat_cam ~= false
             and (tonumber(S.route3_loopcam_clip_until) or 0.0) <= now then
+            if S.route3_loopcam_cam_ct == nil then
+                pcall(function()
+                    if griffin_loopcam_cam_switch(2) then S.route3_airseat_cam_parked = true end
+                end)
+            end
             pcall(function()
                 -- ⛔ RENDER SPACE (v12c fix): seat_last is UNIVERSAL -- feeding it raw put the
                 -- camera a tile-offset away from the world (no streaming, no sound, void view).
@@ -26251,12 +26938,43 @@ function iris_air_seat_tick()
                 local yaw2 = tonumber(S.heading_yaw) or 0.0
                 local d = tonumber(C.route3_air_seat_cam_dist) or 9.0
                 local h = tonumber(C.route3_air_seat_cam_height) or 3.0
+                -- v13b: RIGHT-STICK ORBIT (Aurora: "can't control the camera") -- the scout
+                -- chase-cam's proven raw reader; yaw offset decays gently back to behind-her
+                -- when the stick is idle, pitch is clamped and sticky.
+                pcall(function()
+                    local sx, sz = scout_read_axis_R()
+                    local yo = tonumber(S.route3_airseat_cam_yawoff) or 0.0
+                    local po = tonumber(S.route3_airseat_cam_pitch) or 0.22
+                    if math.abs(sx) > 0.1 then
+                        yo = yo + sx * 0.055
+                    else
+                        yo = yo * 0.97   -- ease back behind her
+                    end
+                    if math.abs(sz) > 0.1 then
+                        po = math.max(-0.6, math.min(1.1, po + sz * 0.03))
+                    end
+                    if yo > math.pi then yo = yo - 2 * math.pi elseif yo < -math.pi then yo = yo + 2 * math.pi end
+                    S.route3_airseat_cam_yawoff = yo
+                    S.route3_airseat_cam_pitch = po
+                end)
+                local cyaw = yaw2 + (tonumber(S.route3_airseat_cam_yawoff) or 0.0)
+                local cpit = tonumber(S.route3_airseat_cam_pitch) or 0.22
+                local horiz = math.cos(cpit) * d
                 local ax = tonumber(rp.x) or 0.0
                 local ay = (tonumber(rp.y) or 0.0) + 1.5
                 local az = tonumber(rp.z) or 0.0
                 griffin_loopcam_write_lookat(
-                    ax - math.sin(yaw2) * d, ay + h, az - math.cos(yaw2) * d,
+                    ax - math.sin(cyaw) * horiz,
+                    ay + math.sin(cpit) * d + h,
+                    az - math.cos(cyaw) * horiz,
                     ax, ay, az)
+            end)
+        elseif C.route3_air_seat_cam == false and S.route3_airseat_cam_parked == true then
+            -- camera checkbox unticked mid-flight: hand the controller back immediately
+            S.route3_airseat_cam_parked = nil
+            pcall(function()
+                griffin_loopcam_cam_switch(tonumber(S.route3_loopcam_game_ct) or 0)
+                S.route3_loopcam_cam_ct = nil
             end)
         end
         return
@@ -26807,8 +27525,34 @@ function route3_rider_pin_late()
         local base_z = tonumber(C.route3_seat_offset_z) or 1.6
         local yaw_deg = tonumber(C.route3_rider_lock_yaw_deg) or 0.0
         local seat_pos, anchor_name = nil, "actor root"
-        -- AIR SEAT rides the FLAT ROOT seat, never the joint weld: the root is OUR smooth
-        -- drive-owned frame; the spine joints are exactly the whipping surface we left.
+        -- ⭐ v14 AIR SEAT: anchor the seat to the MESH ROOT, rebased render->universal (the
+        -- goblin-carry talon-pin law). The flight drive's transform leads the rendered mesh by
+        -- METERS at speed -- a transform-anchored seat put Aurora visibly ahead/above the
+        -- visible drake (log: pull deltas pure -Y, X/Z zero = the seat POINT was wrong, not a
+        -- mover). The root joint tracks the mesh; offsets stay her tuned saddle numbers.
+        if S.route3_air_seat_on == true then
+            pcall(function()
+                local gtf = transform_of(go)
+                local rj = gtf and managed_call(gtf, "getJointByName", "root")
+                local jp = rj and managed_call(rj, "get_Position")
+                local gup, grp = transform_pos(go), transform_render_pos(go)
+                if jp and gup and grp and sane_position(jp) then
+                    local bx2 = (tonumber(jp.x) or 0.0) + (tonumber(gup.x) or 0.0) - (tonumber(grp.x) or 0.0)
+                    local by2 = (tonumber(jp.y) or 0.0) + (tonumber(gup.y) or 0.0) - (tonumber(grp.y) or 0.0)
+                    local bz2 = (tonumber(jp.z) or 0.0) + (tonumber(gup.z) or 0.0) - (tonumber(grp.z) or 0.0)
+                    local yw2 = yaw_from_transform(go) or yaw
+                    local fx2, fz2 = math.sin(yw2), math.cos(yw2)
+                    local rxx, rzz = math.cos(yw2), -math.sin(yw2)
+                    seat_pos = make_position(
+                        bx2 + rxx * base_x + fx2 * base_z,
+                        by2 + base_y,
+                        bz2 + rzz * base_x + fz2 * base_z)
+                    anchor_name = "mesh root (air seat)"
+                end
+            end)
+        end
+        -- AIR SEAT rides the mesh-root seat above, never the joint weld: the spine joints are
+        -- exactly the whipping surface we left. (Flat transform fallback below covers errors.)
         if C.route3_rider_joint_anchor_enabled ~= false and S.route3_air_seat_on ~= true then
             anchor_name = tostring(C.route3_rider_anchor_joint or C.route3_seat_joint or "Spine_2")
             local gtf = transform_of(go)
@@ -27077,7 +27821,11 @@ function route3_rider_pin_late()
         -- "pendulum" (body orbiting under the griffin) + occlusion fades (camera
         -- solving on the mid-frame under-belly position). All transform/logical
         -- writes AND the write-relative telemetry below are puppet-only.
-        if S.route3_rider_puppet_on ~= true then
+        -- ⭐ v17: the AIR SEAT is a position authority in its own right now. In levitate-hold
+        -- mode the puppet never engages (everything stays alive by design), so this legacy
+        -- puppet-only gate would silently drop every seat write -- the seat would exist on
+        -- paper and never move her. Air seat writes whenever it owns the rider.
+        if S.route3_rider_puppet_on ~= true and S.route3_air_seat_on ~= true then
             if S.route3_wilds_rider_pose_active == true then
                 pcall(route3_rider_pose_cleanup, pgo, nil)
                 if S.route3_limbfit_registered ~= true then
@@ -27161,7 +27909,8 @@ function route3_rider_pin_late()
         end)
         -- ROUND-48: kill the perpetual-fall state (the storm + the landing bill)
         pcall(griffin_rider_fall_kill_tick, seat_pos)
-        if C.route3_rider_lock_write_character == true or S.route3_rider_puppet_on == true then
+        if C.route3_rider_lock_write_character == true or S.route3_rider_puppet_on == true
+            or S.route3_air_seat_on == true then
             -- puppet ride: we ARE the logical authority (climb aborted; nothing else
             -- carries her, and the camera follows the logical character). The LOGICAL
             -- anchor rides ABOVE the visual seat: camera/audio/proximity-events all
@@ -27175,16 +27924,27 @@ function route3_rider_pin_late()
             local lup_target = tonumber(C.route3_rider_logic_anchor_up) or 0.0
             if S.airborne == true then
                 lup_target = tonumber(C.route3_rider_logic_anchor_air) or (lup_target + 2.5)
-                -- v12c AIR SEAT: round-35's anchor raise at DRAKE scale, automatic. The +2.5m
-                -- griffin value sits inside the drake's body volume -> flap shake events fire
-                -- point-blank (the violent camera shake) + proximity/fall feed the fade.
+                -- v13b AIR SEAT: the anchor raise's reasons (shake/fade) are SOLVED elsewhere
+                -- (camera park + rescue-fade veto); big anchors LEAK into the rendered body.
+                -- Plain small assignment -- no slider can float the rider again.
                 if S.route3_air_seat_on == true then
-                    lup_target = math.max(lup_target, tonumber(C.route3_air_seat_anchor_up) or 9.0)
+                    lup_target = tonumber(C.route3_air_seat_anchor_up) or 2.5
                 end
             end
             local lup = tonumber(S.route3_rider_lup) or lup_target
             lup = lup + (lup_target - lup) * 0.05
             S.route3_rider_lup = lup
+            -- ⭐⭐⭐ v20 (Aurora: "the arisen positioning is still completely off" -- floating
+            -- metres above the back). THE ANCHOR RAISE ONLY EVER WORKED ON A CORPSE. Under the
+            -- puppet the app.Character was inert, so lifting the LOGICAL anchor above the visual
+            -- seat moved only the camera/audio/proximity listener. Under levitate hold the
+            -- character is ALIVE and its position is where her body actually is -- so the same
+            -- 2.5m raise (on top of the 2.3m seat) renders her ~5m over the drake. Levitate mode
+            -- writes both channels to the SAME point, snapped (no smoothing ramp to sit through).
+            if S.route3_air_lev_mode == true then
+                lup = 0.0
+                S.route3_rider_lup = 0.0
+            end
             local lpos = seat_pos
             if lup ~= 0.0 then
                 lpos = make_position(
@@ -30177,6 +30937,12 @@ function iris_iv_size_mult(target_scale)
         -- DEV PREVIEW (Aurora: "see max and min side by side"): _G override wins
         local gene = tonumber(rawget(_G, "IrisSizePreviewGene")) or tonumber(iv.size) or 15
         m = iris_size_mult_for(rec.species, gene, target_scale)
+        -- 08-12 (Aurora: "they change size when tamed"): wild bodies carry a NATURAL base
+        -- (0.85..1.15 innate variance) that Wild Blood multiplied from -- the tame keeps
+        -- it (rec.wild_base, carried at the seal), so the big one you scouted stays
+        -- EXACTLY the big one you tamed, not merely approximately.
+        local wb9 = tonumber(rec.wild_base)
+        if wb9 and wb9 > 0.5 and wb9 < 1.5 then m = m * wb9 end
     end)
     return tonumber(m) or 1.0
 end
@@ -30259,9 +31025,48 @@ re.on_frame(function()
             -- body, max HP = record BASE max x the gene. The base is stamped ONCE per record
             -- so re-summons never compound. Current HP is untouched -- the pool grows and
             -- stable rest fills it. Readback decides took/refused; the log carries receipts.
-            if IrisIV.hpmax_addr ~= addr and ch and m.hp and m.hp > 1.001 then
+            -- ⛔ 08-12 Bloodlines sync: HORSE-kind companions are excluded --
+            -- IrisWildHorses owns their pool (rec.base_hp scaling + scaled
+            -- bar; their native max is authority-walled anyway). Writing here
+            -- too would double-apply the HP gene.
+            -- ⛔⛔ 08-12 (Aurora: the summoned rat came back 1/1, "occasionally, as opposed to
+            -- every time"): THE LATCH BELOW IS KEYED ON THE GAMEOBJECT ADDRESS ALONE, AND
+            -- MANAGED-OBJECT ADDRESSES ARE RECYCLED. A freshly summoned critter can land on the
+            -- exact heap address the previous body occupied, so `hpmax_addr == addr` reads
+            -- "already effective" for a body that still carries its chassis max of 1 -- and the
+            -- pool write is then skipped FOREVER for that summon. Whether it happens depends on
+            -- the allocator, which is exactly why it was intermittent rather than reproducible.
+            -- (Critters are the visible victims because their chassis max IS 1, so the failure
+            -- shows as a 1/1 bar; a big body silently keeps its true base and looks fine.)
+            -- ⭐ FIX: the latch is a CLAIM THAT GETS RE-VERIFIED, not a permanent receipt. Every
+            -- 2s we re-read the live max and drop the latch if it no longer matches what we
+            -- stamped, so a recycled address self-heals on the next publish tick. This also
+            -- covers anything else that stomps max HP later -- the same reason the scale easer
+            -- had to stop retiring on arrival (ScaleMediator stomped it with nobody on duty).
+            if IrisIV.hpmax_addr == addr and IrisIV.hpmax_refused ~= addr
+                and tonumber(IrisIV.hpmax_want)
+                and (os.clock() - (tonumber(IrisIV.hpmax_ok_at) or 0.0)) > 2.0 then
+                IrisIV.hpmax_ok_at = os.clock()
+                local hcv, curv = nil, nil
+                pcall(function()
+                    hcv = griffin_target_hit_controller(ch)
+                    curv = hcv and tonumber(griffin_hp_max_from_component(hcv)) or nil
+                end)
+                if curv and curv > 0 and math.abs(curv - tonumber(IrisIV.hpmax_want)) > 0.6 then
+                    IrisIV.hpmax_addr = nil          -- not the body we stamped: re-apply below
+                    IrisIV.hpmax_try_addr = nil
+                    pcall(function() log.info("[IrisIV] HP POOL latch dropped (live max "
+                        .. tostring(curv) .. " ~= stamped " .. tostring(IrisIV.hpmax_want)
+                        .. ") - recycled address, re-applying") end)
+                end
+            end
+            if IrisIV.hpmax_addr ~= addr and ch and m.hp and m.hp > 1.001
+                and tostring(rec.kind or "") ~= "horse" then
                 if IrisIV.hpmax_try_addr ~= addr then
                     IrisIV.hpmax_try_addr = addr; IrisIV.hpmax_tries = 0
+                    -- a body we have not tried before is not "refused" yet, whatever the last one
+                    -- at this address decided
+                    if IrisIV.hpmax_refused == addr then IrisIV.hpmax_refused = nil end
                 end
                 IrisIV.hpmax_tries = (IrisIV.hpmax_tries or 0) + 1
                 local hc9 = nil
@@ -30280,6 +31085,10 @@ re.on_frame(function()
                     local virtual9 = base9 <= 2.0
                     if virtual9 then base9 = 25.0 end
                     local want9 = math.floor(base9 * m.hp + 0.5)
+                    -- what we BELIEVE this body's pool should be. The re-verify above compares the
+                    -- live max against this, so the address-recycling latch can self-heal.
+                    IrisIV.hpmax_want = want9
+                    IrisIV.hpmax_ok_at = os.clock()
                     if math.abs(cur9 - want9) <= 0.6 then
                         IrisIV.hpmax_addr = addr   -- already effective
                     else
@@ -30335,6 +31144,11 @@ re.on_frame(function()
                                 virtual9 and " (virtual critter pool)" or "")) end)
                         elseif IrisIV.hpmax_tries >= 4 then
                             IrisIV.hpmax_addr = addr   -- stop retrying; the surface refused
+                            -- ⛔ AND MARK IT REFUSED, or the new self-heal re-verify above would
+                            -- drop this latch every 2s and hammer a setter we already know says no
+                            -- (the red-error law). Refused stays refused for this body; a genuinely
+                            -- NEW body clears it below when its address is first tried.
+                            IrisIV.hpmax_refused = addr
                             -- 08-12 STAGE DIAGNOSTICS (round 3 needs receipts, not a third
                             -- guess): which link lied -- no context, an ignored write, or a
                             -- getter that reads a DIFFERENT store than the context?
@@ -30361,6 +31175,74 @@ re.on_frame(function()
     if not ok then _G.IrisIVState = nil end
 end)
 
+-- ═════ BREEDING BIRTH TICK (08-12, slice 1): due mothers deliver when you VISIT ═════
+-- Births happen at the homestead, witnessed -- the new record is home from its first
+-- breath, and the homestead sweep gives it a body like any resident. INHERITANCE: 3 of
+-- 6 genes drawn from the parents (each coin-flipped mum/dad), the rest rolled wild --
+-- bloodlines carry, but the wild never leaves the blood. No luck blessing on birth.
+re.on_frame(function()
+    local now = os.clock()
+    if now < (IrisIV.birth_at or 0.0) then return end
+    IrisIV.birth_at = now + 5.0
+    pcall(function()
+        local st = S.route3_stable
+        if not (st and st.companions) then return end
+        local hb = rawget(_G, "IrisHomesteadBox")
+        if not (hb and hb.near == true) then return end
+        local b = _G.IrisGriffinBridge
+        local day = b and b.breed_day and b.breed_day()
+        if not day then return end
+        for _, mother in ipairs(st.companions) do
+            local br = mother.breeding
+            if type(br) == "table" and day >= (tonumber(br.due_day) or math.huge) then
+                local father = nil
+                for _, r in ipairs(st.companions) do if r.id == br.with then father = r end end
+                local keys = { "hp", "atk", "def", "spd", "size", "luck" }
+                for i = #keys, 2, -1 do
+                    local j = math.random(i); keys[i], keys[j] = keys[j], keys[i]
+                end
+                local iv = {}
+                for i, k in ipairs(keys) do
+                    if i <= 3 then
+                        local src = (math.random() < 0.5) and mother or (father or mother)
+                        iv[k] = math.max(1, math.min(30, math.floor(tonumber(src.iv and src.iv[k]) or math.random(1, 30))))
+                    else
+                        iv[k] = math.random(1, 30)
+                    end
+                end
+                local gender = (math.random() < 0.5) and "female" or "male"
+                local band = tostring(mother.species or ""):match("ch%d+") or "ch299003"
+                local species = tostring(mother.species or "")
+                if band == "ch299220" or band == "ch299221" then
+                    -- the flock's chassis IS the sex: sons are roosters, daughters are hens
+                    species = (gender == "male") and "ch299220_A_00" or "ch299221_A_00"
+                end
+                local child = {
+                    id = "b" .. tostring(os.time()) .. "_" .. tostring(#st.companions + 1),
+                    name = "Little " .. tostring(mother.name or "One"),
+                    species = species, gender = gender, iv = iv,
+                    home = { hs = 1, at = os.time() },
+                    growth_born = day, growth_mature = day + 4,
+                    parents = { mother.id, br.with },
+                }
+                st.companions[#st.companions + 1] = child
+                mother.breeding = nil
+                mother.breed_cd_day = day + 3
+                pcall(function() griffin_stable_write() end)
+                pcall(function()
+                    local T = rawget(_G, "IrisTaming")
+                    if T and T.prompt then T.prompt("A NEW LIFE AT THE HOMESTEAD",
+                        tostring(mother.name or "?") .. "'s young is born - " .. child.name
+                        .. " (" .. gender .. "). Visit the stable to name them.", 10.0, 0xFF80FFB0) end
+                end)
+                pcall(function() log.info("[IrisBreeding] BORN: " .. child.name
+                    .. " (" .. species .. ", " .. gender .. ") of " .. tostring(mother.name)
+                    .. " x " .. tostring(br.sire)) end)
+            end
+        end
+    end)
+end)
+
 -- ⭐⭐ STABLE UI PRIMITIVES (08-11, for IrisStableUI.lua -- the in-game d2d stable screen).
 -- iris_stable_select = the panel's own click-switch flow, extracted verbatim: park the
 -- current soul, forget the body, activate the clicked record, arm the shim + restore.
@@ -30383,6 +31265,392 @@ local function iris_stable_select(id)
     pcall(function() griffin_stable_write() end)
     return true, "selected " .. tostring(comp.name or "?")
 end
+
+-- ═════════════════════════════════════════════════════════════════════════════════════════
+-- ⭐⭐ SEND-HOME RUN-OFF THEATER (Aurora's #15, 2026-08-12)
+--
+-- "When a companion is sent to the homestead while out and not mounted, instead of vanishing in
+-- place it should RUN off in the direction of the homestead and fade/despawn after a few seconds."
+--
+-- ⭐⭐⭐ THE SAFETY PROPERTY THAT SHAPES ALL OF THIS: `comp.home` and `griffin_stable_write()` stay
+-- SYNCHRONOUS inside stable_send_home, exactly where they already were. Only the BODY's destruction
+-- is deferred. So if the theater wedges, the game crashes, or Reset Scripts lands mid-run, the record
+-- on disk already says the companion lives at the homestead. This file owns Aurora's SOULS and has
+-- permanently erased one before (Horz, 08-09, a downed timeout routed into delete_griffin) -- so the
+-- rule here is that no animation may ever sit between a player's intent and the persisted record.
+--
+-- ⛔ THE THEATER NEVER TOUCHES A DELETION PRIMITIVE. It ends in `griffin_dismiss()` and nothing else:
+-- that destroys the BODY and explicitly KEEPS the SOUL. No delete_griffin, no
+-- griffin_stable_remove_active, no stable_release*.
+-- ⛔ AND IT REFUSES OUTRIGHT ON A DOWNED COMPANION. griffin_dismiss already refuses ("a downed
+-- companion is still in its rescue window and cannot be manually banked to evade that consequence"),
+-- so arming a run-off there would animate a refusal that never completes. Both downed tables are
+-- checked, at arm AND every tick, because the downed hook can fire mid-run.
+-- ⚠ There is no alpha-fade API anywhere in this repo, so "fade" = run off, `set_DrawSelf(false)`,
+-- then dismiss on the FOLLOWING frame. Every abort path restores DrawSelf ("never leave it invisible").
+-- ⭐⭐ THE BIRDS FLY OFF (Aurora 08-13: "all the birds should fly off surely?" -- and explicitly
+-- "not the chicken/rooster", which is right: a hen legging it is correct, a hen taking to the air
+-- is not).
+-- ⛔ EVERY ID BELOW IS READ FROM THE VERIFIED ATLAS BY NAME, never guessed -- a wrong clip id on a
+-- think-stopped FSM hard-crashes the game.
+--   crow ch299410 / seabird ch299420 / bird ch299430: 0:5210 <creature>_com_takeoff_normal
+--     then 0:5100 <creature>_com_flight_loop (0:5101 is the glide variant).
+--   bat ch299400: 0:5210 takeoff, but it has NO flight_loop at all -- it HOVERS, so its loop is
+--     0:5000 ch99_400_com_hover_idle_loop. (It also has no ground loop whatsoever, which is why
+--     the bat used to decline the theater entirely and just blink out.)
+-- ⚠ deliberately NOT listed: ch299220 / ch299221 (rooster / hen) -- they keep the ground run.
+local SENDHOME_FLIGHT = {
+    ch299410 = { takeoff = 5210, loop = 5100 },   -- Crow
+    ch299420 = { takeoff = 5210, loop = 5100 },   -- Seabird
+    ch299430 = { takeoff = 5210, loop = 5100 },   -- Bird
+    ch299400 = { takeoff = 5210, loop = 5000 },   -- Bat: hover, not flight
+}
+
+local function sendhome_downed(addr)
+    if not addr then return false end
+    local down = false
+    pcall(function()
+        if type(S.downed) == "table" and S.downed[addr] ~= nil then down = true end
+    end)
+    if not down then
+        pcall(function()
+            local t = rawget(_G, "IrisDownedAddrs")
+            if type(t) == "table" and t[addr] == true then down = true end
+        end)
+    end
+    return down
+end
+
+-- hand the body back to the engine. Called on EVERY exit: arrival, abort, timeout, script reset.
+local function sendhome_release(th, redraw)
+    -- ⭐ ownership is dropped on EVERY exit path, because every exit routes through here: arrival,
+    -- abort, stand-down, timeout, script reset. IrisTaming's critter follow reads this to stand down
+    -- (iris_sendhome_owns) and a stale claim would leave a pet permanently unable to follow.
+    pcall(function() rawset(_G, "IrisSendHomeGoAddr", nil) end)
+    if not th then return end
+    pcall(function() if th.ch then set_think_stop(th.ch, false) end end)
+    pcall(function()
+        local go = th.ch and char_go(th.ch)
+        local fsm = go and go:call("getComponent(System.Type)", sdk.typeof("via.motion.MotionFsm2"))
+        if fsm then fsm:call("set_Enabled", true) end
+        if redraw and go then go:call("set_DrawSelf", true) end
+    end)
+end
+
+-- nearest OWNED and BUILT plot, in UNIVERSAL coords. nil = no homestead, so no theater.
+-- ⚠ `owned ~= false` NOT `owned == true`: every pre-purchase-flow plot is grandfathered with
+-- owned == nil, and the stricter spelling silently drops them (IrisHomesteadBox has that bug).
+local function sendhome_plot(ux, uz)
+    local bx, bz, bd = nil, nil, nil
+    pcall(function()
+        local api = rawget(_G, "IrisHomesteadPlots")
+        for _, pr in ipairs((api and api.list and api.list()) or {}) do
+            if pr.owned ~= false and pr.built ~= false then
+                -- the arrival spot (t*) is proven-valid ground - it is where the player stood to
+                -- buy the plot - so prefer it over the house origin, same as the box's plot_anchor.
+                local px = tonumber(pr.tx or pr.ux)
+                local pz = tonumber(pr.tz or pr.uz)
+                if px and pz then
+                    local dx, dz = px - ux, pz - uz
+                    local d2 = dx * dx + dz * dz
+                    if not bd or d2 < bd then bx, bz, bd = px, pz, d2 end
+                end
+            end
+        end
+    end)
+    return bx, bz
+end
+
+-- arm the run-off. Returns true if the theater owns the exit, false = caller dismisses instantly.
+local function sendhome_arm(id, comp, ch, go)
+    -- ⛔⛔ EVERY VETO NAMES ITSELF (08-13). v1 had NINE silent `return`s, so when Aurora reported
+    -- "the return home still isn't working" the log held NOTHING -- not armed, not aborted, nothing --
+    -- and I could not tell which of nine gates had closed. That is precisely the law this repo
+    -- already wrote down: "every early-return in an effect/spawn path must set a visible status
+    -- string; a silent bail is indistinguishable from 'it played and I didn't see it'." One line per
+    -- refusal turns the next test into an answer instead of another guess.
+    local why = nil
+    if C.sendhome_theater == false then why = "disabled by config"
+    elseif not (comp and ch and go) then why = "no comp/ch/go" end
+    local ok = false
+    if not why then
+    pcall(function()
+        -- ⛔ EVERY VETO. Any of these means another system already owns this body, or the body is
+        -- not in a state that can be driven, so the instant path must run untouched.
+        if S.mounted == true or S.native_climb_mount == true then why = "mounted"; return end
+        if S.route3_proxy_ride_active == true then why = "proxy ride active"; return end
+        if S.route3_pawn_ride_on == true or S.route3_pawn_ride_pawn then why = "pawn riding it"; return end
+        if S.route3_grab and S.route3_grab.carried then why = "carrying prey"; return end
+        if S.oxtame_fly ~= nil then why = "a flight drive owns the body"; return end
+        if is_dead(ch) then why = "dead"; return end
+        if griffin_world_paused() then why = "world paused"; return end
+        -- a horse-kind companion is ridden through a different module entirely; S.mounted is blind to it
+        local hm = rawget(_G, "IrisHorseMount")
+        if hm and hm.is_mounted and hm.is_mounted() == true then why = "ridden (horse module)"; return end
+        local addr = go:get_address()
+        if sendhome_downed(tostring(addr)) then why = "downed"; return end
+        -- ⛔ 08-13 (Aurora's rabbit: "appeared at my side, started running on the spot"): a
+        -- SHOULDER-PERCHED critter is pinned to the player's shoulder joint every frame by
+        -- IrisTaming's late hook. Driving it here is an unwinnable two-writer fight and it looks
+        -- exactly as broken as it sounds. IrisTaming publishes the perched body now; respect it.
+        if tostring(rawget(_G, "IrisTamingPerchGoAddr") or "") == tostring(addr) then
+            why = "riding your shoulder"; return
+        end
+        local up = transform_pos(go)                    -- get_UniversalPosition
+        if not up then why = "no universal position (body mid-stream?)"; return end
+        local tx, tz = sendhome_plot(up.x, up.z)
+        if not tx then why = "no owned+built homestead plot to run toward"; return end
+        -- ⭐ 08-13 (Aurora: "it happened way too fast you couldn't really see anything"): if the
+        -- homestead is already right there, a run-off is 2m of jogging and a pop -- worse than an
+        -- honest instant dismiss. Theater needs somewhere to run TO.
+        local dx0, dz0 = tx - up.x, tz - up.z
+        local pd0 = math.sqrt(dx0 * dx0 + dz0 * dz0)
+        if pd0 < (tonumber(C.sendhome_min_dist) or 12.0) then
+            why = string.format("homestead only %.1fm away (min %.1f) - nowhere to run to",
+                pd0, tonumber(C.sendhome_min_dist) or 12.0)
+            return
+        end
+        -- ⛔ NEVER PAINT A GUESSED CLIP. Ask the species profile that reacquire_griffin already
+        -- applied for this body, prefer run, fall back to its walk, and if the layer refuses both
+        -- (the bat has NO ground locomotion at all; the drake has no run) ABORT the theater rather
+        -- than drive a T-pose across the field.
+        local rb, rid = root_motion_params_for_state("run")
+        local wb, wid = root_motion_params_for_state("walk")
+        S.sendhome = {
+            id = id, comp = comp, ch = ch, t0 = os.clock(), last = os.clock(),
+            tx = tx, tz = tz, traveled = 0.0, phase = "run",
+            deadline = os.clock() + 12.0,               -- hard lease; the run itself wants ~4s
+            clip = { { rb, rid }, { wb, wid }, { 0, 200 }, { 0, 100 } },
+            -- a flier leaves by AIR: resolved from the live body's own chassis band
+            fly = SENDHOME_FLIGHT[tostring(go_name(go) or ""):match("ch%d+") or ""],
+            -- snapshot where the body stood WHEN SHE PRESSED THE KEY. griffin_dismiss ->
+            -- griffin_tamed_save stamps comp.parked from the LIVE body, so a deferred dismiss would
+            -- record the run-off's end point instead. Restored after the dismiss.
+            parked = { x = up.x, y = up.y, z = up.z }, yaw = nil,
+            sx = up.x, sz = up.z,      -- where it STARTED, for the did-we-actually-move test
+        }
+        pcall(function() S.sendhome.yaw = yaw_from_transform(go) end)
+        -- claim the body so IrisTaming's critter follow stands down (it was pulling the rabbit back
+        -- to the player every frame while we pushed it at the homestead)
+        pcall(function() rawset(_G, "IrisSendHomeGoAddr", tostring(addr)) end)
+        ok = true
+    end)
+    end
+    if not ok then S.sendhome = nil end
+    -- ⭐ ONE LINE, EVERY TIME, ARMED OR NOT. This is the receipt that was missing.
+    pcall(function() log.info("[IrisGriffin] send-home theater: "
+        .. (ok and "ARMED (running off)" or ("declined - " .. tostring(why or "unknown")))) end)
+    return ok
+end
+
+-- the per-frame drive. Hosted in its own on_frame below, behind the same sentry every other
+-- per-frame system here uses.
+local function sendhome_tick()
+    local th = S.sendhome
+    if not th then return end
+    local now = os.clock()
+    -- ⛔ paused = nothing of ours moves or acts. WAIT it out (push the lease forward) rather than
+    -- finish, because finishing destroys a body and that is exactly the op the pause law covers.
+    if griffin_world_paused() then
+        th.last = now
+        th.deadline = now + 12.0
+        return
+    end
+    local go = th.ch and char_go(th.ch)
+    local addr = nil
+    pcall(function() addr = go and tostring(go:get_address()) end)
+    -- abort conditions re-checked EVERY tick: the downed hook can fire mid-run, and a body can die
+    -- or be unloaded under us. Two writers on one layer 0 is the documented way to wedge a body.
+    if (not go) or is_dead(th.ch) or sendhome_downed(addr) then
+        sendhome_release(th, true)
+        S.sendhome = nil
+        pcall(function() log.info("[IrisGriffin] send-home theater aborted (body gone/downed) - "
+            .. "the record already says home, so the soul is safe") end)
+        return
+    end
+
+    if th.phase == "run" then
+        local dt = math.max(0.005, math.min(0.1, now - (tonumber(th.last) or now)))
+        th.last = now
+        local up = transform_pos(go)
+        if not up then return end
+        -- ⭐ OWN THE BODY: think-stop + MotionFsm2 off, or the native driver fights every write and
+        -- the hooves slide. Asserted once, on the first tick.
+        if not th.held then
+            th.held = true
+            pcall(function() set_think_stop(th.ch, true) end)
+            pcall(function()
+                local fsm = go:call("getComponent(System.Type)", sdk.typeof("via.motion.MotionFsm2"))
+                if fsm then fsm:call("set_Enabled", false) end
+            end)
+        end
+        -- ⭐ LATCH THE CLIP. Re-issuing changeMotion every frame restarts it at frame 0 - the
+        -- documented hover-anim spam. Try the ladder once, then VERIFY the layer actually took it:
+        -- get_EndFrame > 0 means the clip is real on this rig (the atlas endframe is always 0, so
+        -- the atlas can never tell us this).
+        -- ── FLIERS: takeoff, then the flight (or hover) loop. No ground ladder, no ground abort.
+        if th.fly then
+            if not th.clip_on then
+                th.clip_on = true
+                th.fly_at = now
+                pcall(function()
+                    local layer = th.ch:call("get_Motion"):call("getLayer", 0)
+                    if layer then
+                        layer:call("changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                            0, th.fly.takeoff, 0.0, 4.0, 1, 1)
+                    end
+                end)
+                th.clip_ok = true
+            elseif not th.fly_looped and (now - (tonumber(th.fly_at) or now)) > 0.55 then
+                -- ⭐ LATCH the loop once the takeoff has had its moment. Re-issuing changeMotion
+                -- every frame restarts it at frame 0 -- the documented hover-anim spam.
+                th.fly_looped = true
+                pcall(function()
+                    local layer = th.ch:call("get_Motion"):call("getLayer", 0)
+                    if layer then
+                        layer:call("changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                            0, th.fly.loop, 0.0, 8.0, 1, 1)
+                    end
+                end)
+            end
+        end
+        if not th.fly and not th.clip_on then
+            th.clip_on = true
+            pcall(function()
+                local layer = th.ch:call("get_Motion"):call("getLayer", 0)
+                if not layer then return end
+                for _, c in ipairs(th.clip or {}) do
+                    local b, i = tonumber(c[1]), tonumber(c[2])
+                    if b and i and i >= 0 then
+                        layer:call("changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                            b, i, 0.0, 8.0, 1, 1)
+                        local mid = tonumber(layer:call("get_MotionID")) or -1
+                        local endf = tonumber(layer:call("get_EndFrame")) or 0.0
+                        if mid == i and endf > 0.0 then th.clip_ok = true; break end
+                    end
+                end
+            end)
+            if not th.clip_ok then
+                -- this chassis has no drivable ground loop. Skip the theater entirely rather than
+                -- slide an unanimated body across the grass.
+                sendhome_release(th, true)
+                local comp9 = th.comp
+                S.sendhome = nil
+                pcall(function() log.info("[IrisGriffin] send-home theater: no usable ground clip "
+                    .. "for this chassis - dismissing instantly instead") end)
+                pcall(function() griffin_dismiss() end)
+                if comp9 then pcall(function() griffin_stable_write() end) end
+                return
+            end
+        end
+        -- step toward the plot, in UNIVERSAL space on both sides of the subtraction (the coord law:
+        -- plot anchors are universal and a render-space player read shears apart on a tile rebase)
+        local dx, dz = th.tx - up.x, th.tz - up.z
+        local dd = math.sqrt(dx * dx + dz * dz)
+        if dd < 0.001 then dx, dz, dd = 1.0, 0.0, 1.0 end   -- degenerate overlap: any bearing works
+        -- fliers leave faster and CLIMB: a bird that merely slides along the ground at head height
+        -- is not flying away, it is hovering rudely. Gaining height is most of the read.
+        local spd9 = th.fly and (tonumber(C.sendhome_fly_speed) or 7.0)
+                            or (tonumber(C.sendhome_speed) or 4.2)
+        local step = math.min(dd, spd9 * dt)
+        th.traveled = (tonumber(th.traveled) or 0.0) + step
+        local climb9 = 0.0
+        if th.fly then
+            -- a short beat on the ground for the takeoff clip to read, then climb away
+            if (now - (tonumber(th.fly_at) or now)) > 0.35 then
+                climb9 = (tonumber(C.sendhome_fly_climb) or 2.6) * dt
+            end
+        end
+        pcall(function()
+            local pos = make_position(up.x + dx / dd * step, up.y + climb9, up.z + dz / dd * step)
+            local rot = make_quat_yaw(math.atan(dx, dz))
+            -- ⭐ BOTH position channels. Universal alone renders correctly for a few seconds and then
+            -- the engine reconciles from its cached ordinary Position and snaps the body back.
+            iris_oxtame_apply_transform(th.ch, go, pos, rot)
+        end)
+        -- ⭐⭐ DID WE ACTUALLY WIN THE BODY? (08-13, the rabbit.) A perch veto fixes the one thief we
+        -- know about, but enumerating thieves is a losing game -- carries, nav controllers, another
+        -- module's pin, anything. So MEASURE instead: after 1.5s of driving, if the body has not
+        -- genuinely gained ground, somebody else owns it. Stand down and take the instant path rather
+        -- than show a creature running on the spot for six seconds.
+        -- ⚠ Compares REAL displacement from the start point (a multi-second window, not one frame) --
+        -- th.traveled is only what we ASKED for, which is why it cannot be the test.
+        if not th.checked and (now - th.t0) >= 1.5 then
+            th.checked = true
+            local moved = 0.0
+            pcall(function()
+                local dxm, dzm = up.x - th.sx, up.z - th.sz
+                moved = math.sqrt(dxm * dxm + dzm * dzm)
+            end)
+            -- ⛔ 08-13 THE THRESHOLD WAS USELESS. "moved < 1.5" absolute, while a 1.5s window at
+            -- 4.2 m/s ASKS for ~6.3m -- so a rabbit that shuffled 2m and then stood still sailed
+            -- through, ran on the spot for six seconds, and never logged a stand-down. The test has
+            -- to be RELATIVE to what we asked for: if the body delivered less than 40% of the
+            -- requested displacement, we are not driving it, something else is.
+            if moved < math.max(1.0, (tonumber(th.traveled) or 0.0) * 0.4) then
+                sendhome_release(th, true)
+                S.sendhome = nil
+                pcall(function() log.info(string.format(
+                    "[IrisGriffin] send-home theater STOOD DOWN: body moved %.2fm in 1.5s (asked for "
+                    .. "%.2fm) - another system owns it; dismissing instantly", moved, th.traveled)) end)
+                pcall(function() griffin_dismiss() end)
+                return
+            end
+        end
+        -- ⚠ THE ONE-FRAME LAW: the end condition is TIME and ACCUMULATED travel, both summed across
+        -- frames. Never "am I far enough" from a single get_UniversalPosition read - a body can
+        -- briefly publish a cached route position and one read of that is how the runaway guard used
+        -- to see 310m turn into 718m.
+        -- 08-13 timings, tuned after Aurora couldn't see it: 6s of running at ~4.2 m/s is ~25m, far
+        -- enough to read as "she's leaving" instead of a blink. dd<2.0 only matters if she genuinely
+        -- reaches the plot; the old 3.0 could satisfy on frame one when the plot was close.
+        if (now - th.t0) >= (tonumber(C.sendhome_secs) or 6.0)
+            or th.traveled >= (tonumber(C.sendhome_max_dist) or 32.0)
+            or dd < 2.0 or now >= (tonumber(th.deadline) or 0) then
+            th.phase = "vanish"
+            pcall(function() go:call("set_DrawSelf", false) end)
+        end
+        return
+    end
+
+    -- phase "vanish": one frame later, hand the body back and let the ORIGINAL primitive do the
+    -- destroying, then repair the parked stamp the deferral moved.
+    sendhome_release(th, false)
+    local comp9, parked9, yaw9 = th.comp, th.parked, th.yaw
+    S.sendhome = nil
+    local okd = pcall(function() griffin_dismiss() end)
+    if not okd then
+        -- dismiss refused or threw: the body must NOT be left invisible and frozen
+        pcall(function()
+            local go2 = th.ch and char_go(th.ch)
+            if go2 then go2:call("set_DrawSelf", true) end
+        end)
+    end
+    pcall(function()
+        if comp9 and parked9 then
+            comp9.parked = { x = parked9.x, y = parked9.y, z = parked9.z }
+            if yaw9 then comp9.yaw = yaw9 end
+            griffin_stable_write()
+        end
+    end)
+    pcall(function() log.info("[IrisGriffin] send-home theater done (dismiss ok=" .. tostring(okd)
+        .. ") - parked stamp restored to the spot she was sent from") end)
+end
+
+re.on_frame(function()
+    if griffin_world_sentry() ~= true then return end
+    safe_run("sendhome_theater", sendhome_tick)
+end)
+
+-- ⛔ Reset Scripts mid-theater would strand a think-stopped, FSM-disabled, INVISIBLE statue: the
+-- probe's own reset handler deliberately does not destroy the companion body. Hand it back.
+re.on_script_reset(function()
+    local th = S.sendhome
+    if th then
+        sendhome_release(th, true)
+        S.sendhome = nil
+    end
+end)
 
 _G.IrisGriffinBridge = {
     -- ── STABLE UI API (08-11) ────────────────────────────────────────────────
@@ -30429,15 +31697,22 @@ _G.IrisGriffinBridge = {
                 local rate9 = math.max(0.0, tonumber(C.route3_stable_regen_hp_per_sec) or 1.0)
                 hp9 = math.min(hpmax9, math.max(0.0, hp9) + math.max(0, os.time() - since9) * rate9)
             end
-            -- 08-12 unicorn DISPLAY pool: same scaling as the companion bar
-            -- (native max is walled; the damage hook makes base_hp effective)
-            if r.variant == "unicorn" and hp9 and hpmax9 and hpmax9 > 0 then
-                local want9 = 1000
+            -- 08-12 horse/unicorn DISPLAY pool: same scaling as the companion
+            -- bar (native max is walled; the damage hook makes base_hp
+            -- effective). Bloodlines: the HP gene multiplies the pool with
+            -- the SAME curve as IrisIV.mults (1 + g/30*0.5).
+            if r.kind == "horse" and hp9 and hpmax9 and hpmax9 > 0 then
+                local pool9 = (r.variant == "unicorn") and 1000 or 250
                 pcall(function()
                     local api9 = rawget(_G, "__iris_wild_horses_api")
-                    want9 = (api9 and api9.unicorn_base_hp
-                        and api9.unicorn_base_hp()) or want9
+                    if r.variant == "unicorn" and api9
+                        and api9.unicorn_base_hp then
+                        pool9 = api9.unicorn_base_hp() or pool9
+                    end
                 end)
+                local g9 = r.iv and tonumber(r.iv.hp)
+                local want9 = math.floor(
+                    pool9 * (g9 and (1.0 + g9 / 30.0 * 0.5) or 1.0) + 0.5)
                 if want9 > hpmax9 then
                     hp9 = hp9 * (want9 / hpmax9)
                     hpmax9 = want9
@@ -30447,10 +31722,16 @@ _G.IrisGriffinBridge = {
                 id = r.id, name = r.name, gender = r.gender, label = label,
                 species = r.species, kind = r.kind, variant = r.variant,
                 iv = r.iv, wyrm = r.wyrm and true or nil, hatch = r.hatch and true or nil,
+                wild_base = tonumber(r.wild_base),   -- 08-13: home bodies wear the SAME innate variance
                 hp = hp9, hp_max = hpmax9,
                 home = r.home and true or nil,
+                home_pin = (type(r.home) == "table" and r.home.pin) or nil,
                 active = (st.active == r.id) or nil,
                 live = (live_id == r.id and S.griffin ~= nil) or nil,
+                -- breeding (08-12): the UI shows "Carrying"; the homestead scales newborns
+                carrying = (type(r.breeding) == "table")
+                    and { sire = r.breeding.sire, due_day = r.breeding.due_day } or nil,
+                growth_born = r.growth_born, growth_mature = r.growth_mature,
             }
         end
         return out
@@ -30528,7 +31809,20 @@ _G.IrisGriffinBridge = {
         if comp.home then return false, "already at the homestead" end
         if S.live_rec_id == id and S.griffin and char_go(S.griffin) then
             if S.mounted == true then return false, "dismount first" end
-            pcall(function() griffin_dismiss() end)
+            -- ⭐⭐ RUN-OFF THEATER (Aurora's #15, 08-12): she should run toward the homestead and
+            -- fade rather than blink out at your feet. sendhome_arm takes ownership of the BODY's
+            -- exit and returns true; every veto inside it (mounted by any module, carrying prey,
+            -- a flight drive already driving, dead, downed, paused, no owned+built plot, no
+            -- drivable ground clip for this chassis) falls back to the instant dismiss below,
+            -- which is the behaviour that shipped.
+            -- ⛔ THE RECORD WRITE BELOW IS NOT DEFERRED WITH IT, AND MUST NEVER BE. Only the body's
+            -- destruction waits. comp.home + griffin_stable_write land in THIS call, so a wedged
+            -- theater, a crash, or a Reset Scripts mid-run all leave the companion correctly
+            -- recorded at the homestead. This file has permanently erased a soul once; an
+            -- animation never gets to sit between the player's intent and the persisted record.
+            if not sendhome_arm(id, comp, S.griffin, char_go(S.griffin)) then
+                pcall(function() griffin_dismiss() end)
+            end
         end
         comp.home = { hs = 1, at = os.time() }
         pcall(function() griffin_stable_write() end)
@@ -30808,7 +32102,9 @@ _G.IrisGriffinBridge = {
         if big then
             pcall(function() griffin_apply_body_scale(had and tonumber(C.spawn_scale) or tonumber(C.route3_tame_scale) or 0.75) end)
         else
-            pcall(function() griffin_apply_body_scale(1.0) end)
+            -- 08-12 (Aurora: "they change size when tamed"): NO 1.0 snap -- the body keeps
+            -- its wild scale and the perpetual easer converges to target x wild_base x gene,
+            -- which IS the wild size. The seal changes nothing visible.
         end
         local st = S.route3_stable or { active = nil, companions = {} }
         S.route3_stable = st; st.companions = st.companions or {}
@@ -30822,11 +32118,11 @@ _G.IrisGriffinBridge = {
             or (species:find("ch299", 1, true) and "Critter") or "Companion"
         -- ⭐ WILD BLOOD CARRY (08-11): if IrisWildBlood already rolled this body's genes
         -- in the wild, the tame KEEPS them -- the big one you scouted stays the big one
-        local wild_iv = nil
+        local wild_iv, wild_base = nil, nil
         pcall(function()
             local wb = rawget(_G, "IrisWildBlood")
             local ga = char_go(ch) and char_go(ch):get_address()
-            if wb and wb.take and ga then wild_iv = wb.take(ga) end
+            if wb and wb.take and ga then wild_iv, wild_base = wb.take(ga) end
         end)
         -- TAME BLESSING: read the PREVIOUS active companion's luck BEFORE this record
         -- becomes active (st.active still points at the old soul here)
@@ -30838,7 +32134,8 @@ _G.IrisGriffinBridge = {
         local rec = { id = "c" .. tostring(os.time()) .. "_" .. tostring(#st.companions + 1), name = nm, species = species,
             kind = companion_kind ~= "" and companion_kind or nil,
             variant = companion_variant ~= "" and companion_variant or nil,
-            iv = IrisIV.roll(bless9),
+            iv = wild_iv or IrisIV.roll(bless9),
+            wild_base = tonumber(wild_base),   -- the body's innate variance, kept for life
             gender = (gender == "female" or gender == "male") and gender or ((math.random() < 0.5) and "female" or "male") }
         st.companions[#st.companions + 1] = rec; st.active = rec.id
         S.live_rec_id = rec.id   -- the tamed body IS this record, whatever was stamped at register
@@ -30895,6 +32192,98 @@ _G.IrisGriffinBridge = {
         S.route3_tamed_restore_at = os.clock() + 2.0
         S.route3_tame_status = rec.name .. " hatches -> stable"; status(S.route3_tame_status)
         return rec.gender, rec.name
+    end,
+    -- ═════ BREEDING (08-12, slice 1 -- the record core; design: iris-breeding-design) ═════
+    -- The homestead is the nursery: both parents HOME, opposite chassis-true genders, same
+    -- species group (the fowl bands are one flock). Birth = a new HOME record -- the
+    -- homestead sweep gives it a body like any other resident.
+    breed_day = function()
+        local d = nil
+        pcall(function()
+            local tm = sdk.get_managed_singleton("app.TimeManager")
+            d = tm and tonumber(tm:call("get_InGameDay"))
+        end)
+        return d
+    end,
+    breed_eligible = function()
+        local st = S.route3_stable
+        if not (st and st.companions) then return nil, nil, "stable not loaded" end
+        local day = (_G.IrisGriffinBridge.breed_day() or 0)
+        local function group(sp)
+            local band = tostring(sp or ""):match("ch%d+") or "?"
+            if band == "ch299220" or band == "ch299221" then return "fowl" end
+            return band
+        end
+        for i, a in ipairs(st.companions) do
+            for j = i + 1, #st.companions do
+                local b = st.companions[j]
+                if a.home and b.home and a.gender and b.gender and a.gender ~= b.gender
+                    and group(a.species) == group(b.species)
+                    and not a.breeding and not b.breeding
+                    and day >= (tonumber(a.breed_cd_day) or 0)
+                    and day >= (tonumber(b.breed_cd_day) or 0) then
+                    local mother = (a.gender == "female") and a or b
+                    local father = (a.gender == "female") and b or a
+                    return mother, father
+                end
+            end
+        end
+        return nil, nil, "no eligible pair (both must LIVE at the homestead, opposite genders, same kind)"
+    end,
+    breed_start = function(mother_id, father_id)
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        local mother, father = nil, nil
+        for _, r in ipairs(st.companions) do
+            if r.id == mother_id then mother = r end
+            if r.id == father_id then father = r end
+        end
+        if not (mother and father) then return false, "unknown pair" end
+        if mother.breeding then return false, tostring(mother.name or "?") .. " is already carrying" end
+        local day = _G.IrisGriffinBridge.breed_day()
+        if not day then return false, "no game clock" end
+        local band = tostring(mother.species or ""):match("ch%d+") or ""
+        local gest = 2   -- critters
+        if band == "ch253000" or band:find("ch257", 1, true) or band == "ch254000"
+            or band == "ch258000" or band == "ch260000" then gest = 5
+        elseif band == "ch299003" or band:find("ch223", 1, true) or band == "ch299011" then gest = 3 end
+        mother.breeding = { with = father.id, sire = tostring(father.name or "?"), due_day = day + gest }
+        pcall(function() griffin_stable_write() end)
+        pcall(function()
+            local T = rawget(_G, "IrisTaming")
+            if T and T.prompt then T.prompt("A NEW BLOODLINE BEGINS",
+                tostring(mother.name or "?") .. " carries " .. tostring(father.name or "?")
+                .. "'s young - due in " .. tostring(gest) .. " days.", 8.0, 0xFF80FFB0) end
+        end)
+        pcall(function() log.info(string.format("[IrisBreeding] %s x %s: due day %d",
+            tostring(mother.name), tostring(father.name), day + gest)) end)
+        return true, "the pact is made"
+    end,
+    set_home_pin = function(id, x, y, z)
+        -- 08-12 (the Homestead Screen's spawn pins, shipped early): a home soul gets a
+        -- PERSONAL spawn spot -- where the player stood when pinning. The homestead
+        -- spawner prefers it over the ring, and the navmesh correction warps to it.
+        local st = S.route3_stable
+        if not (st and st.companions) then return false, "stable not loaded" end
+        for _, r in ipairs(st.companions) do
+            if r.id == id then
+                if type(r.home) ~= "table" then return false, "not living at the homestead" end
+                r.home.pin = { x = tonumber(x), y = tonumber(y), z = tonumber(z) }
+                pcall(function() griffin_stable_write() end)
+                return true, tostring(r.name or "?") .. "'s spot is set"
+            end
+        end
+        return false, "unknown soul"
+    end,
+    breed_force_due = function()
+        local st = S.route3_stable
+        local day = _G.IrisGriffinBridge.breed_day() or 0
+        local n = 0
+        for _, r in ipairs((st and st.companions) or {}) do
+            if type(r.breeding) == "table" then r.breeding.due_day = day; n = n + 1 end
+        end
+        pcall(function() griffin_stable_write() end)
+        return n > 0, tostring(n) .. " carrying soul(s) now due"
     end,
     -- growth tick (IrisTaming calls this every few seconds): ease the active hatchling's scale
     -- along its in-game-day growth curve; at full size the hatch record retires for good
@@ -31090,7 +32479,10 @@ _G.IrisGriffinBridge = {
         -- unicorn is invisible to that side and comes back an ordinary horse.
         local r = griffin_stable_live_rec()
         if not r then return nil end
-        return { name = r.name, gender = r.gender, species = r.species, kind = r.kind, variant = r.variant }
+        -- 08-12 Bloodlines sync: `iv` projected so IrisWildHorses' stable
+        -- restore can scale the horse/unicorn pool from the HP gene
+        return { name = r.name, gender = r.gender, species = r.species,
+                 kind = r.kind, variant = r.variant, iv = r.iv }
     end,
     -- the taming rite lets the player NAME the new companion; these carry that name into the
     -- stable record + the panel (without them the given name was silently dropped)
@@ -32089,7 +33481,32 @@ _G.IrisGriffinBridge = {
     body_scale = function()
         -- the ACTIVE companion's true body scale (species base / wyrm growth) -- the taming
         -- side restores THIS on shoulder set-down, never a hard-coded 1.0
-        return tonumber(S.route3_scale_target) or 1.0
+        --
+        -- ⛔⛔⛔ THE SHOULDER "GROWTH", SOLVED 2026-08-13 (Aurora, after four wrong rounds).
+        -- route3_scale_target is the BASE. The size gene is multiplied in exactly one place --
+        -- the easer at IrisGriffin/stable.lua:496 -- so this getter was handing out a
+        -- GENE-STRIPPED number. For every critter except the rat that number is literally 1.00.
+        -- IrisTaming writes it verbatim on shoulder SET-DOWN (IrisTaming.lua:14939) and on a
+        -- perch-transition TIMEOUT (:13722), so every time a companion came off the shoulder it
+        -- was slammed to 1.00 and then crawled back to its true size at the easer's 2%/frame --
+        -- about six seconds of visible swelling.
+        --
+        -- That is the whole bug. The perch NEVER scaled anything: a read-only probe
+        -- (!IrisPerchSizeProbe.lua) measured LocalScale 1.6000, WorldScale 1.6000, parent depth 0,
+        -- root joint 1.0000 and a render AABB ratio of 0.995x between ground and shoulder --
+        -- identical bodies. The SHOULDER was the only place the creature ever reached full size;
+        -- the GROUND was being suppressed. Four sessions removed scale writes from the perch
+        -- path, which was always going to fail, because there were none there to remove.
+        --
+        -- ⇒ the gene belongs on every number that leaves here. One multiply, both call sites.
+        local base = tonumber(S.route3_scale_target) or 1.0
+        local m = 1.0
+        pcall(function()
+            if type(iris_iv_size_mult) == "function" then
+                m = tonumber(iris_iv_size_mult(base)) or 1.0
+            end
+        end)
+        return base * m
     end,
     scout_flyback_done = function()
         return (not S.scout_flyback) or (S.scout_flyback.arrived == true)
@@ -34604,15 +36021,24 @@ function iris_companion_hp_tick()
     -- player this IS 1000 HP.
     pcall(function()
         local api = rawget(_G, "__iris_wild_horses_api")
-        local want = api and api.display_max_hp and api.display_max_hp(go)
+        -- 08-12 (Aurora: "a flash of 1000/1000 before it changes, every
+        -- summon"): the registry's gene-scaled base_hp lands a second AFTER
+        -- the variant stamp, so the api briefly answered the plain species
+        -- pool. The STABLE RECORD knows the gene from frame one and uses the
+        -- SAME curve -- ask it FIRST; the api is the fallback.
+        local want = nil
+        local r0 = griffin_stable_live_rec()
+        if type(r0) == "table" and r0.kind == "horse" then
+            local pool0 = (r0.variant == "unicorn")
+                and ((api and api.unicorn_base_hp and api.unicorn_base_hp())
+                    or 1000) or 250
+            local g0 = r0.iv and tonumber(r0.iv.hp)
+            local want0 = math.floor(
+                pool0 * (g0 and (1.0 + g0 / 30.0 * 0.5) or 1.0) + 0.5)
+            if want0 > 250.5 then want = want0 end
+        end
         if not want then
-            -- the registry needs ~a second after summon to stamp the variant
-            -- (the momentary "250" flash) -- the STABLE RECORD already knows
-            local r0 = griffin_stable_live_rec()
-            if type(r0) == "table" and r0.variant == "unicorn" then
-                want = (api and api.unicorn_base_hp and api.unicorn_base_hp())
-                    or 1000
-            end
+            want = api and api.display_max_hp and api.display_max_hp(go)
         end
         if want and want > hpmax then
             local k = want / hpmax
@@ -35320,25 +36746,52 @@ re.on_draw_ui(function()
             dkas, C.route3_air_seat = imgui.checkbox(
                 "AIR SEAT (the drake flight fix)##c_drk_airseat", C.route3_air_seat == true)
             if dkas then save_config() end
-            imgui.text(string.format("seat: %s | relatch: %s",
+            local dklv
+            dklv, C.route3_air_seat_levitate = imgui.checkbox(
+                "LEVITATE HOLD (untick = old puppet mode)##c_drk_levitate",
+                C.route3_air_seat_levitate ~= false)
+            if dklv then save_config() end
+            local dkq
+            dkq, C.route3_air_seat_quiet = imgui.checkbox(
+                "mute levitate's hum + glow in flight##c_drk_quiet",
+                C.route3_air_seat_quiet ~= false)
+            if dkq then save_config() end
+            imgui.text("   " .. tostring(S.route3_air_quiet_note or "(nothing muted yet)"))
+            imgui.text(string.format("seat: %s | relatch: %s | pose: %s",
                 tostring(S.route3_air_seat_status or (S.route3_air_seat_on == true and "ON" or "off")),
-                tostring(S.route3_air_relatch_status or "-")))
-            imgui.text(string.format("shakes vetoed=%d/%d   fades vetoed=%d/%d",
-                tonumber(S.route3_camvib_veto_count) or 0, tonumber(S.route3_camvib_count) or 0,
-                tonumber(S.route3_fade_veto_count) or 0, tonumber(S.route3_fade_req_count) or 0))
-            local dkc1, dkc2, dkc3
-            dkc1, C.route3_air_seat_cam = imgui.checkbox(
-                "flight camera (untick = the game's default view)##c_drk_seatcam",
-                C.route3_air_seat_cam ~= false)
-            if dkc1 then save_config() end
-            dkc2, C.route3_air_seat_cam_dist = imgui.drag_float(
-                "camera distance##c_drk_seatcamdist",
-                tonumber(C.route3_air_seat_cam_dist) or 9.0, 0.1, 3.0, 30.0)
-            if dkc2 then save_config() end
-            dkc3, C.route3_air_seat_cam_height = imgui.drag_float(
-                "camera height##c_drk_seatcamh",
-                tonumber(C.route3_air_seat_cam_height) or 3.0, 0.1, 0.0, 15.0)
-            if dkc3 then save_config() end
+                tostring(S.route3_air_relatch_status or "-"),
+                S.route3_air_seat_pose == true and "riding" or "(none - rs_anim_lab off?)"))
+            imgui.text_colored("state: " .. tostring(S.route3_air_lev_state or "-")
+                .. " | action: " .. tostring(_G.IrisPlayerActionNode or "-"), 0xFF80FFD0)
+            imgui.text("anchor: " .. tostring(S.route3_rider_lock_status or "-"))
+            imgui.text("rig: " .. tostring(S.route3_air_joint_note or "(no dump yet)"))
+            local dks1, dks2
+            -- ⛔ v21: the floor was 0.0, so if the seat point sat ABOVE the back this slider
+            -- could not reach the fix at all -- "tune it with the sliders" was never possible.
+            -- The drake's "root" joint is NOT at ground level like the griffin's, so the same
+            -- +2.3 that seats a griffin puts her metres over a drake.
+            dks1, C.route3_seat_offset_y = imgui.drag_float(
+                "seat height on her back (can go negative)##c_drk_seaty",
+                tonumber(C.route3_seat_offset_y) or 2.3, 0.05, -12.0, 12.0)
+            if dks1 then save_config() end
+            dks2, C.route3_seat_offset_z = imgui.drag_float(
+                "seat forward/back (+ = toward the head)##c_drk_seatz",
+                tonumber(C.route3_seat_offset_z) or 1.6, 0.05, -8.0, 8.0)
+            if dks2 then save_config() end
+            local dkcd
+            dkcd, C.route3_drake_cam_dist = imgui.drag_float(
+                "camera distance (native camera, stick works)##c_drk_camdist",
+                tonumber(C.route3_drake_cam_dist) or 15.0, 0.25, 4.0, 80.0)
+            if dkcd then save_config() end
+            imgui.text("   cam fields: " .. tostring(S.route3_camfield_note or "(not mounted yet)"))
+            local dkpm
+            local cling_on = tostring(C.route3_air_seat_pose_mode or "cling") == "cling"
+            dkpm, cling_on = imgui.checkbox(
+                "grab-on pose in flight (untick = Wilds riding pose)##c_drk_posemode", cling_on)
+            if dkpm then
+                C.route3_air_seat_pose_mode = cling_on and "cling" or "wilds"
+                save_config()
+            end
             local dk1, dk2
             dk1, C.route3_loopcam = imgui.checkbox(
                 "cinematic camera on ascend/descend##c_drk_loopcam", C.route3_loopcam ~= false)
@@ -36444,11 +37897,28 @@ re.on_script_reset(function()
     S.route3_txi_live = false
     S.route3_our_write = false
     S.route3_rider_pose_gate_until = nil
+    -- v14: restore any overridden camera BaseDistance BEFORE S dies (a reload wipes the
+    -- saved originals while the field would stay overridden = far-camera-on-foot leak)
+    pcall(iris_camdist_restore)
+    -- v18: and give back every effect/sound component the quiet sweep muted -- a reload wipes
+    -- the restore list, so a mid-flight reset would leave her permanently silent and glowless
+    pcall(iris_air_seat_quiet_sweep, false)
+    if S.route3_air_lev_mode == true then
+        S.route3_air_lev_mode = nil
+        pcall(function() iris_air_seat_player_action("NormalLocomotion", 0, 0) end)
+    end
     -- v12 air seat (statue law, exit 3 of 3): drop the latch and release the puppet
     -- explicitly -- a reset mid-flight must never strand an FSM-off rider
     S.route3_air_seat_on = false
     S.route3_air_seat_air_since = nil
     S.route3_air_relatch_check_at = nil
+    if S.route3_airseat_cam_parked == true then
+        S.route3_airseat_cam_parked = nil
+        pcall(function()
+            griffin_loopcam_cam_switch(tonumber(S.route3_loopcam_game_ct) or 0)
+            S.route3_loopcam_cam_ct = nil
+        end)
+    end
     pcall(function()
         local pl = get_player()
         local at = pl and pl:get_field("<AdjustTerrain>k__BackingField")
