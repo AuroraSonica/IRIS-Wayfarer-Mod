@@ -632,6 +632,12 @@ end
 
 -- ── the GHOST (Ark-style carry: floats ahead, you walk it into place) ────────────────────
 local ghost = nil   -- { entry, go, dist, h, yaw, pending, frozen }
+-- 08-13 LOAD HYGIENE: these globals survive script resets, and a reset mid-screen /
+-- mid-placement strands them true - which walls the outbuildings sign dialog
+-- (its _other_ui_busy reads them) and the world prompts forever
+_G.IrisFurnishUIOpen = false
+_G.IrisFurnishFootprint = false
+_G.IrisFurnishPlacing = false
 local function _drop_ghost(destroy)
     -- a MOVE that never got re-placed must NOT vanish the piece (Aurora: "sold a bed without
     -- a confirmation" = the A-move pickup lost the record on cancel). Restore it.
@@ -642,6 +648,7 @@ local function _drop_ghost(destroy)
     end
     if ghost and ghost.go and destroy then pcall(function() ghost.go:call("destroy", ghost.go) end) end
     ghost = nil
+    _G.IrisFurnishPlacing = false   -- 08-13: world prompts return when placement ends
 end
 local function _start_ghost(entry, drive)
     if dlg.open then return end
@@ -651,6 +658,8 @@ local function _start_ghost(entry, drive)
     local fx, fz = _pfwd()
     ghost = { entry = entry, dist = 3.5, h = 0.0, yaw = 0.0, pitch = 0.0, roll = 0.0,
         pending = true, drive = drive or nil }
+    _G.IrisFurnishPlacing = true   -- 08-13 (Aurora: "the prompt is still showing in
+    -- the item moving"): PromptBar reads this - no Milk/egg labels over a placement
     _log("ghost requested: " .. entry.gid .. " '" .. entry.label .. "'" .. (drive and " (drive)" or ""))
     local ok = _queue_spawn(entry.gid, up.x + fx * 3.5, up.y, up.z + fz * 3.5, 0,
         function(go)
@@ -1166,6 +1175,15 @@ SCR.draw = function()
                 SCR.txt(type(r.home_pin) == "table" and "Spawn pin: set (spawns at its pinned spot)"
                     or "Spawn pin: none (spawns near the house)", rx + 10.0 * sc, by, COLS.dimtxt)
                 by = by + 30.0 * sc
+                pcall(function()
+                    local ap9 = rawget(_G, "IrisAnimalProduce")
+                    local st9 = ap9 and ap9.status and ap9.status(r.id, r.species, r.gender) or nil
+                    if st9 and st9.label then
+                        SCR.txt(st9.label, rx + 10.0 * sc, by,
+                            st9.ready and COLS.alive or COLS.dimtxt)
+                        by = by + 30.0 * sc
+                    end
+                end)
                 local hp, hpmax = tonumber(r.hp), tonumber(r.hp_max)
                 if hp and hpmax and hpmax > 0 then
                     SCR.txt("Health", rx + 10.0 * sc, by, COLS.body)
@@ -1433,10 +1451,19 @@ re.on_application_entry("UpdateBehavior", function()
                     -- fixed it. So placing now does exactly what reloading does: the ghost dies
                     -- and a real piece spawns at the final coordinates, collision and all.
                     local gidx = #placed
+                    local keep_camera = UI.cam_go == ghost.go
                     pcall(function() ghost.go:call("destroy", ghost.go) end)
                     _queue_spawn(rec.gid, rec.ux, rec.uy, rec.uz, rec.yaw,
                         function(go)
                             _protect(go); _apply_xform(go, rec); live[gidx] = go
+                            -- The real collision-bearing replacement occupies the ghost's
+                            -- final position.  Hand the camera to it without resetting orbit,
+                            -- distance or elevation, so confirming a placement does not snap
+                            -- the view back to the last object/player.
+                            if keep_camera and UI.open then
+                                UI.cam_go = go
+                                _cam("set_target", go, true)
+                            end
                             -- ⛔ ONE WRITE IS NOT ENOUGH. _apply_xform lands at spawn-complete,
                             --   but the piece then finishes its cold bind and re-settles onto the
                             --   angle the generator gave it via setInitialAngle — which is why
@@ -1551,7 +1578,7 @@ re.on_application_entry("UpdateBehavior", function()
             pcall(function() ago = _G.IrisForge and _G.IrisForge.preview_anchor and _G.IrisForge.preview_anchor() end)
             if ago and UI.cam_go ~= ago then
                 UI.cam_go = ago
-                _cam("set_target", ago)
+                _cam("set_target", ago, true)
                 _cam("set_on", true)
             end
             if ago then _cam("set_heading", 0) end
@@ -1777,7 +1804,7 @@ re.on_application_entry("UpdateBehavior", function()
         -- ── LOCK-IN two-stage flow (Aurora: "I've pressed the wrong button and lost the
         -- item a few too many times"): BROWSING = nav lives, steering dead. A locks the
         -- piece IN: nav dead, steering lives. A again places; B unlocks back to browsing.
-        local locked = ghost and ghost.locked and ghost.go
+        local locked = ghost and ghost.locked
         local xmod = gheld(PAD.face.x)
         if not locked then
             local gdir = nil
@@ -1798,8 +1825,42 @@ re.on_application_entry("UpdateBehavior", function()
         end
         if b_hit and not dlg.open then
             if locked then
-                ghost.locked = nil   -- unlock: back to browsing, the preview survives
-                M.last = "unlocked - browse again, A locks the piece in"
+                if ghost.repick and ghost.moving_rec then
+                    -- B on an existing piece means CANCEL THE MOVE, not merely unlock a
+                    -- recordless preview.  Restore the record and keep the already-spawned
+                    -- object as its live copy so it never vanishes until the menu is reopened.
+                    local rec9 = ghost.moving_rec
+                    placed[#placed + 1] = rec9
+                    local idx9 = #placed
+                    _save_placed()
+                    UI.preview_want = nil
+                    for ci9, cn9 in ipairs(ac) do if cn9 == "PLACED" then UI.cat_i = ci9 break end end
+                    UI.row = 1
+                    for ri9, rr9 in ipairs(_rows_for_cat()) do
+                        if rr9.placed_i == idx9 then UI.row = ri9 break end
+                    end
+                    UI.last_sel = nil
+                    ghost.placed_done = true
+                    ghost.moving_rec = nil
+                    ghost.locked = nil
+                    if ghost.go then
+                        _apply_xform(ghost.go, rec9)
+                        live[idx9] = ghost.go
+                        UI.cam_go = ghost.go
+                        _cam("set_target", ghost.go, true)
+                        ghost.go = nil
+                        ghost = nil
+                        _G.IrisFurnishPlacing = false
+                    else
+                        -- The replacement is still in the spawn queue.  Its callback below
+                        -- will become the restored live piece instead of an orphan preview.
+                        ghost.cancel_restore = { rec = rec9, idx = idx9 }
+                    end
+                    M.last = tostring(rec9.label) .. " move cancelled - restored"
+                else
+                    ghost.locked = nil   -- new preview: unlock back to browsing
+                    M.last = "unlocked - browse again, A locks the piece in"
+                end
                 return
             end
             _close_shop(); return
@@ -1845,6 +1906,15 @@ re.on_application_entry("UpdateBehavior", function()
                     pitch = rec.pitch or 0, roll = rec.roll or 0, scale = rec.scale or 1.0 }
                 _queue_spawn(rec.gid, rec.ux, rec.uy, rec.uz, rec.yaw, function(go)
                     if ghost and ghost.pending then
+                        if ghost.cancel_restore then
+                            local cr9 = ghost.cancel_restore
+                            _protect(go); _apply_xform(go, cr9.rec); live[cr9.idx] = go
+                            UI.cam_go = go
+                            _cam("set_target", go, true)
+                            ghost = nil
+                            _G.IrisFurnishPlacing = false
+                            return
+                        end
                         ghost.go = go; ghost.pending = nil
                         _protect(go)
                         local p; pcall(function() p = go:call("get_Transform"):call("get_Position") end)
@@ -1876,7 +1946,7 @@ re.on_application_entry("UpdateBehavior", function()
                 UI.cam_go = ghost.go
                 -- TARGET FIRST, then on: set_on(true) with no subject REFUSES and stays off
                 -- (Aurora's "camera locked on the Arisen" - the vanilla cam never yielded)
-                _cam("set_target", ghost.go)
+                _cam("set_target", ghost.go, true)
                 _cam("set_on", true)
             end
             -- pin the orbit frame to WORLD heading 0: without this the cam orbits the item's
@@ -2191,6 +2261,7 @@ re.on_script_reset(function()
     for k in pairs(live) do live[k] = nil end
     jobs = {}
     ghost = nil
+    _G.IrisFurnishPlacing = false
 end)
 
 -- ── UI ───────────────────────────────────────────────────────────────────────────────────

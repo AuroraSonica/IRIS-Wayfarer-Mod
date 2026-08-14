@@ -506,6 +506,8 @@ function griffin_tamed_tick()
                 end
             end)
         end
+        -- (08-13: a diagnostic stood this easer fully down during the mount-CTD hunt. EXONERATED
+        -- -- the real cause was the ride HUD's set_Visible force-show. Gene sizing restored.)
         if sgo == false then
             -- held by the rodeo costume: write nothing this frame, target stays live
         elseif sgo then
@@ -518,18 +520,64 @@ function griffin_tamed_tick()
                     -- to be (full on critters, gentle on mounts -- 08-11 round 3)
                     if iris_iv_size_mult then want = scale_target * (tonumber(iris_iv_size_mult(scale_target)) or 1.0) end
                 end)
+                -- A grounded critter's native ScaleMediator changes the final rendered
+                -- size; it goes quiet when IrisTaming disables character systems for the
+                -- shoulder. L3 captures the actual grounded LocalScale before that state
+                -- change. Honour it here, at the single scale-owner choke point, so the
+                -- IV easer cannot make a perched body visibly jump to its raw target.
+                pcall(function()
+                    local h = rawget(_G, "IrisTamingPerchScaleHold")
+                    if type(h) == "table" and tostring(sgo:get_address()) == tostring(h.addr) then
+                        local hs = tonumber(h.scale)
+                        if hs and hs > 0.05 and hs <= 3.0 then want = hs end
+                    end
+                end)
+                -- ⛔ 08-13 shoulder-comfort factor REVERTED same day (Aurora: "I just
+                -- want the creature to keep its IV size on the shoulder" - no per-perch
+                -- scaling, no per-species maintenance). One writer, one value: the
+                -- gene size applies identically on the ground and on the shoulder.
+                -- If perched bodies still read bigger than their GROUND selves, the
+                -- ground body has not converged yet (the 2%% ease takes ~10s from a
+                -- fresh spawn) or the critter drama in iris_iv_size_mult is the real
+                -- complaint - tune THERE, never with a second writer.
                 local tf = sgo:call("get_Transform")
                 local cur = tf:call("get_LocalScale")
                 local cx = tonumber(cur and cur.x) or want
+                -- Publish the native system's PRE-WRITE grounded observation. IrisTaming
+                -- loads after this module, so reading LocalScale in its L3 handler could
+                -- otherwise see the large value this easer wrote earlier in the same
+                -- frame. Address + freshness make this safe across companion swaps.
+                if rawget(_G, "IrisTamingPerchGoAddr") == nil then
+                    pcall(function()
+                        rawset(_G, "IrisGroundObservedScale", {
+                            addr = tostring(sgo:get_address()), scale = cx, at = now,
+                        })
+                    end)
+                end
                 local snap_due = (tonumber(S.route3_scale_snap_at) or 0.0) > 0.0
                     and now >= (tonumber(S.route3_scale_snap_at) or 0.0)
-                local nx = snap_due and want or (cx + (want - cx) * 0.02)
+                -- ⭐⭐ 08-13 THE SHOULDER-SIZE MYSTERY (Aurora: "rabbits/birds get a
+                -- lot bigger on my shoulder" - the one Opus couldn't crack): it was
+                -- never shoulder GROWTH, it was ground SHRINK. This lerp used to read
+                -- the body's CURRENT scale back each frame - and on the ground the
+                -- native ScaleMediator stomps that to ~1.0 between our frames, so the
+                -- read-back always said ~1.0 and the write never got past ~1.02: the
+                -- gene size never landed. Perched, the mediator goes quiet, the lerp
+                -- finally converges, and the critter "grows" to its TRUE gene size.
+                -- The horse module's law: ease an INTERNAL value we own; the mediator
+                -- can stomp the body all it likes - we re-assert our eased truth
+                -- every frame and converge regardless. Ground and shoulder now agree.
+                local ez = tonumber(S.route3_scale_ease)
+                if ez == nil then ez = cx end
+                local nx = snap_due and want or (ez + (want - ez) * 0.02)
                 -- 08-13 (Aurora: "just appear at their scale rather than grow/shrink
                 -- to it"): a body still at exactly 1.0 is FRESH from spawn - snap it
                 -- straight to size. The ease remains for live growth (wyrmfeeding).
-                if math.abs(cx - 1.0) < 0.001 and math.abs(want - 1.0) > 0.05 then
+                if math.abs(cx - 1.0) < 0.001 and math.abs(want - 1.0) > 0.05
+                    and tonumber(S.route3_scale_ease) == nil then
                     nx = want
                 end
+                S.route3_scale_ease = nx
                 if snap_due or math.abs(nx - want) < 0.005 then
                     nx = want
                     -- ⛔ 08-12 (tiny Quoth, the "was 1.00" receipts): NEVER retire the
@@ -551,6 +599,7 @@ function griffin_tamed_tick()
             end)
         else
             S.route3_scale_target = nil
+            S.route3_scale_ease = nil   -- 08-13: a stale ease must not size the next body
         end
     end
     -- post-tame calm burst: re-purge grudges every half second until the

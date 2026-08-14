@@ -104,6 +104,11 @@ local C = {
     kick_camera_blend_s = 0.65,
     jump_max_landing_slope_deg = 42.0,
     jump_landing_sample_m = 0.8,
+    -- Shadow-only proof of Nick's Puppeteer route.  X requests the authored
+    -- Ch223_Bite action node (and therefore its real AttackUserData/collider)
+    -- instead of painting the visually matching atlas clip + synthetic HP hit.
+    -- Cats stay on the shipping path until the wolf proves this ownership lease.
+    wyrm_native_bite_test = true,
 }
 
 local S = rawget(_G, "__iris_horse_rodeo_v1") or {}
@@ -158,6 +163,11 @@ S.disabled_components = {}
 S.ride_pose_on = false
 S.mount_climb_since = nil
 if S.costume then S.costume.seat = nil end
+-- Reload hygiene: this global is consumed by the griffin relationship/hate
+-- hooks.  Never let a previous script generation leave the world believing a
+-- wolf/cat is still being ridden.
+rawset(_G, "IrisWyrmMounted", nil)
+rawset(_G, "IrisWyrmNativeAttackLease", nil)
 -- gait overrides are session-only lab levers — every load returns to the
 -- baked defaults (bank 901: walk 1 / trot 2 / gallop 3)
 S.gait_walk_bank, S.gait_walk_id = nil, nil
@@ -172,6 +182,7 @@ S.gait_dash_bank, S.gait_dash_id = nil, nil
 S.costume = nil
 S.ride_pose_on = false
 S.wyrm_atk_until, S.wyrm_atk_hold, S.wyrm_btn_prev = nil, nil, nil
+S.wyrm_native_lease = nil
 -- 08-13 Shadow-mount CTD guard: the costume is gone, so release the scale easer too
 _G.IrisScaleHoldAddr = nil
 
@@ -624,6 +635,23 @@ local SEAT_DEFAULTS = {
     -- outside the wing volume; cures the occlusion fade-to-black)
     mountcam_dist_griffin = 11.0, mountcam_height_griffin = 4.0,
     mountcam_side_griffin = 2.5, mountcam_look_up_griffin = 2.0,
+    -- 08-13 PANTHER FIT: ch223001's spine sits markedly higher and further
+    -- back inside the enlarged mesh than ch223000's.  Falling through to the
+    -- horse/Shadow fit left the Arisen crouched on top of the shoulders.  Cat
+    -- identity now comes from the stable species record, not the shared live
+    -- ch223 chassis, so this correction cannot move Shadow with it.
+    -- -1.08 was the first screenshot fit and overcorrected: Mia swallowed
+    -- the rider from the waist down. Raise the neutral fit by 30 cm; the
+    -- species-only sliders below remain authoritative for fine adjustment.
+    seat_above_joint_wyrm_cat = -0.78,
+    seat_fwd_wyrm_cat = -0.08,
+    seat_side_wyrm_cat = -0.026,
+    seat_yaw_wyrm_cat = -17.877,
+    seat_pitch_wyrm_cat = 3.083,
+    seat_roll_wyrm_cat = -2.772,
+    hand_grip_up_wyrm_cat = 0.12,
+    hand_grip_fwd_wyrm_cat = 0.30,
+    hand_grip_width_wyrm_cat = 0.18,
 }
 
 -- VARIANT-AWARE seat config (07-24 Aurora: separate positioning for the
@@ -662,7 +690,11 @@ local function seat_cfg(key, default)
         -- 08-13 PER-SPECIES SEAT (Aurora: "if they both adjust the same way one will
         -- break the other"): <key>_wyrm_wolf / <key>_wyrm_cat win; the old shared
         -- <key>_wyrm (her wolf tune) is the fallback so nothing she set is lost.
-        local wv = C[key .. "_wyrm_" .. tostring(S.costume.wyrm_kind)]
+        local species_key = key .. "_wyrm_" .. tostring(S.costume.wyrm_kind)
+        local wv = C[species_key]
+        -- A species default must beat the old shared fallback. Otherwise an
+        -- old wolf tune silently becomes the cat tune on every existing save.
+        if wv == nil then wv = SEAT_DEFAULTS[species_key] end
         if wv == nil then wv = C[key .. "_wyrm"] end
         if wv == nil then wv = SEAT_DEFAULTS[key .. "_wyrm"] end
         if wv ~= nil then return tonumber(wv) or default end
@@ -1557,6 +1589,17 @@ end
 
 local function costume_stop()
     local costume = S.costume
+    -- A release can arrive during the impact wind-up. Retire every owner
+    -- before the body/AI handover; no attack callback may retain or move a
+    -- just-released mount on the following frame.
+    if S.wyrm_native_lease and iris_wyrm_native_bite_finish then
+        iris_wyrm_native_bite_finish("mount released")
+    end
+    S.wyrm_attack, S.wyrm_atk_until = nil, nil
+    S.wyrm_atk_hold, S.wyrm_btn_prev = nil, nil
+    S.mounted_combat_off = nil
+    rawset(_G, "IrisWyrmMounted", nil)
+    if costume then costume.force_hold = nil end
     S.costume = nil
     _G.IrisScaleHoldAddr = nil -- scale easer resumes (08-13 crash guard)
     if not costume then return end
@@ -1607,10 +1650,20 @@ local function costume_stop()
             pcall(function() comp:call("set_Enabled", true) end)
         end
     end)
-    pcall(function()
-        local ai = get_component(costume.ox_go, "app.AIDecisionMaker")
-        if ai then ai:call("set_Enabled", true) end
-    end)
+    -- A tamed wyrm is NOT handed back to Capcom's decision/navigation stack after
+    -- riding.  Two separate traces proved that stack retained a stale bridge-nav
+    -- request from the driven body: waking it first crashed in decision evaluation,
+    -- and delaying the wake merely moved the AV into NavigationAI.navigationRequest.
+    -- IrisTaming owns these companions already, so mark the body for its safe
+    -- transform-follow driver and keep native decision/navigation parked.
+    local staged_puppet_release = costume.oxless == true
+        and costume.passenger_only ~= true
+    if not staged_puppet_release then
+        pcall(function()
+            local ai = get_component(costume.ox_go, "app.AIDecisionMaker")
+            if ai then ai:call("set_Enabled", true) end
+        end)
+    end
     if not costume.oxless then
         -- oxless: ox_go IS the horse — a 1.0 reset would shrink it
         pcall(function()
@@ -1623,13 +1676,32 @@ local function costume_stop()
         pcall(function()
             character:call("setCharacterControllerEnable", true)
         end)
-        pcall(function()
-            local fsm = get_component(costume.horse_go,
-                "via.motion.MotionFsm2")
-            if fsm then fsm:call("set_Enabled", true) end
-        end)
-        pcall(function() character:call("set_IsThinkStop", false) end)
-        pcall(function() character:call("resetActionAndAI") end)
+        -- A staged wyrm release is already owned by IrisTaming's puppet
+        -- follower.  The old code woke MotionFsm2 + thinking for 0.45 seconds
+        -- and only parked them later.  That window is enough for a stale combat
+        -- action/nav request to run the mount into water (and is the same class
+        -- of stale-navigation crash seen on Shadow).  Never wake them at all.
+        if not staged_puppet_release then
+            pcall(function()
+                local fsm = get_component(costume.horse_go,
+                    "via.motion.MotionFsm2")
+                if fsm then fsm:call("set_Enabled", true) end
+            end)
+            pcall(function() character:call("set_IsThinkStop", false) end)
+        else
+            pcall(function()
+                local ai = get_component(costume.horse_go, "app.AIDecisionMaker")
+                local nav = get_component(costume.horse_go, "app.NavigationAI")
+                local fsm = get_component(costume.horse_go, "via.motion.MotionFsm2")
+                if ai then ai:call("set_Enabled", false) end
+                if nav then nav:call("set_Enabled", false) end
+                if fsm then fsm:call("set_Enabled", false) end
+                if character then character:call("set_IsThinkStop", true) end
+            end)
+        end
+        -- Never call resetActionAndAI without its native argument.  REFramework's
+        -- warning is not benign here: on a just-dismounted wolf it was immediately
+        -- followed by an access violation in DecisionEvaluationModuleLateUpdator.
         pcall(function()
             local hc = get_component(costume.horse_go, "app.HitController")
             if hc then
@@ -1637,6 +1709,23 @@ local function costume_stop()
                 hc:call("set_IsNoDie", false)
             end
         end)
+        if staged_puppet_release then
+            local addr = object_address(costume.horse_go)
+            local puppet_addrs = rawget(_G, "IrisMountPuppetAddrs")
+            if type(puppet_addrs) ~= "table" then
+                puppet_addrs = {}
+                rawset(_G, "IrisMountPuppetAddrs", puppet_addrs)
+            end
+            if addr then puppet_addrs[addr] = true end
+            S.costume_release = {
+                go = costume.horse_go,
+                character = character,
+                addr = addr,
+                wake_at = os.clock() + 0.45,
+                expires = os.clock() + 3.0,
+            }
+            rawset(_G, "IrisMountReleaseAddr", addr)
+        end
     end
 end
 
@@ -1865,6 +1954,10 @@ local function costume_start_oxless(record)
             "via.motion.MotionFsm2")
         if fsm then fsm:call("set_Enabled", false) end
     end)
+    pcall(function()
+        local nav = get_component(record.game_object, "app.NavigationAI")
+        if nav then nav:call("set_Enabled", false) end
+    end)
     S.need_rootmotion_kill = true
     pcall(function()
         local hc = get_component(record.game_object, "app.HitController")
@@ -1877,7 +1970,11 @@ local function costume_start_oxless(record)
     S.costume = {ox_go = record.game_object,
                  horse_go = record.game_object,
                  horse_character = character, last_gait = nil,
-                 oxless = true, record = record, muted_wwise = {}}
+                 oxless = true, record = record, muted_wwise = {},
+                 native_ai = get_component(record.game_object, "app.AIDecisionMaker"),
+                 native_nav = get_component(record.game_object, "app.NavigationAI"),
+                 native_fsm = get_component(record.game_object, "via.motion.MotionFsm2"),
+                 native_wwise = get_component(record.game_object, "app.WwiseContainerApp")}
     -- ⛔ 08-13 Shadow-mount CTD, ladder step 1 (v2 - TIMED): the easer's LocalScale
     -- write at the exact mount moment was the last mod action before the crash. v1
     -- held for the whole costume life - but auto-arm keeps a costume on any nearby
@@ -1930,19 +2027,22 @@ function iris_wyrm_mount_start(quiet)
     if not valid(go) then if not quiet then S.status = "wyrm mount: no body" end return false end
     local id = ""
     pcall(function() id = tostring(ch:call("get_CharaIDString")) end)
-    -- ⭐ 08-13 receipts: HER "wolf" Shadow lives on the CAT chassis (ch223000_00 - the
-    -- IRIS conversion). The CHASSIS decides the moveset, whatever the soul is called.
-    local kind = (id:find("^ch260") and "wolf") or (id:find("^ch223") and "cat") or nil
-    if not kind then
+    -- Identity and animation chassis are separate facts. Shadow is ch223000;
+    -- Mia is ch223001. Both use the ch223 motions, but only Mia gets the cat
+    -- seat and imported Wild Cats voice. The former chassis-only test called
+    -- both of them "cat" and made their fit/audio inseparable.
+    local chassis = (id:find("^ch260") and "ch260")
+        or (id:find("^ch223") and "ch223") or nil
+    if not chassis then
         if not quiet then
             S.status = "wyrm mount: companion is not a wolf or great cat (" .. tostring(id) .. ")"
         end
         return false
     end
-    local wyrm = false
+    local wyrm, live_rec = false, nil
     pcall(function()
         for _, r in ipairs(b.stable_list() or {}) do
-            if r.live and r.wyrm then wyrm = true end
+            if r.live and r.wyrm then wyrm, live_rec = true, r; break end
         end
     end)
     if not wyrm then
@@ -1951,7 +2051,10 @@ function iris_wyrm_mount_start(quiet)
         end
         return false
     end
-    pcall(function() log.info("[IrisHorseRodeo] WYRM MOUNT arming on " .. tostring(id)) end)
+    local species = tostring((live_rec and live_rec.species) or id)
+    local kind = (species:find("^ch223001") and "cat") or "wolf"
+    pcall(function() log.info("[IrisHorseRodeo] WYRM MOUNT arming on "
+        .. tostring(id) .. " identity=" .. kind .. " species=" .. species) end)
     local record = { game_object = go, kind = kind, tamed = true, wyrm_mount = true }
     if S.costume then costume_stop() end
     costume_start_oxless(record)
@@ -1959,6 +2062,9 @@ function iris_wyrm_mount_start(quiet)
     S.costume.record = record
     S.costume.tamed = true
     S.costume.wyrm_kind = kind
+    S.costume.wyrm_chassis = chassis
+    S.costume.wyrm_species = species
+    S.mounted_combat_off = true
     -- their OWN legs: the native locomotion loops, straight from the atlases
     S.costume.gaits = { walk = { 0, 100 }, run = { 0, 200 }, dash = { 0, 300 } }
     -- 08-13 (Aurora: "randomly growling constantly, angry pose"): the think-stop
@@ -1987,21 +2093,431 @@ function iris_wyrm_mount_stop()
     return false
 end
 
--- ⭐⭐ RIDDEN ATTACKS (Aurora: "X and Y at least, LT optional - browse the atlas"):
--- atlas-verified one-shots painted through the same force_hold lane the bucks use.
--- Wolf: X = bite (50:20), Y = the lion jump-slam (50:401), LT = the HOWL (0:4610).
--- Cat:  X = bite (50:50), Y = the jump-bite lunge (18:410), LT = the yowl (0:4610).
--- ⚠ v1 = the ANIMATION (lunges and bites that read on camera); real damage lives in
--- native attack nodes (the griffin combat-kit law) - a later arc, stated honestly.
+-- Wild Cats normally recognises converted bodies through its spawn registry.
+-- Stable summon/rebuild can replace that wrapper before the rodeo takes
+-- ownership, so give the vocal hook one authoritative live identity check.
+-- registered_cat_ancestor() walks parents, allowing Wwise child objects to
+-- resolve back to the mounted body without sharing chassis-based guesses.
+rawset(_G, "__iris_rodeo_mounted_cat_audio_owner", function(game_object, container)
+    local costume = S.costume
+    if not (costume and costume.wyrm_kind == "cat"
+        and valid(costume.horse_go)) then return nil end
+    if valid(game_object)
+        and object_address(game_object) == object_address(costume.horse_go) then
+        return costume.horse_go
+    end
+    -- Wwise calls are made by their container component; its GameObject is not
+    -- guaranteed to be the registered/root object.  Component identity is the
+    -- authoritative link and avoids classifying every ch223 chassis as a cat.
+    local mounted_wwise = costume.native_wwise
+    if container and mounted_wwise
+        and object_address(container) == object_address(mounted_wwise) then
+        return costume.horse_go
+    end
+    return nil
+end)
+rawset(_G, "__iris_rodeo_is_mounted_cat", function(game_object)
+    local match = rawget(_G, "__iris_rodeo_mounted_cat_audio_owner")
+    return match and match(game_object, nil) ~= nil or false
+end)
+
+-- Single-owner contract for ridden wyrms.  Streaming/action rebuilds can
+-- silently re-enable native components after the initial mount setup.  Check
+-- at a bounded 4 Hz and only write when a component actually woke; the drive,
+-- gait and scripted contact system remain the sole owners of the body.
+function iris_wyrm_ownership_tick()
+    local costume = S.costume
+    local mounted = costume and costume.wyrm_kind and S.ride_pose_on == true
+    rawset(_G, "IrisWyrmMounted", mounted and true or nil)
+    S.mounted_combat_off = mounted and true or nil
+    if not mounted then return end
+    local now = os.clock()
+    if now < (tonumber(costume.ownership_at) or 0.0) then return end
+    costume.ownership_at = now + 0.25
+    pcall(function()
+        local ai = costume.native_ai
+        if ai and ai:call("get_Enabled") == true then ai:call("set_Enabled", false) end
+    end)
+    pcall(function()
+        local nav = costume.native_nav
+        if nav and nav:call("get_Enabled") == true then nav:call("set_Enabled", false) end
+    end)
+    -- Puppeteer does not play an atlas clip for combat: it leaves the motion
+    -- machinery alive and asks ActionManager for a real node.  Our normal ride
+    -- deliberately does the inverse, so X on Shadow gets a short, explicit
+    -- lease.  AIDecisionMaker and NavigationAI remain OFF throughout: waking
+    -- those is what previously let the wolf take the reins and run into water.
+    local lease = S.wyrm_native_lease
+    local native_live = lease and lease.costume == costume
+        and now < (tonumber(lease.until_t) or 0.0)
+    pcall(function()
+        local fsm = costume.native_fsm
+        if fsm then
+            local enabled = fsm:call("get_Enabled") == true
+            if native_live and not enabled then fsm:call("set_Enabled", true)
+            elseif (not native_live) and enabled then fsm:call("set_Enabled", false) end
+        end
+    end)
+    pcall(function()
+        if costume.horse_character then
+            costume.horse_character:call("set_IsThinkStop", not native_live)
+        end
+    end)
+end
+
+-- RIDDEN WYRM TARGET: enemies plus ordinary wildlife. EnemyManager deliberately excludes
+-- rabbits/deer/oxen, which is why the animation could visibly bite a spawned rabbit and deal
+-- nothing. Homestead residents remain friends and are rejected by character address.
+function iris_wyrm_attack_target(costume, atk)
+    -- Select inside the strike volume, not merely the nearest EnemyManager
+    -- entry.  The old nearest-first route could lock a goblin behind the mount,
+    -- then reject it at contact while the doe directly under its jaws was never
+    -- considered.  One scene sweep per button press is cheap; no per-frame scan.
+    if not (costume and valid(costume.horse_go)) then return nil end
+    local origin = universal_pos(costume.horse_go)
+    local tf = costume.horse_go:call("get_Transform")
+    local forward = tf and tf:call("get_AxisZ")
+    if not (origin and forward) then return nil end
+    local fx, fz = tonumber(forward.x) or 0.0, tonumber(forward.z) or 0.0
+    local fl = math.sqrt(fx * fx + fz * fz)
+    if fl < 0.01 then return nil end
+    fx, fz = fx / fl, fz / fl
+    local reach = tonumber(atk.range) or 5.5
+    local width = tonumber(atk.width) or 2.8
+    local voice = atk.slot == "voice"
+    local mount_addr = object_address(costume.horse_go)
+    local residents = rawget(_G, "IrisResidentChAddrs")
+    local best, best_go, best_score = nil, nil, math.huge
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene = sdk.call_native_func(sm, smt, "get_CurrentScene()")
+        local chars = scene and scene:call(
+            "findComponents(System.Type)", sdk.typeof("app.Character"))
+        for _, ch in ipairs(chars and chars:get_elements() or {}) do
+            pcall(function()
+                local id = tostring(ch:call("get_CharaIDString") or "")
+                if not id:match("^ch2") then return end
+                local go = ch:call("get_GameObject")
+                if not valid(go) or object_address(go) == mount_addr then return end
+                local ca, ga = object_address(ch), object_address(go)
+                if residents and (residents[ca] == true or residents[ga] == true) then return end
+                local dead = false
+                pcall(function() dead = ch:call("get_IsDead") == true end)
+                if dead then return end
+                local hp = nil
+                pcall(function()
+                    local hc = get_component(go, "app.HitController")
+                    hp = hc and hc:call("get_Hp") or nil
+                end)
+                if tonumber(hp) and tonumber(hp) <= 0 then return end
+                local pos = universal_pos(go)
+                if not pos then return end
+                local dx = (tonumber(pos.x) or 0.0) - (tonumber(origin.x) or 0.0)
+                local dz = (tonumber(pos.z) or 0.0) - (tonumber(origin.z) or 0.0)
+                local dy = (tonumber(pos.y) or 0.0) - (tonumber(origin.y) or 0.0)
+                local along = dx * fx + dz * fz
+                local across = math.abs(dx * fz - dz * fx)
+                local radial2 = dx * dx + dz * dz
+                local inside = voice and radial2 <= reach * reach
+                    or (along >= -1.25 and along <= reach
+                        and across <= width and math.abs(dy) <= 6.0)
+                if not inside then return end
+                local score = voice and radial2
+                    or (across * across * 3.0
+                        + (along - math.min(2.4, reach * 0.4)) ^ 2
+                        + dy * dy * 0.1)
+                if score < best_score then
+                    best, best_go, best_score = ch, go, score
+                end
+            end)
+        end
+    end)
+    return best, best_go
+end
+
+-- Shipping fallback for cats, heavy moves and voice moves: a native attack node
+-- cannot run on the normal think-stopped/FSM-off ride body. Shadow's X proof
+-- below instead opens a bounded action-only lease; everything else continues to
+-- use atlas animation and the timed front-facing sweep.
+function iris_wyrm_attack_hit(costume, atk)
+    if not (costume and atk and atk.hit ~= true) then return false end
+    atk.hit = true -- one transaction per move, even when it misses
+    local target = atk.target
+    if not target and atk.target_scanned ~= true then
+        target = iris_wyrm_attack_target(costume, atk)
+        atk.target_scanned = true
+    end
+    if not target then log("wyrm attack: no hostile target"); return false end
+    local tgo = nil
+    pcall(function() tgo = target:call("get_GameObject") end)
+    if not valid(tgo) then return false end
+    local op, tp = universal_pos(costume.horse_go), universal_pos(tgo)
+    if not (op and tp) then return false end
+    local dx, dz = tp.x - op.x, tp.z - op.z
+    local dist = math.sqrt(dx * dx + dz * dz)
+    -- The target finder already validated the forward capsule.  Only reject a
+    -- wrapper that moved implausibly far between the sweep and this transaction.
+    if dist > (tonumber(atk.range) or 4.0) + (tonumber(atk.width) or 2.8)
+        or math.abs((tonumber(tp.y) or 0.0) - (tonumber(op.y) or 0.0)) > 5.0 then
+        log(string.format("wyrm %s: target out of reach (%.1fm)", tostring(atk.slot), dist))
+        return false
+    end
+    local apply = rawget(_G, "griffin_apply_attack_damage")
+    local dealt = false
+    pcall(function()
+        -- HP + receiver reaction only.  A hand-built native DamageInfo is unsafe:
+        -- it has no real collider/AttackUserData owner and corrupted the receiver
+        -- pipeline.  `true` explicitly forbids that route.
+        local kind = (atk.slot == "heavy" and "heavy")
+            or (atk.slot == "voice" and "voice") or "bite"
+        dealt = apply and apply(target, tonumber(atk.damage) or 150.0,
+            true, costume.horse_go, kind) == true
+    end)
+    if dealt then
+        -- A short animation freeze supplies the missing sense of contact without
+        -- shaking the camera or handing the mount back to its combat AI.
+        local pause = 0.055
+        local now = os.clock()
+        atk.t0 = (tonumber(atk.t0) or now) + pause
+        S.wyrm_atk_until = (tonumber(S.wyrm_atk_until) or now) + pause
+        costume.wyrm_impact_pause_until = now + pause
+        pcall(function()
+            costume.horse_character:call("get_Motion"):call("set_PlaySpeed", 0.0)
+        end)
+    end
+    log(string.format("wyrm %s: %s at %.1fm (%s damage)", tostring(atk.slot),
+        dealt and "HIT" or "contact failed", dist, tostring(atk.damage)))
+    return dealt
+end
+
+function iris_wyrm_attack_home(costume, atk, now, age)
+    -- RETIRED 08-13: this used set_UniversalPosition every frame to pull the
+    -- complete rider/mount rig towards a target. It bypassed collision and
+    -- water boundaries, repeatedly rescanned the whole wildlife scene when no
+    -- target existed, and could carry Mia plus rider into water during a
+    -- dismount. Contact assist is now the generous timed front sweep only.
+    return
+end
+
+-- Read-only proof instrumentation for the native bite.  The native action must
+-- stand on its own: no fabricated DamageInfo and no direct-HP fallback are
+-- allowed in this branch, otherwise a falling health number would prove nothing.
+function iris_wyrm_native_target_hp(target)
+    if not valid(target) then return nil end
+    local hp = nil
+    pcall(function()
+        local reader = rawget(_G, "griffin_read_target_hp")
+        if reader then hp = tonumber(reader(target)) end
+    end)
+    if hp ~= nil then return hp end
+    pcall(function()
+        local go = target:call("get_GameObject")
+        local hc = go and get_component(go, "app.HitController") or nil
+        hp = hc and tonumber(hc:call("get_Hp")) or nil
+    end)
+    return hp
+end
+
+function iris_wyrm_native_action_name(action_manager)
+    local name = nil
+    pcall(function()
+        local list = action_manager.CurrentActionList
+            or action_manager:get_field("CurrentActionList")
+        local entry = list and list[0] or nil
+        name = entry and tostring(entry.Name or entry:get_field("Name")) or nil
+    end)
+    return name
+end
+
+function iris_wyrm_native_bite_finish(reason)
+    local lease = S.wyrm_native_lease
+    if not lease then return end
+    S.wyrm_native_lease = nil
+    rawset(_G, "IrisWyrmNativeAttackLease", nil)
+    if S.wyrm_attack == lease then S.wyrm_attack = nil end
+    S.wyrm_atk_until = nil
+    S.wyrm_atk_hold = nil
+    local costume = lease.costume
+    if costume then
+        costume.force_hold = nil
+        costume.last_gait = nil
+        costume.cur_speed = 0.0
+        costume.idle_anchor = nil
+        costume.drive_step = nil
+        costume.wyrm_prev_upos = nil
+        costume.ownership_at = 0.0
+        pcall(function()
+            local ai = costume.native_ai
+            if ai then ai:call("set_Enabled", false) end
+            local nav = costume.native_nav
+            if nav then nav:call("set_Enabled", false) end
+            local fsm = costume.native_fsm
+            if fsm then fsm:call("set_Enabled", false) end
+            if costume.horse_character then
+                costume.horse_character:call("set_IsThinkStop", true)
+            end
+        end)
+    end
+    local hp1 = iris_wyrm_native_target_hp(lease.target)
+    local result = "native bite " .. tostring(reason or "finished")
+    if lease.hp0 and hp1 then
+        result = result .. string.format(" | target HP %.0f -> %.0f (delta %.0f)",
+            lease.hp0, hp1, hp1 - lease.hp0)
+    elseif lease.target then
+        result = result .. " | target HP unavailable"
+    else
+        result = result .. " | no target in the forward bite volume"
+    end
+    if lease.observed_node then
+        result = result .. " | node=" .. tostring(lease.observed_node)
+    end
+    S.wyrm_native_status = result
+    log(result)
+end
+
+function iris_wyrm_native_bite_start(costume, now)
+    if not (costume and costume.wyrm_kind == "wolf"
+        and costume.wyrm_chassis == "ch223"
+        and valid(costume.horse_go) and valid(costume.horse_character)) then
+        return false
+    end
+    local action_manager = get_component(costume.horse_go, "app.ActionManager")
+    if not action_manager then
+        S.wyrm_native_status = "native bite refused: no ActionManager"
+        log(S.wyrm_native_status)
+        return false
+    end
+    local probe = { slot = "light", range = 5.5, width = 2.8 }
+    local target = iris_wyrm_attack_target(costume, probe)
+    local lease = {
+        native = true,
+        costume = costume,
+        target = target,
+        hp0 = iris_wyrm_native_target_hp(target),
+        action_manager = action_manager,
+        t0 = now,
+        until_t = now + 1.45,
+        node = "Ch223_Bite",
+    }
+    S.wyrm_native_lease = lease
+    rawset(_G, "IrisWyrmNativeAttackLease", {
+        mount_addr = object_address(costume.horse_character),
+        target_addr = object_address(target),
+        until_t = lease.until_t,
+    })
+    S.wyrm_attack = lease
+    S.wyrm_atk_until = lease.until_t
+    S.wyrm_atk_hold = true
+    costume.force_hold = true
+    costume.cur_speed = 0.0
+    costume.idle_anchor = nil
+    costume.drive_step = nil
+    costume.wyrm_prev_upos = nil
+    costume.ownership_at = 0.0
+    local requested = false
+    pcall(function()
+        -- This is the Puppeteer contract: the character is awake enough for its
+        -- action graph, while its decision-maker and navigation stay incapable
+        -- of issuing their own move.  Do NOT toggle ActionInterface here; that
+        -- persistent experiment was implicated in the earlier mount CTDs.
+        local ai = costume.native_ai
+        if ai then ai:call("set_Enabled", false) end
+        local nav = costume.native_nav
+        if nav then nav:call("set_Enabled", false) end
+        local fsm = costume.native_fsm
+        if fsm then fsm:call("set_Enabled", true) end
+        costume.horse_character:call("set_IsThinkStop", false)
+        action_manager:call(
+            "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+            0, lease.node, 0)
+        requested = true
+    end)
+    if not requested then
+        iris_wyrm_native_bite_finish("request FAILED")
+        return true -- consume X; never fall through to disguised synthetic damage
+    end
+    S.wyrm_native_status = "native bite requested: Ch223_Bite (waiting for node)"
+    log(S.wyrm_native_status)
+    return true
+end
+
+-- Atlas-driven combo sequences rather than a single frozen pose:
+-- ch260: bite / lion jump-slam / howl; ch223 (Shadow and converted pumas):
+-- bite / full jump-bite chain / howl. Contact timing follows the impact pose.
 function iris_wyrm_attack_tick()
     local costume = S.costume
     if not (costume and costume.wyrm_kind and S.ride_pose_on) then
+        if S.wyrm_native_lease then iris_wyrm_native_bite_finish("ride ended") end
+        if costume and costume.wyrm_impact_pause_until then
+            costume.wyrm_impact_pause_until = nil
+            pcall(function()
+                costume.horse_character:call("get_Motion"):call("set_PlaySpeed", 1.0)
+            end)
+        end
         S.wyrm_btn_prev = nil
+        S.wyrm_attack = nil
+        S.wyrm_atk_until = nil
+        if costume and S.wyrm_atk_hold then costume.force_hold = nil end
+        S.wyrm_atk_hold = nil
         return
     end
     local now = os.clock()
+    local native = S.wyrm_native_lease
+    if native then
+        costume.cur_speed = 0.0
+        costume.force_hold = true
+        if not native.observed_node and now - native.t0 >= 0.06 then
+            native.observed_node = iris_wyrm_native_action_name(native.action_manager)
+            if native.observed_node then
+                S.wyrm_native_status = "native bite live: " .. native.observed_node
+                log(S.wyrm_native_status)
+            end
+        end
+        if now >= native.until_t then
+            iris_wyrm_native_bite_finish("completed")
+        end
+        return
+    end
+    if costume.wyrm_impact_pause_until then
+        if now < costume.wyrm_impact_pause_until then
+            costume.cur_speed = 0.0
+            return
+        end
+        costume.wyrm_impact_pause_until = nil
+        pcall(function()
+            costume.horse_character:call("get_Motion"):call("set_PlaySpeed", 1.0)
+        end)
+    end
+    local active = S.wyrm_attack
+    if active then
+        local age = now - (tonumber(active.t0) or now)
+        -- No per-frame transform pin here.  Pinning a live CharacterController
+        -- against combat/root-motion produced a physics correction loop and the
+        -- catastrophic frame collapse.  The drive owns translation; the attack
+        -- merely holds requested speed at zero while its visual plays.
+        costume.cur_speed = 0.0
+        for _, stage in ipairs(active.stages or {}) do
+            if not stage.done and age >= stage.at then
+                stage.done = true
+                costume.cmd_bank, costume.cmd_clip = stage.bank, stage.clip
+                pcall(function()
+                    local layer = costume.horse_character:call("get_Motion"):call("getLayer", 0)
+                    if layer then
+                        layer:call(
+                            "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                            stage.bank, stage.clip, 0.0, 0.12, 1, 1)
+                    end
+                end)
+            end
+        end
+        if age >= (tonumber(active.hit_at) or 0.5) and active.hit ~= true then
+            pcall(iris_wyrm_attack_hit, costume, active)
+        end
+    end
     if S.wyrm_atk_until and now > S.wyrm_atk_until then
         S.wyrm_atk_until = nil
+        S.wyrm_attack = nil
         if S.wyrm_atk_hold then
             S.wyrm_atk_hold = nil
             costume.force_hold = nil
@@ -2045,22 +2561,64 @@ function iris_wyrm_attack_tick()
     local prev = S.wyrm_btn_prev or {}
     S.wyrm_btn_prev = down
     if S.wyrm_atk_until then return end   -- one move at a time
-    local moves = (costume.wyrm_kind == "wolf") and {
-        light = { 50, 20, 1.2 },
-        heavy = { 50, 401, 2.4 },
-        voice = { 0, 4610, 2.6 },
+    local moves = (costume.wyrm_chassis == "ch260") and {
+        light = { bank=50, clip=20, dur=1.05, hit_at=0.42, damage=150, range=5.5, min_dot=-0.35 },
+        -- Grounded grab/maul sequence: no jump root motion, water launch or
+        -- camera buck.  The contact lands on the authored hold-hit frame.
+        heavy = { bank=20, clip=2010, dur=1.45, hit_at=0.50, damage=320,
+            range=6.0, width=3.2, stages={{at=0.34,bank=20,clip=2012},
+                {at=0.92,bank=20,clip=2020}} },
+        voice = { bank=0, clip=4610, dur=2.65, hit_at=0.95, damage=80, range=10.0,
+            stages={{at=0.52,bank=0,clip=4611},{at=2.00,bank=0,clip=4612}} },
     } or {
-        light = { 50, 50, 1.2 },
-        heavy = { 18, 410, 2.2 },
-        voice = { 0, 4610, 2.6 },
+        light = { bank=50, clip=50, dur=1.05, hit_at=0.42, damage=150, range=5.5, min_dot=-0.35 },
+        heavy = { bank=20, clip=4010, dur=1.45, hit_at=0.50, damage=320,
+            range=6.0, width=3.2, stages={{at=0.34,bank=20,clip=4012},
+                {at=0.92,bank=20,clip=4020}} },
+        voice = { bank=0, clip=4610, dur=2.65, hit_at=0.95, damage=80, range=10.0,
+            stages={{at=0.52,bank=0,clip=4611},{at=2.00,bank=0,clip=4612}} },
     }
+    if costume.wyrm_kind == "cat" then
+        -- L2 CAT ROAR: the ch223 howl clips rear back and point the muzzle at
+        -- the sky like a wolf because that is exactly what they were authored
+        -- for. A planted battle-threat display (0:1 -> 0:2) reads as a big-cat
+        -- roar and is paired with the imported attack-roar bank below.
+        moves.voice = { bank=0, clip=1, dur=1.75, hit_at=0.62,
+            damage=80, range=10.0, stages={{at=0.78,bank=0,clip=2}} }
+    end
     for _, slot in ipairs({ "heavy", "light", "voice" }) do
         if down[slot] and not prev[slot] then
+            if slot == "light" and C.wyrm_native_bite_test ~= false
+                and costume.wyrm_kind == "wolf"
+                and costume.wyrm_chassis == "ch223" then
+                iris_wyrm_native_bite_start(costume, now)
+                break
+            end
             local m = moves[slot]
             costume.force_hold = true
             S.wyrm_atk_hold = true
-            S.wyrm_atk_until = now + m[3]
-            costume.cmd_bank, costume.cmd_clip = m[1], m[2]
+            S.wyrm_atk_until = now + m.dur
+            costume.cmd_bank, costume.cmd_clip = m.bank, m.clip
+            S.wyrm_attack = {
+                -- Resolve the enemy on the impact frame. Holding a managed enemy
+                -- wrapper through a wind-up is unnecessary dangling-handle risk.
+                t0=now, slot=slot, hit_at=m.hit_at,
+                damage=m.damage, range=m.range, width=m.width, min_dot=m.min_dot,
+                lock_range=m.lock_range, stages=m.stages,
+            }
+            S.wyrm_attack.lock_range = S.wyrm_attack.lock_range or 14.0
+            pcall(function()
+                -- Seed the normal drive-phase residual filter.  Attack clips
+                -- have authored root travel, but attack speed is intentionally
+                -- zero; without this seed the first root sample escaped before
+                -- the filter established a baseline.
+                local p = universal_pos(costume.horse_go)
+                costume.wyrm_prev_upos = p and { x = p.x, z = p.z } or nil
+                costume.drive_step = { x = 0.0, z = 0.0 }
+                if slot == "voice" then
+                    costume.cur_speed = 0.0
+                end
+            end)
             costume.last_gait = nil
             pcall(function()
                 local motion = costume.horse_character:call("get_Motion")
@@ -2068,7 +2626,7 @@ function iris_wyrm_attack_tick()
                 if layer then
                     layer:call(
                         "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
-                        m[1], m[2], 0.0, 0.25, 1, 1)
+                        m.bank, m.clip, 0.0, 0.25, 1, 1)
                 end
             end)
             S.need_rootmotion_kill = true
@@ -2076,10 +2634,15 @@ function iris_wyrm_attack_tick()
             -- triggers, so speak through the Wild Cats audio graph directly
             pcall(function()
                 local capi = rawget(_G, "__iris_wild_cats_api")
-                if capi and capi.is_cat and capi.play
-                    and capi.is_cat(costume.horse_go) then
-                    capi.play(slot == "voice" and "growl" or "attack",
-                        costume.horse_go)
+                if capi and costume.wyrm_kind == "cat" then
+                    if capi.play then
+                        capi.play(slot == "voice" and "attack" or "attack",
+                            costume.horse_go)
+                    end
+                elseif slot == "voice" and capi and capi.play_wolf_call then
+                    -- Never fall back to the first arbitrary native vocal:
+                    -- that was a pain event, not a howl.
+                    capi.play_wolf_call(costume.horse_go)
                 end
             end)
             break
@@ -2189,7 +2752,9 @@ re.on_application_entry("UpdateBehavior", function()
     -- wolf, cat...) ground-life interactions must stand down - taming prompts,
     -- sowing, cookpots, the stable UI (opening it mid-ride teleported Aurora under
     -- the ground and killed the cat). Consumers read rawget(_G, "IrisRiddenNow").
-    _G.IrisRiddenNow = (S.ride_pose_on == true) and true or nil
+    _G.IrisRiddenNow = ((S.ride_pose_on == true)
+        or (rawget(_G, "IrisGriffinMounted") == true)) and true or nil
+    pcall(iris_wyrm_ownership_tick)
     pcall(iris_wyrm_attack_tick)
     pcall(iris_wyrm_auto_arm)
 end)
@@ -2951,10 +3516,11 @@ local function costume_tick()
                     end)
                     -- ⭐ 08-13 WYRM MOUNT (Aurora: "the jump has no animation"):
                     -- the horse pack means nothing to a wolf body - the wyrm
-                    -- costume brings its own atlas-verified leap
-                    -- (jump_front 0:423, landing_front 0:401)
+                    -- costume brings its own atlas-verified leap. 422 is the launch;
+                    -- starting on 423 skipped the take-off and made the wolf point down
+                    -- through the ascent as though the jump had begun at its end.
                     if costume.wyrm_kind then
-                        jpk = { bank = 0, jump = 423, land = 401 }
+                        jpk = { bank = 0, jump = 422, front = 423, fall = 416, land = 401 }
                     end
                     -- 08-06 round 2 (Aurora: "must clear these fences easily"
                     -- + the log showed gallop jumps launching at speed 4.8):
@@ -3303,6 +3869,8 @@ local function costume_tick()
                         -- r71 three-phase clip state
                         jbank = jpk and jpk.bank or nil,
                         jstart = jpk and jpk.jump or nil,
+                        jfront = jpk and jpk.front or nil,
+                        jfall = jpk and jpk.fall or nil,
                         jland = jpk and jpk.land or nil,
                         seq = "start",
                         gather = tonumber(C.jump_gather_secs) or 0.18,
@@ -3314,6 +3882,7 @@ local function costume_tick()
                     if costume.wyrm_kind then
                         local j = costume.jump
                         j.height = tonumber(C.wyrm_jump_height) or 2.2
+                        j.front_at = now_d + (tonumber(C.wyrm_jump_start_secs) or 0.34)
                         local jt = tonumber(C.wyrm_jump_travel) or 0.7
                         j.x1 = j.x0 + (j.x1 - j.x0) * jt
                         j.z1 = j.z0 + (j.z1 - j.z0) * jt
@@ -3325,8 +3894,8 @@ local function costume_tick()
                         -- 08-13 ridden cat voice: a short call on take-off
                         pcall(function()
                             local capi = rawget(_G, "__iris_wild_cats_api")
-                            if capi and capi.is_cat and capi.play
-                                and capi.is_cat(costume.horse_go) then
+                            if capi and capi.play
+                                and costume.wyrm_kind == "cat" then
                                 capi.play("alert", costume.horse_go)
                             end
                         end)
@@ -4049,6 +4618,7 @@ local function costume_tick()
                 if any_input and costume.force_hold
                     and not costume.jump and not costume.kick
                     and not costume.bless
+                    and not S.wyrm_atk_until
                     and not costume.hit_react_hold then
                     -- grabbing the reins releases any force-hold test clip
                     costume.force_hold = nil
@@ -4095,7 +4665,7 @@ local function costume_tick()
                 if math.abs(te) < 0.001 then te = 0.0 end
                 costume.turn_ease = te
                 local turn = te
-                if turn ~= 0 then
+                if turn ~= 0 and not costume.wyrm_kind then
                     -- speed falloff: at a standstill you get the full rate, at a
                     -- flat gallop only (1 - falloff) of it
                     local dash_s2 = math.max(0.1, tonumber(C.speed_dash) or 9.5)
@@ -4156,7 +4726,8 @@ local function costume_tick()
                         target_speed, gait = (C.speed_dash or 9.5), 300
                     elseif up and iris_kb(0x11) then
                         target_speed, gait = (C.speed_walk or 1.6), 100
-                    elseif pad_move and not up and stick_y < 0.85 then
+                    elseif pad_move and not up and not costume.wyrm_kind
+                        and stick_y < 0.85 then
                         target_speed, gait = (C.speed_walk or 1.6), 100
                     end
                 end
@@ -4166,13 +4737,27 @@ local function costume_tick()
                 -- A wolf's sprint stride wants more ground per second or it runs
                 -- on the spot. Sliders in the WYRM SEAT + PACE panel block.
                 if costume.wyrm_kind and target_speed > 0.0 then
+                    -- Wolf/cat gait is not the horse walk->trot->gallop ladder.
+                    -- A diagonal full-stick turn used to lower stick_y below .85
+                    -- and silently demote the mount to WALK.  Use total stick
+                    -- commitment instead: gentle input walks; committed input
+                    -- runs at full speed regardless of steering; B remains Sprint.
+                    local stick_mag = math.sqrt(stick_x * stick_x + stick_y * stick_y)
                     if gait == 300 then
                         target_speed = tonumber(C.wyrm_speed_dash) or 11.0
-                    elseif gait == 100 then
+                    elseif (pad_move and not up and stick_mag < 0.42)
+                        or (up and iris_kb(0x11)) then
+                        gait = 100
                         target_speed = tonumber(C.wyrm_speed_walk) or 2.2
                     else
+                        gait = 200
                         target_speed = tonumber(C.wyrm_speed_run) or 6.0
                     end
+                end
+                if costume.wyrm_kind and S.wyrm_atk_until then
+                    -- An attack owns translation. Movement input must not drag a howl across
+                    -- the ground or make a bite fight the locomotion driver.
+                    target_speed, gait = 0.0, 0
                 end
                 -- EASED velocity (07-23 "teleports slightly on a nudge"):
                 -- speed was a step function — one frame at full walk
@@ -4180,7 +4765,15 @@ local function costume_tick()
                 -- Accelerate/brake smoothly; runs every frame so release
                 -- decelerates instead of freezing mid-stride.
                 local cur = costume.cur_speed or 0.0
-                local rate = (target_speed > cur) and 5.0 or 7.0
+                local rate
+                if costume.wyrm_kind then
+                    -- Wolves reach a run in roughly half a second rather than winding up
+                    -- with the horse's heavy acceleration curve.
+                    rate = (target_speed > cur) and (tonumber(C.wyrm_accel) or 26.0)
+                        or (tonumber(C.wyrm_brake) or 10.0)
+                else
+                    rate = (target_speed > cur) and 5.0 or 7.0
+                end
                 local step = rate * dt
                 if math.abs(target_speed - cur) <= step then
                     cur = target_speed
@@ -4202,7 +4795,8 @@ local function costume_tick()
                 if S.ride_pose_on and target_speed <= 0.0 and cur <= 0.02
                     and not tame_pinned
                     and not costume.jump and not costume.fall_v
-                    and not costume.kick and not costume.hit_react_hold then
+                    and not costume.kick and not costume.hit_react_hold
+                    and not S.wyrm_native_lease then
                     local pos = ox_tf:call("get_UniversalPosition")
                     local anchor = costume.idle_anchor
                     if not anchor then
@@ -4222,7 +4816,14 @@ local function costume_tick()
                 else
                     costume.idle_anchor = nil
                 end
-                if cur > 0.02 and not costume.jump then
+                -- Run the same-phase residual filter during a planted attack
+                -- even though requested speed is zero.  This absorbs authored
+                -- attack root motion in the drive's own phase; the retired
+                -- UpdateBehavior anchor fought the CharacterController and
+                -- caused the persistent 15 fps correction storm.
+                if (cur > 0.02 or (costume.wyrm_kind and S.wyrm_attack
+                        and S.wyrm_attack.native ~= true))
+                    and not costume.jump then
                     local fwd = ox_tf:call("get_AxisZ")
                     local pos = ox_tf:call("get_UniversalPosition")
                     -- ⭐ 08-13 v4 IN-TICK ROOT-MOTION CANCEL (v3's LateUpdate
@@ -4236,7 +4837,14 @@ local function costume_tick()
                             local rx = pos.x - pv.x - (ds and tonumber(ds.x) or 0.0)
                             local rz = pos.z - pv.z - (ds and tonumber(ds.z) or 0.0)
                             local r2 = rx * rx + rz * rz
-                            if r2 > 1e-10 and r2 < 25.0 then
+                            -- ch223001 at wyrm scale can contribute over five
+                            -- metres of clip root in a single sampled frame.
+                            -- Universal coordinates do not render-rebase, so a
+                            -- 5m ceiling merely let that root escape and turned
+                            -- Mia into a 60m/s uncontrolled mover. Absorb any
+                            -- plausible animation residual; genuine scripted
+                            -- teleports above 20m are adopted on the next tick.
+                            if r2 > 1e-10 and r2 < 400.0 then
                                 pos.x, pos.z = pos.x - rx, pos.z - rz
                             end
                         end
@@ -4521,8 +5129,10 @@ local function costume_tick()
                     --   player HitController=off -> rider is not a target, which
                     --     would explain the missing boss bar (no engagement)
                     --   hp falling but no downed entry -> the clamp is the issue
-                    -- ⛔ Read-only. Set ride_damage_diag = false to silence.
-                    if C.ride_damage_diag ~= false
+                    -- ⛔ Read-only and opt-in.  Reflection over both full
+                    -- component graphs every two seconds is inappropriate for
+                    -- normal play and contributed periodic hitches.
+                    if C.ride_damage_diag == true
                         and now_d >= (tonumber(S.ride_diag_at) or 0.0) then
                         S.ride_diag_at = now_d + 2.0
                         pcall(function()
@@ -4917,12 +5527,20 @@ local function costume_tick()
                         -- to say -- hand the air over to the horse's OWN
                         -- airborne clip rather than letting a borrowed one run
                         -- long. Edge-triggered; it is a loop, so never re-fired.
-                        if jump.seq == "start" and jump.air_at
-                            and now_d >= jump.air_at then
+                        local vertical_v = vj - gj * tj
+                        if costume.wyrm_kind and jump.seq == "start"
+                            and now_d >= (tonumber(jump.front_at) or now_d) then
+                            jump.seq = "rise"
+                            iris_jump_play(costume, tonumber(jump.jbank) or 0,
+                                tonumber(jump.jfront) or 423)
+                            log("jump seq: rise")
+                        elseif ((costume.wyrm_kind and jump.seq == "rise" and vertical_v <= 0.0)
+                            or (not costume.wyrm_kind and jump.seq == "start" and jump.air_at
+                                and now_d >= jump.air_at)) then
                             jump.seq = "air"
-                            iris_jump_play(costume,
-                                tonumber(C.fall_anim_bank) or 0,
-                                tonumber(C.fall_anim_clip) or 415)
+                            iris_jump_play(costume, tonumber(jump.jbank)
+                                or tonumber(C.fall_anim_bank) or 0,
+                                tonumber(jump.jfall) or tonumber(C.fall_anim_clip) or 415)
                             log("jump seq: air")
                         end
                         -- ⭐⭐⭐ r92 GROUND TRUTH EVERY FRAME, LANDING IS EMERGENT.
@@ -5689,10 +6307,55 @@ local function dismount_hold_tick()
     end
 end
 
+local function costume_release_tick()
+    local release = S.costume_release
+    if not release then return end
+    local now = os.clock()
+    if now < (tonumber(release.wake_at) or now) then return end
+
+    -- A fresh mount may have reclaimed this same body during the grace window.
+    -- In that case its AI must remain parked under the saddle's ownership.
+    local active_addr = S.costume and object_address(S.costume.horse_go) or nil
+    if active_addr and active_addr == release.addr then
+        S.costume_release = nil
+        rawset(_G, "IrisMountReleaseAddr", nil)
+        return
+    end
+
+    if now <= (tonumber(release.expires) or now) and valid(release.go) then
+        pcall(function()
+            local fsm = get_component(release.go, "via.motion.MotionFsm2")
+            if fsm then fsm:call("set_Enabled", true) end
+        end)
+        pcall(function()
+            if release.character then
+                release.character:call("set_IsThinkStop", false)
+            end
+        end)
+        -- Never wake the native evaluator here. IrisTaming sees the address marker
+        -- above and resumes Shadow/Puma through its puppet follow on this same body.
+        pcall(function()
+            local ai = get_component(release.go, "app.AIDecisionMaker")
+            if ai then ai:call("set_Enabled", false) end
+            local nav = get_component(release.go, "app.NavigationAI")
+            if nav then nav:call("set_Enabled", false) end
+            if release.character then
+                release.character:call("set_IsThinkStop", true)
+            end
+            local fsm = get_component(release.go, "via.motion.MotionFsm2")
+            if fsm then fsm:call("set_Enabled", false) end
+        end)
+        log("wyrm mount release: native decision/nav parked; tame puppet follow owns body")
+    end
+    S.costume_release = nil
+    rawset(_G, "IrisMountReleaseAddr", nil)
+end
+
 re.on_application_entry("LateUpdateBehavior", function()
     if S.generation ~= GENERATION then return end
     costume_tick()
     dismount_hold_tick()
+    costume_release_tick()
 end)
 
 -- HAND MAGNET (07-24, Aurora's ask — the griffin round-32 port): each
@@ -6083,6 +6746,7 @@ local function mountcam_apply()
         if not hold or hold.cam_released then
             S.mountcam_state, S.mountcam_look = nil, nil
             S.mountcam_anchor_raw = nil
+            S.mountcam_wyrm_anchor, S.mountcam_wyrm_t = nil, nil
             S.mountcam_kick_release = nil
             S.mountcam_occl, S.mountcam_pull = 0, 1.0   -- r77: clear WITH the state
             return
@@ -6104,22 +6768,11 @@ local function mountcam_apply()
                     log(string.format(
                         "mountcam handover: native cam converged (%.1fm)",
                         math.sqrt(d2)))
-                    -- r18: recall the camera behind the Arisen (the R3
-                    -- command, instance+flags learned from the game's
-                    -- own resets; silently skipped if none seen yet)
-                    pcall(function()
-                        local cr = rawget(_G, "__iris_camreset_this")
-                        if not cr then return end
-                        cr:call(
-                            "request(System.Nullable`1<System.Single>, "
-                            .. "System.Nullable`1<System.Single>, "
-                            .. "System.Nullable`1<System.Single>, "
-                            .. "System.Boolean, System.Boolean)",
-                            nil, nil, nil,
-                            rawget(_G, "__iris_camreset_b1") == true,
-                            rawget(_G, "__iris_camreset_b2") == true)
-                        log("camera recall requested (R3 command)")
-                    end)
+                    -- Native convergence is the handover.  Replaying a captured
+                    -- CameraReset.request looked attractive, but Nullable<T>
+                    -- parameters cannot be reconstructed by passing Lua nil.  The
+                    -- wolf field log caught a native access violation on every
+                    -- dismount here, so the unsafe replay is deliberately gone.
                 end
             end
         end)
@@ -6161,7 +6814,8 @@ local function mountcam_apply()
         local sz = hp_raw.z - prev_anchor.z
         local shift = math.sqrt(sx * sx + sy * sy + sz * sz)
         if shift > (tonumber(C.mountcam_rebase_threshold) or 4.0) then
-            for _, point in ipairs({ S.mountcam_state, S.mountcam_look }) do
+            for _, point in ipairs({ S.mountcam_state, S.mountcam_look,
+                                      S.mountcam_wyrm_anchor }) do
                 if type(point) == "table" then
                     point.x, point.y, point.z =
                         point.x + sx, point.y + sy, point.z + sz
@@ -6172,6 +6826,38 @@ local function mountcam_apply()
         end
     end
     S.mountcam_anchor_raw = { x = hp_raw.x, y = hp_raw.y, z = hp_raw.z }
+    -- WOLF/PANTHER CAMERA DECOUPLING (video 23:10/23:11): a ch223 run
+    -- deliberately heaves its root on every stride. The old camera looked at
+    -- that animated root, so its lens and aim bobbed with both locomotion and
+    -- every attack. Track a virtual world anchor instead: x/z remain prompt;
+    -- grounded y rejects stride-scale oscillation, while real jumps/falls and
+    -- large terrain changes catch up quickly. Heading comes from our drive yaw
+    -- rather than the animation's temporarily pitched transform.
+    if ride_live and S.costume and S.costume.wyrm_kind then
+        local now_w = os.clock()
+        local dt_w = math.max(0.001, math.min(0.05,
+            now_w - (tonumber(S.mountcam_wyrm_t) or now_w)))
+        S.mountcam_wyrm_t = now_w
+        local wa = S.mountcam_wyrm_anchor
+        if type(wa) ~= "table" then
+            wa = { x = hp_raw.x, y = hp_raw.y, z = hp_raw.z }
+        else
+            local axz = 1.0 - math.exp(-12.0 * dt_w)
+            wa.x = wa.x + (hp_raw.x - wa.x) * axz
+            wa.z = wa.z + (hp_raw.z - wa.z) * axz
+            local yerr = hp_raw.y - wa.y
+            local airborne = S.costume.jump or S.costume.fall_anim
+                or math.abs(yerr) > 0.75
+            local ay = 1.0 - math.exp(-(airborne and 9.0 or 2.0) * dt_w)
+            wa.y = wa.y + yerr * ay
+        end
+        S.mountcam_wyrm_anchor = wa
+        hp_raw = wa
+        local yaw = tonumber(S.costume.wyrm_yaw)
+        if yaw then fwd = { x = math.sin(yaw), y = 0.0, z = math.cos(yaw) } end
+    else
+        S.mountcam_wyrm_anchor, S.mountcam_wyrm_t = nil, nil
+    end
     -- smooth the LOOK TARGET too — a raw look-at jitters the view axis
     -- even when the camera position is smoothed
     local a0 = math.max(0.02, math.min(1.0,
@@ -6915,6 +7601,7 @@ local function seat_mount()
         pcall(save_config)
     end
     S.ride_pose_on = true
+    _G.IrisRiddenNow = true -- same-frame mount transition guard for prompt/UI writers
     S.seat_started = os.clock()
     S.seat_key_latch = true -- swallow the still-held grab key
     S.mount_climb_since = nil
@@ -7104,16 +7791,40 @@ local function seat_dismount(reason)
     local downed_handoff = reason == "downed"
     local recovery = S.mount_last_safe_ground or S.mount_origin
     local emergency_recovery = false
-    if downed_handoff then
-        local costume = S.costume
-        emergency_recovery = costume
-            and (costume.jump ~= nil or costume.fall_v ~= nil) or false
-        pcall(function()
-            local detector = rawget(_G, "griffin_downed_in_water")
-            if detector and costume and detector(costume.horse_go) == true then
-                emergency_recovery = true
-            end
-        end)
+    local costume_at_release = S.costume
+    -- Dismount is a hard transaction boundary, including a manual RT during
+    -- an attack. Clear the mover before reading a landing position.
+    S.wyrm_attack, S.wyrm_atk_until = nil, nil
+    S.wyrm_atk_hold, S.wyrm_btn_prev = nil, nil
+    if costume_at_release then
+        costume_at_release.force_hold = nil
+        costume_at_release.cur_speed = 0.0
+    end
+    emergency_recovery = costume_at_release
+        and (costume_at_release.jump ~= nil
+            or costume_at_release.fall_v ~= nil) or false
+    pcall(function()
+        local detector = rawget(_G, "griffin_downed_in_water")
+        if detector and costume_at_release
+            and detector(costume_at_release.horse_go) == true then
+            emergency_recovery = true
+        end
+    end)
+    if costume_at_release then
+        -- The old dismount only released the rider pose. The mount's jump
+        -- sequencer continued afterwards (confirmed by `jump seq: air` in the
+        -- crash log), invalidating Mia while stale callbacks still held her
+        -- components. Stop every airborne/drive writer synchronously.
+        costume_at_release.jump = nil
+        costume_at_release.fall_v = nil
+        costume_at_release.fall_from = nil
+        costume_at_release.fall_anim = nil
+        costume_at_release.jump_land_until = nil
+        costume_at_release.jump_settle_until = nil
+        costume_at_release.jump_thud_pending = nil
+        costume_at_release.drive_step = nil
+        costume_at_release.wyrm_prev_upos = nil
+        costume_at_release.idle_anchor = nil
     end
     -- ⭐ pose-only (griffin invert): we touched NOTHING native — no
     -- restores, no landing write (the climb owns her position and the
@@ -7193,7 +7904,7 @@ local function seat_dismount(reason)
             end
         end)
     end
-    if downed_handoff and recovery then
+    if recovery and (downed_handoff or emergency_recovery) then
         -- A seabed ray can be perfectly valid terrain while still being a lethal
         -- dismount. A sudden fall well below the last grounded ride point is an
         -- emergency even if the water component has not reported in yet.
@@ -7202,10 +7913,24 @@ local function seat_dismount(reason)
             emergency_recovery = true
         end
         if emergency_recovery then
+            -- Recover the mount as part of the same transaction. Moving only
+            -- the rider left Mia falling/drowning and allowed her downed system
+            -- to invalidate the body underneath pending rodeo callbacks.
+            local side_x, side_z = 1.0, 0.0
+            pcall(function()
+                local mtf = costume_at_release.horse_go:call("get_Transform")
+                local side = mtf:call("get_AxisX")
+                side_x, side_z = tonumber(side.x) or 1.0,
+                    tonumber(side.z) or 0.0
+                local mp = mtf:call("get_UniversalPosition")
+                mp.x, mp.y, mp.z = tonumber(recovery.x),
+                    tonumber(recovery.y), tonumber(recovery.z)
+                mtf:call("set_UniversalPosition", mp)
+            end)
             land = {
-                x = tonumber(recovery.x),
+                x = tonumber(recovery.x) + side_x * 1.4,
                 y = tonumber(recovery.y) + 0.15,
-                z = tonumber(recovery.z),
+                z = tonumber(recovery.z) + side_z * 1.4,
             }
             log(string.format(
                 "downed water/air recovery -> last grounded ride point %.2f %.2f %.2f",
@@ -7418,13 +8143,13 @@ local HUD_GETOBJ = nil
 local RIDE_HUD_LABELS = {
     {"PNL_top/PNL_R00/PNL_txt/mtx_00", "Dismount"}, -- RT
     {"PNL_top/PNL_R01/PNL_txt/mtx_00", ""},         -- RB
-    {"PNL_top/PNL_L00/PNL_txt/mtx_00", ""},         -- LT
+    {"PNL_top/PNL_L00/PNL_txt/mtx_00", "", dynamic = "howl"}, -- LT
     {"PNL_top/PNL_L01/PNL_txt/mtx_00", ""},         -- LB
     -- Y: dynamic -- "Blessing" ONLY while the mount is a unicorn (written
     -- per-tick below; blank rows are never written, per the mount-CTD law).
     {"PNL_top/PNL_L02/PNL_txt/mtx_00", "", dynamic = "bless"},  -- Y
-    {"PNL_top/PNL_L03/PNL_txt/mtx_00", "Kick"},     -- X
-    {"PNL_top/PNL_R02/PNL_txt/mtx_00", "Gallop"},   -- B
+    {"PNL_top/PNL_L03/PNL_txt/mtx_00", "Kick", dynamic = "bite"}, -- X
+    {"PNL_top/PNL_R02/PNL_txt/mtx_00", "Gallop", dynamic = "pace"}, -- B
 }
 local function horse_ride_hud_tick()
     if C.ride_hud == false then return end
@@ -7464,13 +8189,24 @@ local function horse_ride_hud_tick()
             -- 08-12: dynamic Y slot -- "Blessing" only while the mount is a
             -- unicorn (never written otherwise, so the empty-write law holds).
             if row.dynamic == "bless" then
-                local isu = false
-                pcall(function()
-                    local api = rawget(_G, "__iris_wild_horses_api")
-                    isu = api and api.is_unicorn
-                        and api.is_unicorn(costume.horse_go) or false
-                end)
-                txt = isu and "Blessing" or ""
+                if costume.wyrm_kind then
+                    txt = "Maul"
+                else
+                    local isu = false
+                    pcall(function()
+                        local api = rawget(_G, "__iris_wild_horses_api")
+                        isu = api and api.is_unicorn
+                            and api.is_unicorn(costume.horse_go) or false
+                    end)
+                    txt = isu and "Blessing" or ""
+                end
+            elseif row.dynamic == "howl" then
+                txt = costume.wyrm_kind == "cat" and "Roar"
+                    or (costume.wyrm_kind and "Howl" or "")
+            elseif row.dynamic == "pace" then
+                txt = costume.wyrm_kind and "Sprint" or "Gallop"
+            elseif row.dynamic == "bite" then
+                txt = costume.wyrm_kind and "Bite" or "Kick"
             end
             if txt == "" then
                 -- opt-in only: a single space reads blank without taking the empty path.
@@ -7531,42 +8267,6 @@ if not rawget(_G, "__iris_rodeo_mountcam_hooked") then
         end
     end)
 end
--- 08-07 r18 (Aurora: "reset the camera to facing behind the Arisen --
--- there's an ingame button for this (R3)"): the R3 recall is
--- app.camera.module.CameraReset:request(...) (signature via Puppeteer's
--- skip-hook -- depend, never edit). We can't reach the module instance
--- directly, so a LEARNING hook captures it (plus the game's own flag
--- values) whenever the game resets its camera -- R3, lock-on, cutscenes
--- all feed it -- and the dismount handover replays that exact call.
--- r32: kick-shell party guard + Heavenward launch-packet capture hooks
--- REMOVED with the shell strike and the replay (r30: damageProc no-ops
--- foreign packets -- ⛔ CLOSED; the r24 hybrid fling is the launch).
-if not rawget(_G, "__iris_camreset_hooked") then
-    pcall(function()
-        local td = sdk.find_type_definition("app.camera.module.CameraReset")
-        local m = td and td:get_method(
-            "request(System.Nullable`1<System.Single>, "
-            .. "System.Nullable`1<System.Single>, "
-            .. "System.Nullable`1<System.Single>, "
-            .. "System.Boolean, System.Boolean)")
-        if m then
-            sdk.hook(m, function(args)
-                pcall(function()
-                    local this = sdk.to_managed_object(args[2])
-                    if this then
-                        rawset(_G, "__iris_camreset_this", this)
-                        rawset(_G, "__iris_camreset_b1",
-                            (sdk.to_int64(args[6]) & 0xFF) ~= 0)
-                        rawset(_G, "__iris_camreset_b2",
-                            (sdk.to_int64(args[7]) & 0xFF) ~= 0)
-                    end
-                end)
-            end, function(retval) return retval end)
-            rawset(_G, "__iris_camreset_hooked", true)
-        end
-    end)
-end
-
 -- ⭐ POSE-ONLY mount (07-24 ROUND-10, THE INVERT — the fade fix): paint
 -- our riding pose + hand IK + chase cam ON TOP of the probe's LIVE native
 -- climb. The native climb owns position/physics/gravity/attach (so the
@@ -7581,6 +8281,7 @@ local function seat_mount_pose_only()
         and valid(S.costume.horse_go)) then return end
     if S.ride_pose_on then return end
     S.ride_pose_on = true
+    _G.IrisRiddenNow = true -- pose-only griffin/drake mount needs the same early guard
     S.seat_started = os.clock()
     S.seat_key_latch = true
     S.hand_seed = nil
@@ -7927,9 +8628,9 @@ local function end_rodeo(outcome)
                 end)
             end
             set_think_stop(ride.horse_character, false)
-            pcall(function()
-                ride.horse_character:call("resetActionAndAI")
-            end)
+            -- FSM/controller/think restoration is sufficient.  The no-argument
+            -- resetActionAndAI call does not match DD2's current native method and
+            -- must not be issued during a decision-system handover.
         end
     end
     if outcome == "tamed" then
@@ -8560,6 +9261,28 @@ local function tame_have_herb()
     return found ~= nil, found
 end
 
+-- Passive-tame weapon gate. The old cross-file courtship path forcibly sheathed the
+-- player; a horse should instead refuse the offer, and bolt if steel appears mid-rite.
+local function tame_weapon_sheathed()
+    local player = player_character()
+    if not player then return nil end
+    local h = nil
+    pcall(function() h = player:call("get_Human") end)
+    for _, obj in ipairs({h, player}) do
+        if obj then
+            local ok, drawn = pcall(function() return obj:call("get_IsDrawedWeapon") end)
+            if ok and type(drawn) == "boolean" then return not drawn end
+        end
+    end
+    if h then
+        for _, fn in ipairs({"<DrawingWeapon>k__BackingField", "<IsDrawWeapon>k__BackingField", "_DrawingWeapon", "DrawingWeapon"}) do
+            local ok, drawn = pcall(function() return h:get_field(fn) end)
+            if ok and type(drawn) == "boolean" then return not drawn end
+        end
+    end
+    return nil
+end
+
 -- the OFFERING watch (ported from IrisTaming's passive critter tame):
 -- the player drops the herb NATIVELY from the pouch; we spot the new
 -- ground object on two surfaces — DropItemList (loot bags) + a scene
@@ -8762,6 +9485,14 @@ local function tame_abort(reason)
     S.status = "tame: " .. tostring(reason)
 end
 
+-- Cancellation bridge for IrisTaming's mode/UI. This module alone owns the horse costume,
+-- FSM and palm pose, so callers request its normal abort instead of clearing S.tame externally.
+_G.IrisHorseTamingCancel = function(reason)
+    if not S.tame then return false end
+    tame_abort(reason or "cancelled")
+    return true
+end
+
 local function tame_tick()
     local now = os.clock()
     local n_down = false
@@ -8795,7 +9526,6 @@ local function tame_tick()
         S.music_claimed = nil
     end
     if not tame then
-        if not n_down then return end
         if S.ride_pose_on then return end
         local player_pos = universal_pos(player_game_object())
         if not player_pos then return end
@@ -8805,7 +9535,27 @@ local function tame_tick()
         if not (best and not best.tamed and valid(best.game_object)) then
             best = focused_wild_horse(9.0)
         end
-        if not best then return end
+        -- ⭐⭐⭐ 08-13 HOLD-TO-COMMIT, shared with every other passive tame (Aurora: tames kept
+        -- starting off a press she meant for a sign or a bell). A tap no longer begins the rite --
+        -- the button must be HELD for the species' commit time, and letting go costs nothing.
+        -- ⛔ THE RECORD RIDES ALONG AS THE PAYLOAD and comes back on completion: focused_wild_horse
+        -- is re-evaluated every frame, and a horse that turns its head leaves the 9m focus for a
+        -- frame -- which would otherwise cancel a hold that had already rightfully claimed it.
+        -- ⚠ This file cannot see IrisTaming's TB (it is a chunk-local over there), so it goes
+        -- through the _G export; with IrisTaming absent the old single-tap start is kept verbatim.
+        if not n_down then return end
+        -- ⭐⭐⭐ 08-13 TAMING MODE gates the horse/unicorn rite too. IrisTaming owns the flag and
+        -- already suppresses the PROMPT when the mode is off -- but this file starts its own rite
+        -- off its own key read, so without this a horse would still be tameable with no prompt and
+        -- no intent declared. Cross-file via rawget per this project's law; with IrisTaming absent
+        -- the rite behaves exactly as it always did.
+        local Tm = rawget(_G, "IrisTaming")
+        if Tm and Tm.mode_on and Tm.mode_on() ~= true then return end
+        if not (best and valid(best.game_object)) then return end
+        if tame_weapon_sheathed() == false then
+            tame_card("LOWER YOUR WEAPON", "A horse will not accept an armed approach.", TAME_RED)
+            return
+        end
         S.tame = {record = best, stage = "palm1", hold = 0.0, t = now,
                   n_latch = true,
                   gender = (math.random() < 0.5) and "female" or "male"}
@@ -8829,6 +9579,14 @@ local function tame_tick()
     end
     local dt = math.min(0.1, now - (tame.t or now))
     tame.t = now
+
+    -- The mounted brace/rodeo owns the player's whole body. Everywhere else, drawing
+    -- steel breaks this peaceful rite and uses tame_abort's existing bolt/restore path.
+    if tame.stage ~= "brace" and tame.stage ~= "rodeo" and tame_weapon_sheathed() == false then
+        tame_card("IT SPOOKS", "Drawn steel sends it bolting.", TAME_RED)
+        tame_abort("you drew steel - it bolts")
+        return
+    end
 
     if tame.stage == "palm1" then
         -- prey window: fills from 2.5-9m; crowding it spooks it
@@ -8856,7 +9614,7 @@ local function tame_tick()
             tame.spook = 0
             tame_palm_pose(false)
             tame_card("THE PALM",
-                "Hold out your hand (hold N) -- keep your distance.")
+                "Hold out your hand (hold N / B) -- keep your distance.")
         end
     elseif tame.stage == "herb" then
         if tame.eat_until then
@@ -9202,7 +9960,7 @@ local function tame_tick()
         else
             tame_palm_pose(false)
             tame_card("THE PACT",
-                "Stand before it and hold out your hand (hold N).")
+                "Stand before it and hold out your hand (hold N / B).")
         end
     elseif tame.stage == "name" then
         tame_card("NAME IT", "type the name in the IRIS - Horse Rodeo panel")
@@ -9341,6 +10099,14 @@ re.on_frame(function()
     -- native B prompt, and it cannot draw over an address -- it needs the object. Additive; the
     -- addr key keeps its existing readers.
     rawset(_G, "__iris_horse_taming_claim_go", focus and focus.game_object or nil)
+    -- ⭐ 08-13 (Aurora #2: "the 'Tame the Unicorn' B prompt should disappear once taming has
+    -- started"). The claim above deliberately KEEPS naming the horse for the WHOLE rite -- the pad
+    -- gate in tame_tick and IrisTaming's start-guard both depend on that -- so from the outside
+    -- "you may begin" and "you are three seconds into THE PALM" look identical, and IrisTaming went
+    -- on advertising B over a horse already being tamed. Publish the rite state as its own key so
+    -- the marker/prompt owner can stand down without losing the claim.
+    -- (Read one frame late: tame_tick runs later in this same on_frame. A prompt does not care.)
+    rawset(_G, "__iris_horse_taming_rite_active", (S.tame ~= nil) or nil)
     if S.costume_stop_requested then
         S.costume_stop_requested = nil
         if S.ride_pose_on then seat_dismount() end
@@ -9589,7 +10355,12 @@ re.on_frame(function()
                 if not (S.costume and (S.costume.pose_only
                     or S.costume.passenger_only))
                     and os.clock() > (seat.enforce_at or 0) then
-                    seat.enforce_at = os.clock() + 0.25
+                    -- Wyrm rides own their mount and rider action state.  A
+                    -- quarter-second watchdog fought each attack animation and
+                    -- generated needless action/component churn; a one-second
+                    -- safety check is sufficient for this chassis.
+                    local wyrm_seat = S.costume and S.costume.wyrm_kind
+                    seat.enforce_at = os.clock() + (wyrm_seat and 1.0 or 0.25)
                     -- Keep DD2's rescue recorder on the last GROUNDED ride
                     -- point, never blindly on the saddle. Gluing it to an
                     -- airborne/submerged horse poisoned the player's respawn
@@ -9638,7 +10409,7 @@ re.on_frame(function()
                         -- actions re-enable the CharacterController,
                         -- whose cached position then beats every
                         -- transform write we make
-                        if act ~= "FallLoop" then
+                        if act ~= "FallLoop" and not (wyrm_seat and S.wyrm_atk_until) then
                             suppress_player_components(seat.player_go)
                             pcall(function()
                                 local fsm = get_component(
@@ -10463,7 +11234,8 @@ re.on_draw_ui(function()
         end
         gait_row("walk", "gait_walk_bank", "gait_walk_id", 901, 1)
         gait_row("trot", "gait_run_bank", "gait_run_id", 901, 2)
-        gait_row("gallop", "gait_dash_bank", "gait_dash_id", 901, 3)
+        gait_row(S.costume.wyrm_kind and "sprint" or "gallop",
+            "gait_dash_bank", "gait_dash_id", 901, 3)
         -- SAVED to config (07-23: Aurora tuned these and they were
         -- session-only — walk 1.25 / gallop 13 must survive reloads)
         local s1, sv1 = imgui.slider_float(
@@ -10473,15 +11245,34 @@ re.on_draw_ui(function()
             "trot speed m/s##spd_r", C.speed_run or 3.4, 1.0, 8.0)
         if s2 then C.speed_run = sv2; save_config() end
         local s3, sv3 = imgui.slider_float(
-            "gallop speed m/s##spd_d", C.speed_dash or 9.5, 3.0, 20.0)
+            (S.costume.wyrm_kind and "sprint speed m/s##spd_d"
+                or "gallop speed m/s##spd_d"),
+            C.speed_dash or 9.5, 3.0, 20.0)
         if s3 then C.speed_dash = sv3; save_config() end
-    else
+    end
+    -- This used to be the `else` arm of `if S.costume`, so the sliders
+    -- disappeared at exactly the moment a wolf/cat was armed or mounted.  Keep
+    -- the panel available both before arming and throughout a wyrm ride.
+    if (not S.costume) or S.costume.wyrm_kind then
         if imgui.button("WYRM MOUNT: ready the wyrm-grown companion (wolf / great cat)") then
             iris_wyrm_mount_start()
         end
         imgui.same_line()
         if imgui.button("release##wyrm_rel") then iris_wyrm_mount_stop() end
-        imgui.text("  ridden moves: X/T bite   Y/G heavy   LT/H howl (anims v1; damage = a later arc)")
+        imgui.text("  ridden moves: X/T Bite   Y/G Maul   LT/H Howl or Roar")
+        local nbc, nbv = imgui.checkbox(
+            "EXPERIMENT: Shadow X uses native Ch223_Bite##wyrm_native_bite",
+            C.wyrm_native_bite_test ~= false)
+        if nbc then
+            C.wyrm_native_bite_test = nbv
+            if not nbv and S.wyrm_native_lease then
+                iris_wyrm_native_bite_finish("disabled in panel")
+            end
+            save_config()
+        end
+        if S.wyrm_native_status then
+            imgui.text("  " .. tostring(S.wyrm_native_status))
+        end
         -- ⭐ 08-13 (Aurora: "I don't know where these sliders are"): ALWAYS visible,
         -- own section, and rider position split per species - wolf's tune is the
         -- cat's starting point but they never move together again.
@@ -10494,6 +11285,8 @@ re.on_draw_ui(function()
                 { "wyrm_speed_walk", "walk speed (m/s)", 0.8, 4.0 },
                 { "wyrm_speed_run", "run speed (m/s)", 2.0, 9.0 },
                 { "wyrm_speed_dash", "sprint speed (m/s)", 5.0, 16.0 },
+                { "wyrm_accel", "acceleration (m/s squared)", 5.0, 40.0 },
+                { "wyrm_brake", "braking (m/s squared)", 4.0, 20.0 },
                 { "wyrm_turn_rate", "turn rate (deg/s)", 40.0, 220.0 },
                 { "wyrm_jump_height", "leap height (m)", 1.0, 4.0 },
                 { "wyrm_jump_travel", "leap distance (1.0 = horse tune)", 0.3, 1.5 },
@@ -10509,15 +11302,20 @@ re.on_draw_ui(function()
                 elseif wd[1] == "wyrm_speed_walk" then wdef0 = 2.2
                 elseif wd[1] == "wyrm_speed_run" then wdef0 = 6.0
                 elseif wd[1] == "wyrm_speed_dash" then wdef0 = 11.0
+                elseif wd[1] == "wyrm_accel" then wdef0 = 26.0
+                elseif wd[1] == "wyrm_brake" then wdef0 = 10.0
                 elseif wd[1] == "wyrm_turn_rate" then wdef0 = 110.0 end
                 local wcur = tonumber(C[wd[1]]) or wdef0
                 local wch, wv2 = imgui.slider_float(wd[2] .. "##" .. wd[1], wcur, wd[3], wd[4])
                 if wch then C[wd[1]] = wv2; save_config() end
             end
             local sdefs = {
-                { "seat_above_joint", "seat height", -0.5, 1.5 },
+                { "seat_above_joint", "seat height", -1.5, 1.0 },
                 { "seat_fwd", "seat forward/back", -1.5, 1.5 },
                 { "seat_side", "seat side", -0.8, 0.8 },
+                { "seat_yaw", "rider yaw", -90.0, 90.0 },
+                { "seat_pitch", "rider lean/pitch", -60.0, 60.0 },
+                { "seat_roll", "rider roll", -45.0, 45.0 },
                 { "hand_grip_up", "hands height (DOWN = drag left)", -0.6, 0.6 },
                 { "hand_grip_fwd", "hands forward", -0.6, 0.9 },
                 { "hand_grip_width", "hands width", 0.0, 0.8 },
@@ -10529,6 +11327,9 @@ re.on_draw_ui(function()
                 for _, sd in ipairs(sdefs) do
                     local k9 = sd[1] .. "_wyrm_" .. wkind
                     local cur9 = tonumber(C[k9])
+                    if cur9 == nil then
+                        cur9 = tonumber(SEAT_DEFAULTS[k9])
+                    end
                     if cur9 == nil then cur9 = tonumber(C[sd[1] .. "_wyrm"]) end
                     if cur9 == nil then
                         cur9 = tonumber(SEAT_DEFAULTS[sd[1] .. "_wyrm"]) or 0.0
@@ -10540,6 +11341,8 @@ re.on_draw_ui(function()
             end
             imgui.tree_pop()
         end
+    end
+    if not S.costume then
         if imgui.button("OXLESS MOUNT: ready the nearest horse (no ghost)") then
             local player_pos = universal_pos(player_game_object())
             local best, best_d = nil, 50.0

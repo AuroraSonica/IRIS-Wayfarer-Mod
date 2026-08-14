@@ -671,6 +671,31 @@ local function _wild_is_felled(key)
     end)
     return perm
 end
+local function _wild_is_felled_near(x, z, radius)
+    local r2 = (tonumber(radius) or 1.75) ^ 2
+    local now = os.clock()
+    for i = #(wild.hide_watch or {}), 1, -1 do
+        local e = wild.hide_watch[i]
+        if not e or now - (tonumber(e.at) or 0) > WILD_FELLED_TTL then
+            table.remove(wild.hide_watch, i)
+        else
+            local dx, dz = x - e.x, z - e.z
+            if dx * dx + dz * dz <= r2 then return true end
+        end
+    end
+    -- Position-keyed legacy entries still count, including saves made before the
+    -- spatial watcher existed.
+    for key in pairs(wild.felled) do
+        local xs, zs = tostring(key):match("^(%-?[%d%.]+)_(%-?[%d%.]+)$")
+        if xs then
+            local fx, fz = tonumber(xs), tonumber(zs)
+            if fx and fz and (x - fx) ^ 2 + (z - fz) ^ 2 <= r2 and _wild_is_felled(key) then
+                return true
+            end
+        end
+    end
+    return _wild_is_felled(string.format("%.1f_%.1f", x, z))
+end
 M.wild_trees = true
 M.wild_hits = 3
 
@@ -718,33 +743,51 @@ local function _hide_foliage_cluster(comp, cx, cz, radius)
     end)
     return hidden
 end
+local function _hide_foliage_world(cx, cz, radius)
+    local hidden, budget = {}, 0
+    pcall(function()
+        local smgr = sdk.get_native_singleton("via.SceneManager")
+        local scene = smgr and sdk.call_native_func(smgr,
+            sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+        local arr = scene and scene:call("findComponents(System.Type)", sdk.typeof("via.landscape.Foliage"))
+        local n = arr and arr:get_size() or 0
+        for ci = 0, n - 1 do
+            local comp = arr:get_element(ci)
+            local speed = false
+            pcall(function() speed = comp and comp:call("isSpeedTreeMesh", 0) == true end)
+            if speed then
+                for _, idx in ipairs(_hide_foliage_cluster(comp, cx, cz, radius)) do
+                    hidden[#hidden + 1] = { comp = comp, i = idx }
+                end
+                local cnt = 0; pcall(function() cnt = tonumber(comp:call("get_InstanceCount")) or 0 end)
+                budget = budget + cnt
+                if budget > 60000 then break end
+            end
+        end
+    end)
+    return hidden
+end
 local _reassert_at = 0.0
 local function _reassert_felled_hide()
     local now = os.clock()
-    if now - _reassert_at < 1.2 then return end          -- gentle: ~once a second
+    if now - _reassert_at < 4.0 then return end
     _reassert_at = now
+    local live = {}
     for ei = #wild.hide_watch, 1, -1 do
         local e = wild.hide_watch[ei]
         if not e or (now - (e.at or 0)) > WILD_FELLED_TTL then
             table.remove(wild.hide_watch, ei)             -- expired -> the spot may regrow
         else
-            pcall(function()
-                for _, k in ipairs(e.idxs or {}) do
-                    -- confirm index k is STILL our felled instance (guards streaming reshuffle),
-                    -- then blindly re-hide it (getVisibility is unreliable, so don't trust a read)
-                    local wp = e.comp:call("getWorldPosition", k)
-                    if wp then
-                        local dx, dz = wp.x - e.x, wp.z - e.z
-                        if dx * dx + dz * dz <= 1.5 then
-                            _set_foliage_visibility(e.comp, k, false)
-                        end
-                    end
-                end
-            end)
+            live[#live + 1] = e
         end
     end
+    -- Streaming can replace a component or reshuffle its instance indices.  Resolve
+    -- every live fell spot afresh instead of trusting stale managed wrappers.
+    for _, e in ipairs(live) do
+        _hide_foliage_world(e.x, e.z, M.wild_fell_radius or 1.0)
+    end
 end
-re.on_frame(function() pcall(_reassert_felled_hide) end)
+re.on_application_entry("LateUpdateBehavior", function() pcall(_reassert_felled_hide) end)
 
 local function _wild_tree_strike(pp, fwd, cone_cos)
     local reach = math.min(M.chop_range or 6.0, 4.5)   -- wild trees want CLOSE work (the
@@ -762,7 +805,10 @@ local function _wild_tree_strike(pp, fwd, cone_cos)
                 in_cone = ((dx / d) * fwd.x + (dz / d) * fwd.z) >= cone_cos
             end
             local ckey = string.format("%.1f_%.1f", c.pos.x, c.pos.z)
-            if vis and in_cone and d <= reach + 0.5 and not _wild_is_felled(ckey) then best = c; bestd = d end
+            if vis and in_cone and d <= reach + 0.5
+                and not _wild_is_felled_near(c.pos.x, c.pos.z, (M.wild_fell_radius or 1.0) + 0.8) then
+                best = c; bestd = d
+            end
         end
     end
     if not best then
@@ -789,7 +835,8 @@ local function _wild_tree_strike(pp, fwd, cone_cos)
                             local dx, dz = wp2.x - pp.x, wp2.z - pp.z
                             local d2 = dx * dx + dz * dz
                             if d2 <= reach ^ 2 and (not bestd or d2 < bestd * bestd)
-                                and not _wild_is_felled(string.format("%.1f_%.1f", wp2.x, wp2.z)) then
+                                and not _wild_is_felled_near(wp2.x, wp2.z,
+                                    (M.wild_fell_radius or 1.0) + 0.8) then
                                 local vis = true
                                 pcall(function() vis = c:call("getVisibility", k) ~= false end)
                                 if vis then
@@ -867,12 +914,13 @@ local function _wild_tree_strike(pp, fwd, cone_cos)
         end)
         -- hide the WHOLE cluster at the spot (co-located twin instances included), remember the
         -- indices, and keep re-asserting: setVisibility alone is flaky + streaming re-shows it (Aurora 07-24)
-        local idxs = _hide_foliage_cluster(best.comp, pos.x, pos.z, M.wild_fell_radius or 1.0)
-        if #idxs == 0 and _set_foliage_visibility(best.comp, best.i, false) then
-            idxs = { best.i }
+        local bindings = _hide_foliage_world(pos.x, pos.z, M.wild_fell_radius or 1.0)
+        if #bindings == 0 and _set_foliage_visibility(best.comp, best.i, false) then
+            bindings = { { comp = best.comp, i = best.i } }
         end
-        wild.hide_watch[#wild.hide_watch + 1] = { comp = best.comp, idxs = idxs, x = pos.x, z = pos.z, at = os.clock() }
-        _log(string.format("wild fell hide: %d instance(s) at (%.1f,%.1f)", #idxs, pos.x, pos.z))
+        wild.hide_watch[#wild.hide_watch + 1] = { x = pos.x, z = pos.z, at = os.clock() }
+        _log(string.format("wild fell hide: %d instance(s) across all foliage components at (%.1f,%.1f)",
+            #bindings, pos.x, pos.z))
         -- the fell spectacle: the PROVEN small burst, doubled and scaled (the 110 big burst
         -- rendered nothing in Aurora's test) + the captured fall sound if one is set
         local keep = M.chip_scale
@@ -1646,15 +1694,34 @@ end
 -- vision"): with the PICKAXE in hand, minable scenery rocks within 45m wear a floating
 -- "Stone" marker (spent veins skipped; refreshed every 3s; markers via the shared face).
 -- (lives BELOW _pickaxe_wp_go on purpose - the local-scope ordering law, once more)
--- ⛔ PARKED OFF by default (Aurora 07-23, seeing the markers float over the river: composite
--- instance PIVOTS sit meters from the visual rock mass - "so out of place we may as well
--- just say hit stone and see what you get"). The checkbox revives it; a real fix would
--- project markers onto per-instance mesh AABB centers, someday.
-M.rock_sense = false
+-- Composite pivots are often metres away from the visible rock.  The old floating labels
+-- were therefore disabled for good reason; this version ray-projects each marker onto the
+-- first static surface between the player and the candidate, and discards implausible hits.
+M.rock_sense = M.rock_sense ~= false
 local rocksense = { list = {}, at = 0 }
+local function _rock_surface_marker(pp, r)
+    if not (pp and r and _ensure_ray()) then return nil end
+    local mark = nil
+    pcall(function()
+        ray.filter:set_Group(0); ray.filter:set_Layer(2); ray.filter:set_MaskBits(0)
+        ray.result:clear()
+        ray.query:call("setRay(via.vec3, via.vec3)",
+            _vec3(pp.x, pp.y + 1.25, pp.z), _vec3(r.x, r.y + 0.35, r.z))
+        ray.method:call(ray.system, ray.query, ray.result)
+        if (tonumber(ray.result:get_NumContactPoints()) or 0) <= 0 then return end
+        local cp = ray.result:call("getContactPoint(System.UInt32)", 0)
+        local p = cp and sdk.get_native_field(cp, ray.contact_td, "Position") or nil
+        if not p then return end
+        -- A riverbank/wall hit far before an inaccurate composite pivot is not a rock marker.
+        local dx, dz = p.x - r.x, p.z - r.z
+        if dx * dx + dz * dz > 5.0 ^ 2 then return end
+        mark = { x = p.x, y = p.y + 0.18, z = p.z }
+    end)
+    return mark
+end
 re.on_application_entry("UpdateBehavior", function()
     if not (M.rock_sense and M.wild_rocks) then return end
-    if os.clock() - rocksense.at < 3.0 then return end
+    if os.clock() - rocksense.at < 1.25 then return end
     rocksense.at = os.clock()
     local go2, tool = _pickaxe_wp_go()
     if not (tool and tool.kind == "STONE") then rocksense.list = {}; return end   -- pickaxe in hand only
@@ -1665,28 +1732,34 @@ re.on_application_entry("UpdateBehavior", function()
         -- gather WIDE then keep the nearest 10: the sweep returns engine order, and a cap
         -- hit mid-sweep dropped the rock right in front of Aurora while marking far ones
         local found = {}
-        for _, r in ipairs(_sweep_rocks(pp, 45.0, 64)) do
+        for _, r in ipairs(_sweep_rocks(pp, 18.0, 64)) do
             local dx, dz = r.x - pp.x, r.z - pp.z
             local d2 = dx * dx + dz * dz
-            if d2 >= 4.0 and not _rock_spent(r.x, r.z) then
-                r.d2 = d2
-                found[#found + 1] = r
+            if d2 >= 1.0 and not _rock_spent(r.x, r.z) then
+                local mark = _rock_surface_marker(pp, r)
+                if mark then
+                    r.d2, r.mark = d2, mark
+                    found[#found + 1] = r
+                end
             end
         end
         table.sort(found, function(a, b) return a.d2 < b.d2 end)
-        for i = 1, math.min(#found, 10) do rocksense.list[i] = found[i] end
+        for i = 1, math.min(#found, 8) do rocksense.list[i] = found[i] end
     end)
 end)
 re.on_frame(function()
     if not (M.rock_sense and #rocksense.list > 0) then return end
     for _, r in ipairs(rocksense.list) do
         pcall(function()
-            local sp = draw.world_to_screen(Vector3f.new(r.x, r.y, r.z))
+            local m = r.mark or r
+            local sp = draw.world_to_screen(Vector3f.new(m.x, m.y, m.z))
             if sp then
-                -- native-sense styling (Aurora: match the game's own gatherable look):
-                -- soft grey, named like the gimmick rocks
-                if not (_G.IrisFont and _G.IrisFont.text and _G.IrisFont.text("Minable Stone", sp.x, sp.y, 0xFFC9C9C4, 16)) then
-                    draw.text("Minable Stone", sp.x, sp.y, 0xFFC9C9C4)
+                local pulse = 6.0 + 1.5 * (0.5 + 0.5 * math.sin(os.clock() * 5.0))
+                draw.filled_circle(sp.x, sp.y, pulse, 0xD05CB4E0, 18)
+                local label = string.format("Mineable stone  -  X/Y Dig  (%.0fm)", math.sqrt(r.d2 or 0))
+                if not (_G.IrisFont and _G.IrisFont.text
+                    and _G.IrisFont.text(label, sp.x + 12, sp.y - 8, 0xFFE0B45C, 16)) then
+                    draw.text(label, sp.x + 12, sp.y - 8, 0xFF5CB4E0)
                 end
             end
         end)
@@ -2741,7 +2814,9 @@ end
 -- GimmickID enum) -> GenerateManager.requestCreateInstance -> poll InstanceInfo.
 local quarry = { jobs = {}, rocks = {}, seq = 0 }
 M.quarry_count = 4
-M.quarry_radius = 9.0
+-- 08-13 9→22m (Aurora: "spawning rocks right next to the house"): the quarry is an
+-- OUTSKIRTS feature - it belongs at the plot's edge, not in the yard
+M.quarry_radius = 22.0
 M.quarry_cluster = true    -- Aurora's pick: one rocky OUTCROP (tight group), not a scattered ring
 
 local function _quarry_despawn()

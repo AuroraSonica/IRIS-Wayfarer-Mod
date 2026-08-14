@@ -203,9 +203,10 @@ _G.IrisCreatureCam = {
     reset_fit = function() CAM.manual = false; local go = subject_go(); if go then autofit(go) end end,
     info = function() return CAM.info end,
     -- SCOUT DRONE: frame an explicit target (the flying bird) instead of the active companion
-    set_target = function(go)
+    set_target = function(go, preserve_view)
+        local keep = preserve_view == true and CAM.on == true and CAM.manual == true
         CAM.override_go = (go and go.call) and go or nil
-        if CAM.override_go then
+        if CAM.override_go and not keep then
             -- a CHASE view. Camera orbits the FORCED travel heading (set_heading each frame), so
             -- orbit_deg=180 = behind the travel = a true chase, independent of the bird's facing.
             CAM.dist = 2.8; CAM.height = 0.45; CAM.elev_deg = 16.0; CAM.orbit_deg = 180; CAM.manual = true; CAM.forced_yaw = nil

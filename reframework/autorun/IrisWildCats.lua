@@ -149,6 +149,14 @@ S.audio = {
     suppressed = 0,
     replaced = 0,
     pending_vocals = {},
+    pending_direct = {},
+    pending_wolf_calls = {},
+    wolf_howl_trigger_id = nil,
+    wolf_howl_heard_at = nil,
+    -- Decoded from DD2's ch223000_vo_m bank and inspected as spectra: these
+    -- are the two long, sustained harmonic calls (the first is the clearest
+    -- full howl). They are event/media candidates, not arbitrary VO entries.
+    wolf_howl_event_ids = { 716209110, 445935017 },
 }
 S.audio_status = "audio idle"
 
@@ -753,9 +761,9 @@ local function collect_wolf_family(max_source)
     return found
 end
 
-local function refresh_cats()
+local function refresh_cats(source_limit)
     local frame = S.frame or 0
-    local targets = collect_wolf_family(S.sweep_source or 3)
+    local targets = collect_wolf_family(source_limit or S.sweep_source or 3)
     local present, current_addresses, id_counts = {}, {}, {}
     for _, item in ipairs(targets) do
         present[item.address] = item
@@ -952,14 +960,22 @@ local function audio_prepare()
         return false
     end
     local trigger_instances = {}
+    local registration_trigger_instance = nil
     for _, path in ipairs(manifest.trigger_list_paths or {}) do
         local instance = create_userdata_any(
             "soundlib.SoundTriggerInfoListData", path)
         if instance then
             trigger_instances[#trigger_instances + 1] = instance
+            if path == manifest.registration_trigger_path then
+                registration_trigger_instance = instance
+            end
         else
             report("cat trigger-list USER unresolved: " .. tostring(path))
         end
+    end
+    if not registration_trigger_instance then
+        S.audio_status = "cat registration trigger-list USER unresolved"
+        return false
     end
 
     -- CRASH MITIGATION: register once per game process (see IrisWildHorses;
@@ -969,11 +985,13 @@ local function audio_prepare()
             dispatcher:call(
                 "loadContainableUserData(soundlib.SoundContainableUserData)",
                 bank_instance)
-            for _, instance in ipairs(trigger_instances) do
-                dispatcher:call(
-                    "loadContainableUserData(soundlib.SoundContainableUserData)",
-                    instance)
-            end
+            -- All four catalogues reference the same imported bank. Loading
+            -- every list makes Wwise process that bank four times; the Horse
+            -- path already documented this exact AK::WriteBytesCount crash.
+            -- Register the root once and retain the others only as catalogues.
+            dispatcher:call(
+                "loadContainableUserData(soundlib.SoundContainableUserData)",
+                registration_trigger_instance)
         end)
         if not load_ok then
             S.audio_status = "loadContainableUserData failed: "
@@ -985,6 +1003,7 @@ local function audio_prepare()
 
     A.triggers_by_event = {}
     A.categories = {}
+    A.registered_events = {}
     for _, entry in ipairs(manifest.events) do
         local bucket = A.categories[entry.category]
         if not bucket then
@@ -992,12 +1011,16 @@ local function audio_prepare()
             A.categories[entry.category] = bucket
         end
         bucket[#bucket + 1] = {name = entry.name, event_id = entry.event_id}
+        if entry.trigger_file == manifest.registration_trigger_path then
+            A.registered_events[entry.event_id] = true
+        end
     end
     A.registration = {
         dispatcher = dispatcher,
         dispatcher_address = address,
         bank_instance = bank_instance,
         trigger_instances = trigger_instances,
+        registration_trigger_instance = registration_trigger_instance,
         ready_frame = S.frame + READY_DELAY_FRAMES,
         poll_until_frame = S.frame + 900,
     }
@@ -1027,7 +1050,8 @@ local function resolve_pending_triggers()
                     instance, entry.event_id)
                 if trigger then
                     A.triggers_by_event[entry.event_id] = trigger
-                    if not A.template_trigger then
+                    if not A.template_trigger and A.registered_events
+                        and A.registered_events[entry.event_id] then
                         A.template_trigger = trigger
                     end
                     break
@@ -1114,6 +1138,66 @@ local function native_template_for(target)
     return found
 end
 
+-- Resolve one particular native vocal instead of taking the first entry in
+-- the VO list. The latter is how the ridden "howl" accidentally became a
+-- pain cry: catalogue membership tells us only that an event is vocal, not
+-- what the event means.
+local function native_trigger_for_id(target, wanted)
+    wanted = normal_u32(wanted)
+    if not wanted then return nil end
+    local wwise = get_component(target, "app.WwiseContainerApp")
+    if not wwise then return nil end
+    local found = nil
+    pcall(function()
+        local user_data = wwise._UserDataList
+        for bank_index = 0, collection_count(user_data) - 1 do
+            local lists = nil
+            pcall(function() lists = user_data[bank_index]._UserDataList end)
+            for list_index = 0, collection_count(lists) - 1 do
+                local triggers = nil
+                pcall(function() triggers = lists[list_index]._TriggerInfoList end)
+                for index = 0, collection_count(triggers) - 1 do
+                    local trigger = triggers[index]
+                    local id = nil
+                    pcall(function() id = normal_u32(trigger._TriggerId) end)
+                    if id == wanted then found = trigger; return end
+                end
+                if found then return end
+            end
+            if found then return end
+        end
+    end)
+    return found
+end
+
+local function native_trigger_for_event(target, wanted)
+    wanted = normal_u32(wanted)
+    if not wanted then return nil end
+    local wwise = get_component(target, "app.WwiseContainerApp")
+    if not wwise then return nil end
+    local found = nil
+    pcall(function()
+        local user_data = wwise._UserDataList
+        for bank_index = 0, collection_count(user_data) - 1 do
+            local lists = nil
+            pcall(function() lists = user_data[bank_index]._UserDataList end)
+            for list_index = 0, collection_count(lists) - 1 do
+                local triggers = nil
+                pcall(function() triggers = lists[list_index]._TriggerInfoList end)
+                for index = 0, collection_count(triggers) - 1 do
+                    local trigger = triggers[index]
+                    local event_id = nil
+                    pcall(function() event_id = normal_u32(trigger._EventId) end)
+                    if event_id == wanted then found = trigger; return end
+                end
+                if found then return end
+            end
+            if found then return end
+        end
+    end)
+    return found
+end
+
 -- The cat triggers are cloned from DOE voice data, so their authored
 -- _OffsetJointHash names a doe skeleton joint that does not exist on the
 -- wolf chassis — createRequestInfo returns nil for it. Create with the
@@ -1145,8 +1229,10 @@ local function post_throttled()
     return false
 end
 
-local function post_request(dispatcher, trigger, target)
-    if post_throttled() then return false, "post throttled" end
+local function post_request(dispatcher, trigger, target, throttle_claimed)
+    if not throttle_claimed and post_throttled() then
+        return false, "post throttled"
+    end
     local joint_hash = 0
     pcall(function() joint_hash = tonumber(trigger._OffsetJointHash) or 0 end)
     local request = create_request(dispatcher, trigger, target, joint_hash)
@@ -1165,13 +1251,15 @@ local function post_request(dispatcher, trigger, target)
     return ok
 end
 
-local function post_via_template(dispatcher, event_id, target)
-    if post_throttled() then return false, "post throttled" end
-    local template = A.template_trigger
-    if not valid(template) then
-        A.template_trigger = nil
-        template = native_template_for(target)
+local function post_via_template(dispatcher, event_id, target, throttle_claimed)
+    if not throttle_claimed and post_throttled() then
+        return false, "post throttled"
     end
+    -- A failed direct custom trigger is not a useful template for itself.
+    -- Use a request shape authored for this wolf chassis, then substitute
+    -- only the imported cat event ID (the proven Wild Horses route).
+    local template = native_template_for(target)
+    if not valid(template) then template = A.template_trigger end
     if not template then return false, "no template trigger available" end
     local function retire_template()
         if template == A.native_template then A.native_template = nil end
@@ -1229,32 +1317,29 @@ local function post_event(event_id, target)
         A.registration = nil
         return false, "dispatcher went stale; reloading"
     end
+    -- Claim the Wwise throttle once per logical sound. Previously the direct
+    -- attempt consumed it, so the native-template fallback was *always*
+    -- rejected as "post throttled" in the same frame.
+    if post_throttled() then return false, "post throttled" end
     local trigger = A.triggers_by_event[event_id]
     local direct_err = nil
-    if trigger then
+    if trigger and A.registered_events and A.registered_events[event_id] then
         local ok
-        ok, direct_err = post_request(dispatcher, trigger, target)
+        ok, direct_err = post_request(dispatcher, trigger, target, true)
         if ok then return true end
     end
     local template_ok, template_err = post_via_template(
-        dispatcher, event_id, target)
+        dispatcher, event_id, target, true)
     if template_ok then return true end
-    -- Custom-loaded triggers can sour after repeated script resets while the
-    -- NATIVE wolf trigger keeps working (the horse module survived resets the
-    -- same way, via its native doe template). Force the native route once.
-    if A.template_trigger and A.template_trigger ~= A.native_template then
-        A.template_trigger = nil
-        local native_ok, native_err = post_via_template(
-            dispatcher, event_id, target)
-        if native_ok then return true end
-        template_err = tostring(template_err) .. " | native: "
-            .. tostring(native_err)
-    end
     return false, (direct_err and (tostring(direct_err) .. " | ") or "")
         .. "template: " .. tostring(template_err)
 end
 
 local function play_category(category, target)
+    if (tonumber(A.post_fail_n) or 0) >= 3
+        and os.clock() < (tonumber(A.post_cool) or 0.0) then
+        return false, "cat audio circuit open (cooling down)"
+    end
     local bucket = A.categories[category]
     if not bucket or #bucket == 0 then
         return false, "no sounds in category " .. tostring(category)
@@ -1269,7 +1354,18 @@ local function play_category(category, target)
     A.last_pick[category] = index
     local entry = bucket[index]
     local ok, err = post_event(entry.event_id, target)
-    if ok then A.last_played = entry.name end
+    if ok then
+        A.last_played = entry.name
+        A.post_fail_n = 0
+    else
+        A.post_fail_n = (tonumber(A.post_fail_n) or 0) + 1
+        if A.post_fail_n >= 3 then
+            A.post_cool = os.clock() + 300.0
+            if A.post_fail_n == 3 then
+                report("cat audio circuit OPEN: 3 consecutive post failures; cooling for 5 minutes")
+            end
+        end
+    end
     return ok, err
 end
 
@@ -1281,6 +1377,12 @@ local function registered_cat_ancestor(game_object)
     local current = game_object
     for _ = 1, 8 do
         if not valid(current) then return nil end
+        local mounted_cat = rawget(_G, "__iris_rodeo_is_mounted_cat")
+        if mounted_cat then
+            local yes = false
+            pcall(function() yes = mounted_cat(current) == true end)
+            if yes then return current end
+        end
         local address = object_address(current)
         local record = address and REGISTRY[address]
         if record and (record.kind == "puma" or record.kind == "panther") then
@@ -1313,10 +1415,41 @@ pcall(function()
     local api = rawget(_G, "__iris_wild_cats_api")
     if not api then return end
     api.play = function(category, target_go)
-        return play_category(category, target_go)
+        if not A.registration then pcall(audio_prepare) end
+        local ok, err = play_category(category, target_go)
+        if ok then return true end
+        -- A newly summoned cat can be mounted inside the bank's 180-frame
+        -- settle window. Keep the requested voice and post it once ready;
+        -- previously that first refusal was simply lost.
+        A.pending_direct[#A.pending_direct + 1] = {
+            category = category, target = target_go,
+            expires = os.clock() + 4.0, next_at = os.clock() + 0.25,
+        }
+        return false, err
     end
     api.is_cat = function(game_object)
         return registered_cat_ancestor(game_object) ~= nil
+    end
+    api.play_wolf_call = function(target_go)
+        local dispatcher = get_component(target_go, "app.WwiseContainerApp")
+        local trigger = nil
+        for _, event_id in ipairs(A.wolf_howl_event_ids or {}) do
+            trigger = native_trigger_for_event(target_go, event_id)
+            if trigger then break end
+        end
+        if not trigger then
+            trigger = native_trigger_for_id(target_go, A.wolf_howl_trigger_id)
+        end
+        if dispatcher and trigger then return post_request(dispatcher, trigger, target_go) end
+        -- Give the direct 4610 howl clip time to emit its own event. The hook
+        -- below learns that exact trigger. If this think-stopped body emits no
+        -- event, fall back to an imported long attack roar—not an arbitrary
+        -- native vocal and therefore never another pain cry.
+        if not A.registration then pcall(audio_prepare) end
+        A.pending_wolf_calls[#A.pending_wolf_calls + 1] = {
+            target = target_go, since = os.clock(), at = os.clock() + 0.48,
+        }
+        return true
     end
 end)
 
@@ -1324,6 +1457,7 @@ local trigger_method = sdk.find_type_definition("app.WwiseContainerApp")
     :get_method("trigger(soundlib.SoundManager.RequestInfo)")
 local trigger_hook_installed = false
 local function install_trigger_hook()
+    -- (08-13: stood down during the mount-CTD hunt and EXONERATED. Restored.)
     if trigger_hook_installed or not trigger_method then return end
     trigger_hook_installed = true
     sdk.hook(trigger_method, function(args)
@@ -1335,14 +1469,37 @@ local function install_trigger_hook()
         if not container or not request then return end
         local owner = nil
         pcall(function() owner = container:call("get_GameObject") end)
-        local cat = registered_cat_ancestor(owner)
-        if not cat then return end
         local trigger_id = 0
         pcall(function()
             trigger_id = normal_u32(request:call("get_TriggerId")) or 0
         end)
-        local vocal_ids = ensure_vocal_ids(cat)
+        local vocal_ids = ensure_vocal_ids(owner)
         if not (vocal_ids and vocal_ids[trigger_id]) then return end
+
+        -- Learn the semantic howl ID from the only reliable evidence: a VO
+        -- request fired while layer 0 is playing the atlas-verified howl clips.
+        -- Do this for ordinary wolves as well as converted cats, and leave the
+        -- original request untouched.
+        local motion_id = -1
+        pcall(function()
+            local ch = get_component(owner, "app.Character")
+            local motion = ch and ch:call("get_Motion")
+            local layer = motion and motion:call("getLayer", 0)
+            motion_id = layer and tonumber(layer:call("get_MotionID")) or -1
+        end)
+        if motion_id == 4610 or motion_id == 4611 or motion_id == 4612 then
+            A.wolf_howl_trigger_id = trigger_id
+            A.wolf_howl_heard_at = os.clock()
+        end
+
+        local cat = nil
+        local mounted_audio = rawget(_G,
+            "__iris_rodeo_mounted_cat_audio_owner")
+        if mounted_audio then
+            pcall(function() cat = mounted_audio(owner, container) end)
+        end
+        if not cat then cat = registered_cat_ancestor(owner) end
+        if not cat then return end
 
         local state = cat_state_for(cat)
         if state and state.death_played then
@@ -1381,6 +1538,48 @@ local function drain_vocals()
             end
         end
     end
+end
+
+local function drain_direct_audio()
+    if #A.pending_direct > 0 and C.audio_enabled and audio_ready() then
+        local keep, now = {}, os.clock()
+        for _, item in ipairs(A.pending_direct) do
+            if now <= (tonumber(item.expires) or 0) and valid(item.target) then
+                if now < (tonumber(item.next_at) or 0) then
+                    keep[#keep + 1] = item
+                elseif not play_category(item.category, item.target) then
+                    item.next_at = now + 0.25
+                    keep[#keep + 1] = item
+                end
+            end
+        end
+        A.pending_direct = keep
+    end
+    if #A.pending_wolf_calls == 0 then return end
+    local keep, now = {}, os.clock()
+    for _, item in ipairs(A.pending_wolf_calls) do
+        if now < (tonumber(item.at) or now) then
+            keep[#keep + 1] = item
+        elseif valid(item.target) then
+            -- If this very move produced the native howl, it has already been
+            -- heard; posting it a second time would overlap itself.
+            local heard = tonumber(A.wolf_howl_heard_at) or 0
+            if heard < (tonumber(item.since) or 0) then
+                local dispatcher = get_component(item.target, "app.WwiseContainerApp")
+                local trigger = native_trigger_for_id(
+                    item.target, A.wolf_howl_trigger_id)
+                if dispatcher and trigger then
+                    post_request(dispatcher, trigger, item.target)
+                elseif C.audio_enabled and audio_ready() then
+                    play_category("attack", item.target)
+                elseif now < (tonumber(item.since) or now) + 4.0 then
+                    item.at = now + 0.10
+                    keep[#keep + 1] = item
+                end
+            end
+        end
+    end
+    A.pending_wolf_calls = keep
 end
 
 -- ---------------------------------------------------------------------------
@@ -1560,7 +1759,19 @@ re.on_application_entry("UpdateBehavior", function()
             })[phase])
         end
     end
-    if state.frame % 30 == 0 then refresh_cats() end
+    -- Registry maintenance used to perform 301 AISituation calls plus a
+    -- scene-wide app.Character enumeration every 30 frames, forever.  Keep
+    -- that expensive recovery path responsive only while a newly converted
+    -- panther group is waiting to be identified.  Established cats need only
+    -- the CharacterManager list, with a sparse full sweep for streamed strays.
+    local panther_pending = #S.pending_panther_groups > 0
+    if panther_pending and state.frame % 30 == 0 then
+        refresh_cats(3)
+    elseif state.frame % 300 == 0 then
+        refresh_cats(3)
+    elseif state.frame % 120 == 0 then
+        refresh_cats(1)
+    end
     if not state.resources_reported
         and resource_ready(state.puma_resource)
         and resource_ready(state.panther_resource)
@@ -1586,6 +1797,7 @@ re.on_application_entry("UpdateBehavior", function()
     end
     resolve_pending_triggers()
     drain_vocals()
+    drain_direct_audio()
 
     local now = os.clock()
     if now >= S.next_sample then

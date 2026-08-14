@@ -2823,6 +2823,28 @@ local function _ani_days()
     if not ani.days then ani.days = json.load_file(ANI_FILE) or {} end
     return ani.days
 end
+
+-- Read-only Animals-screen contract.  The persistent record key is shared with
+-- collection below, so the status can never disagree with the actual gate.
+_G.IrisAnimalProduce = {
+    status = function(record_id, species, gender)
+        local s = tostring(species or ""):lower()
+        local kind = (s:find("ch299003", 1, true) and "milk")
+            or (s:find("ch299221", 1, true) and "egg") or nil
+        if not kind then return nil end
+        if kind == "milk" and gender == "male" then
+            return { kind = kind, ready = false, label = "Produce: bull - no milk" }
+        end
+        local day = _today()
+        local given = day and record_id ~= nil
+            and _ani_days()["id:" .. tostring(record_id)] == day or false
+        local what = kind == "milk" and "Milk" or "Fresh egg"
+        local label = not day and ("Produce: " .. what .. " - day clock unavailable")
+            or given and ("Produce: " .. what .. " - already collected today")
+            or ("Produce: " .. what .. " - ready (once per in-game day)")
+        return { kind = kind, ready = not given and day ~= nil, collected_today = given, label = label }
+    end,
+}
 local function _scan_animals(radius)
     local found = {}
     pcall(function()
@@ -3021,11 +3043,26 @@ local function _try_animal_produce()
             -- penned animals across a game restart. Either latch counts.
             local akey = nil
             pcall(function() akey = "a" .. tostring(a.go:get_address()) end)
+            local record_id = nil
+            pcall(function()
+                local b9 = rawget(_G, "IrisGriffinBridge")
+                record_id = b9 and b9.body_record_id and b9.body_record_id(a.go) or nil
+            end)
+            local idkey = record_id ~= nil and ("id:" .. tostring(record_id)) or nil
             local today = _today()
             local days = _ani_days()
-            if today and (days[key] == today or (akey and days[akey] == today)) then
+            if today and ((idkey and days[idkey] == today)
+                or days[key] == today or (akey and days[akey] == today)) then
                 _log(kind .. ": this animal has already given today - come back tomorrow")
                 return true
+            end
+            -- Latch before starting the animation.  The stable record ID persists while
+            -- the animal walks, is called to the bell, despawns, or the game is restarted.
+            if today then
+                if idkey then days[idkey] = today end
+                days[key] = today
+                if akey then days[akey] = today end
+                pcall(function() json.dump_file(ANI_FILE, days) end)
             end
             _ani_hold(a.go, true)   -- stand still, friend - released in on_done on every path
             _ani_moo(a.go)          -- its own moo/cluck from its own bank
@@ -3060,11 +3097,6 @@ local function _try_animal_produce()
                     _log("collected from " .. a.name .. " -> Fresh Egg x" .. tostring(got or n9)
                         .. (n9 > 1 and " (fortune smiles on this one)" or ""))
                 end)
-            end
-            if today then
-                days[key] = today
-                if akey then days[akey] = today end
-                pcall(function() json.dump_file(ANI_FILE, days) end)
             end
             return true
         end

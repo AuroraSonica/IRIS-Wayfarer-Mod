@@ -18,7 +18,7 @@ local CFG = "IrisWildBlood.json"
 local C = {
     enabled = true,
     radius = 150.0,        -- roll/apply within this range of the player
-    sweep_secs = 2.0,      -- scene sweep throttle
+    sweep_secs = 5.0,      -- full-scene enumeration; genetics need no combat-rate polling
     max_tracked = 128,     -- safety cap on the ledger
 }
 pcall(function()
@@ -77,6 +77,7 @@ W.take = function(addr)
     local e = addr and W.led[addr]
     if not e then return nil end
     W.led[addr] = nil
+    W.count = math.max(0, (tonumber(W.count) or 1) - 1)
     pcall(function() log.info("[IrisWildBlood] genes carried into the tame: " .. tostring(e.name)) end)
     -- 08-12: the NATURAL base rides along too (second return) -- the tame preserves the
     -- body's innate variance, not just its gene

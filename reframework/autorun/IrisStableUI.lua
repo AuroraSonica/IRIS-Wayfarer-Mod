@@ -21,12 +21,15 @@
 local CFG_FILE = "IrisStableUI.json"
 local C = {
     key_toggle = 0x4F,     -- O
+    key_tab_l  = 0x51,     -- Q: tab left   (pad: LB)
+    key_tab_r  = 0x45,     -- E: tab right  (pad: RB)
     key_up = 0x26, key_down = 0x28,          -- arrows
     key_summon = 0x0D,     -- Enter
     key_dismiss = 0x08,    -- Backspace
     key_release = 0x2E,    -- Delete (double-press)
     key_rename = 0x52,     -- R (safe: the world is paused while the screen is open)
     key_home = 0x48,       -- H: send to / call back from the homestead
+    key_customize = 0x43,  -- C: customise the currently summoned creature
     scale = 1.0,
     font_file = "Sovngarde Light.ttf",       -- the IRIS face (reframework/fonts/)
     show_pad_mask = false, -- dev: show the live gamepad button mask (for wiring pad nav)
@@ -107,15 +110,19 @@ local function ensure_fonts()
     end
 end
 
-local function text_w(s)
-    -- measured width of s in the std face (for stitching mixed-font segments)
+-- ⛔ `big` IS NOT OPTIONAL WHEN THE STRING IS DRAWN BIG. txt() renders titles in fonts.big but
+-- this measured only in fonts.std, so "THE  STABLE" reported far narrower than it paints and the
+-- next tab was laid straight on top of it (Aurora's screenshot). Measure in the face you draw in.
+local function text_w(s, big)
+    -- measured width of s (for stitching mixed-font segments and laying out the tab strip)
     local w = nil
-    if fonts.std then imgui.push_font(fonts.std) end
+    local ff = (big and fonts.big) or fonts.std
+    if ff then imgui.push_font(ff) end
     pcall(function()
         local sz = imgui.calc_text_size(tostring(s))
         w = sz and tonumber(sz.x) or nil
     end)
-    if fonts.std then imgui.pop_font() end
+    if ff then imgui.pop_font() end
     return w
 end
 
@@ -150,6 +157,7 @@ pcall(function()
     end
     PAD.dpad.up = pick("LUp", "Up", "DUp", "PadUp")
     PAD.dpad.down = pick("LDown", "Down", "DDown", "PadDown")
+    PAD.dpad.left = pick("LLeft", "Left", "DLeft", "PadLeft")
     PAD.dpad.right = pick("LRight", "Right", "DRight", "PadRight")
     PAD.face.a = pick("Decide", "A", "RDown")
     PAD.face.b = pick("Cancel", "B", "RRight")
@@ -327,12 +335,50 @@ local function stable_rows()
     return rows or {}
 end
 
+-- ── ⭐⭐⭐ THE TAMING PAGE (Aurora 08-13) ────────────────────────────────────────────────
+-- WHY THIS EXISTS AT ALL: B is the tame hand, the dodge, and every interact in the game, so the
+-- mod spent a long time trying to INFER which one a press meant -- reach, camera cone, hold
+-- duration. Every heuristic failed in the field. A mode does not infer: the player says what they
+-- mean here, and with it off no tame prompt can appear over the sign or bell they actually wanted.
+--
+-- ⛔ ENTRIES ARE BUILT FRESH EVERY FRAME so labels can read live state ("Enter" vs "Leave"), and
+-- so adding a future action (Wayfarer Sense and whatever follows) is one row in this table rather
+-- than a new keybind. We ran out of face buttons long ago; that is what a page is for.
+-- ⛔ NOTHING HERE TOUCHES A CREATURE. This screen runs on a PAUSED frame and body work on a paused
+-- frame is this project's documented crash class -- every action either flips a flag or raises a
+-- request that IrisTaming consumes on its next LIVE frame.
+local function taming_api() return rawget(_G, "IrisTaming") end
+local function tame_entries()
+    local T = taming_api()
+    local on = (T and T.mode_on and T.mode_on() == true) or false
+    local act = (T and T.rite_active and T.rite_active() == true) or false
+    local stay = (T and T.mode_stay_on and T.mode_stay_on() == true) or false
+    return {
+        { id = "mode", label = on and "Leave Taming Mode" or "Enter Taming Mode",
+          hint = on and "Tame prompts are showing. Your other B actions stand aside."
+                     or "While off, no tame prompt can appear -- signs and bells keep B.",
+          lit = on },
+        { id = "cancel", label = "Cancel Current Tame",
+          hint = act and "End the courtship now. Its trust is kept."
+                      or "Nothing is being tamed right now.",
+          dim = not act },
+        { id = "stay", label = "Stay In Taming Mode After A Tame:  " .. (stay and "ON" or "OFF"),
+          hint = stay and "The mode stays on so you can tame several in a row."
+                       or "The mode switches itself off once a bond is made." },
+        { id = "sense", label = "Use Wayfarer Sense",
+          hint = "Reveal nearby creatures worth approaching.", dim = true },
+    }
+end
+
 -- ── input tick ──────────────────────────────────────────────────────────────────────────
 local function set_open(v)
     U.open = v == true
     _G.IrisStableUIOpen = U.open
     U.confirm_id = nil
-    if U.open then U.cursor = 1 end
+    -- 08-13: always reopen on the stable list, never on whichever sub-page you happened to leave
+    -- from. A screen that reopens somewhere unexpected reads as a bug.
+    U.page = nil
+    if U.open then U.cursor = 1; U.tcursor = 1 end
     world_pause(U.open)
 end
 local function toggle_open() set_open(not U.open) end
@@ -378,10 +424,28 @@ local function input_tick()
     -- keep the flag published even across reloads (the jump-block reads it)
     _G.IrisStableUIOpen = U.open == true
     if not U.open then return end
+    -- B closes from EVERY tab, exactly as it does on the stable list. Stepping back a tab is
+    -- Q/LB (and the footer says so) -- one button meaning two things depending on which tab you
+    -- happen to be on is the inconsistency Aurora called out in the first place.
     if edge2("close", pdown(PAD.face.b)) then set_open(false); return end
-    -- ⭐ 08-12 ONE MENU: RB slides from the Stable into the Homestead Screen's tabs -- but
-    -- ONLY when a built plot is in range. The home tabs are contextual, never global.
-    if edge2("handoff", pdown(PAD.rb)) and os.clock() > (tonumber(U.handoff_guard) or 0) then
+    -- ⭐⭐ 08-13 TAB NAVIGATION, matching IrisFurnish exactly (Q/E keys, LB/RB pad). The chain is
+    --     THE STABLE -> Taming -> [Homestead: Decorations/Build/Animals]
+    -- so RB walks RIGHT and only hands off to the other screen once it runs out of local tabs.
+    -- ⛔ The tab cursor is separate from the stable-row cursor: stepping to Taming and back must
+    -- not move which companion you had selected.
+    local tab_l = edge2("tab_l", pdown(PAD.lb) or kb(C.key_tab_l or 0x51))
+    local tab_r = edge2("tab_r", pdown(PAD.rb) or kb(C.key_tab_r or 0x45))
+    if tab_l then
+        if U.page == "taming" then U.page = nil; U.cursor = math.max(1, U.cursor or 1) end
+        return
+    end
+    if tab_r and os.clock() > (tonumber(U.handoff_guard) or 0) then
+        if U.page == nil then
+            U.page = "taming"; U.tcursor = 1
+            return
+        end
+        -- already on the last LOCAL tab: hand off to the Homestead screen if it has somewhere
+        -- to put us, otherwise say so rather than silently doing nothing
         local near9 = false
         pcall(function()
             local up9 = sdk.get_managed_singleton("app.CharacterManager"):call("get_ManualPlayer")
@@ -396,10 +460,47 @@ local function input_tick()
         if near9 then
             set_open(false)
             _G.IrisScreenHandoff = "furnish"
-            return
         else
             say("No homestead in range. The home tabs live at your plot.")
         end
+        return
+    end
+    if U.page == "taming" then
+        local es = tame_entries()
+        U.tcursor = math.max(1, math.min(tonumber(U.tcursor) or 1, #es))
+        if edge2("tup", kb(C.key_up) or pdown(PAD.dpad.up), 0.35, 0.12) then
+            U.tcursor = (U.tcursor <= 1) and #es or (U.tcursor - 1)
+        end
+        if edge2("tdown", kb(C.key_down) or pdown(PAD.dpad.down), 0.35, 0.12) then
+            U.tcursor = (U.tcursor >= #es) and 1 or (U.tcursor + 1)
+        end
+        if edge2("tpick", kb(C.key_summon) or pdown(PAD.face.a)) then
+            local e = es[U.tcursor]
+            local T = taming_api()
+            if e and not e.dim and T then
+                if e.id == "mode" then
+                    local nowon = T.mode_set and T.mode_set(not (T.mode_on and T.mode_on())) or false
+                    say(nowon and "Taming mode ON." or "Taming mode off.")
+                    -- entering the mode is the whole reason you opened this: get out of the way
+                    if nowon then set_open(false) end
+                elseif e.id == "cancel" then
+                    -- ⛔ raises a request only; IrisTaming does the body work on a live frame
+                    if T.cancel_rite and T.cancel_rite() then
+                        say("The courtship is set aside.")
+                        set_open(false)
+                    else
+                        say("Nothing is being tamed right now.")
+                    end
+                elseif e.id == "stay" then
+                    if T.mode_stay_set then
+                        local v = not (T.mode_stay_on and T.mode_stay_on())
+                        T.mode_stay_set(v)
+                        say(v and "Taming mode will stay on after a tame." or "Taming mode will end after a tame.")
+                    end
+                end
+            end
+        end
+        return   -- the page owns the cursor: no stable-row actions while it is up
     end
     local rows = stable_rows()
     if #rows == 0 then return end
@@ -419,10 +520,23 @@ local function input_tick()
     -- (stable_summon already dismisses the current companion as part of the switch).
     -- All body-touching actions QUEUE and run after the unpause (queue_action).
     if edge2("primary", kb(C.key_summon) or pdown(PAD.face.a)) and b then
-        queue_action(row.live and "dismiss" or "summon", row.id, row.name)
+        local at_home = U.near_home == true
+        pcall(function()
+            local hb9 = rawget(_G, "IrisHomesteadBox")
+            at_home = at_home or (hb9 and hb9.can_collect and hb9.can_collect() == true) or false
+        end)
+        queue_action(row.live and "dismiss"
+            or (row.home and at_home and "callback_summon") or "summon", row.id, row.name)
     end
     if edge2("rename", kb(C.key_rename) or pdown(PAD.face.x)) then
         queue_action("rename", row.id, row.name)
+    end
+    if edge2("customize", kb(C.key_customize) or pdown(PAD.dpad.left)) then
+        if row.live then
+            queue_action("customize", row.id, row.name)
+        else
+            say("Summon " .. tostring(row.name or "this creature") .. " before customising them.")
+        end
     end
     if edge2("home", kb(C.key_home) or pdown(PAD.dpad.right)) then
         queue_action(row.home and "callback" or "home", row.id, row.name)
@@ -466,6 +580,11 @@ local function pending_tick()
         pcall(function() ok, why = b.stable_send_home(p.id) end)
     elseif p.kind == "callback" then
         pcall(function() ok, why = b.stable_call_back(p.id) end)
+    elseif p.kind == "callback_summon" then
+        pcall(function()
+            ok, why = b.stable_call_back(p.id)
+            if ok then ok, why = b.stable_summon(p.id) end
+        end)
     elseif p.kind == "rename" then
         -- hand off to IrisTaming's rename card (the panel's own flow)
         local ok9 = false
@@ -477,6 +596,21 @@ local function pending_tick()
             pcall(function()
                 local T = rawget(_G, "IrisTaming")
                 if T and T.prompt then T.prompt("THE STABLE", "Rename is unavailable (IrisTaming not loaded)", 3.0, 0xFF8080FF) end
+            end)
+        end
+        return
+    elseif p.kind == "customize" then
+        -- Customisation needs the living body. The row gate above guarantees this is the
+        -- active companion; opening is deferred until after the Stable has unpaused.
+        local opened = false
+        pcall(function()
+            local cu = rawget(_G, "IrisCustomize")
+            opened = cu and cu.open and cu.open() == true or false
+        end)
+        if not opened then
+            pcall(function()
+                local T = rawget(_G, "IrisTaming")
+                if T and T.prompt then T.prompt("THE STABLE", "Customisation is unavailable for this creature.", 3.0, 0xFF8080FF) end
             end)
         end
         return
@@ -510,6 +644,68 @@ local COL = {
 local IV_KEYS = { "hp", "atk", "def", "spd", "size", "luck" }
 local IV_LABEL = { hp = "HP", atk = "ATK", def = "DEF", spd = "SPD", size = "SIZE", luck = "LUCK" }
 
+-- ⭐⭐ 08-13 THE TAB STRIP (Aurora: "it all needs to be consistent"). Mirrors IrisFurnish's
+-- exact idiom -- active tab in cream with a gold underline, reachable-but-elsewhere tabs dim --
+-- so the Stable and Homestead screens read as one window with one chain of tabs:
+--     THE STABLE | Taming | Decorations | Build | Animals            [RB >]
+-- The last three live in the OTHER screen and stay greyed here; RB walks right along the chain
+-- and hands off when it runs out of local tabs. Drawn by BOTH views, so the strip never moves.
+local function draw_tabs(X, Y, W, sc, pad)
+    local ty = Y + pad * 0.6
+    txt("THE  STABLE", X + pad, ty, (U.page == nil) and COL.cream or COL.dimtxt, true)
+    local tw0 = text_w("THE  STABLE", true) or 230.0 * sc
+    if U.page == nil then
+        draw.filled_rect(X + pad, ty + 26.0 * sc, tw0, 2.0 * sc, rc(COL.gold))
+    end
+    local tx = X + pad + tw0 + 46.0 * sc   -- title is the biggest type here: give it real air
+    local ly = ty + 6.0 * sc
+    -- local tab: Taming
+    local on = (U.page == "taming")
+    txt("Taming", tx, ly, on and COL.cream or COL.body)
+    local tw = text_w("Taming") or 60.0 * sc
+    if on then draw.filled_rect(tx, ly + 20.0 * sc, tw, 2.0 * sc, rc(COL.gold)) end
+    tx = tx + tw + 30.0 * sc
+    -- the Homestead screen's tabs: shown greyed only when its plot is in range, exactly as
+    -- before -- out in the world RB has nowhere to go and advertising them would lie
+    if U.near_home then
+        for _, nm9 in ipairs({ "Decorations", "Build", "Animals" }) do
+            txt(nm9, tx, ly, COL.dimtxt)
+            tx = tx + (text_w(nm9) or 80.0) + 30.0 * sc
+        end
+    end
+    txt("[RB >]", X + W - 76.0 * sc, ly, COL.dimtxt)
+end
+
+-- ⭐ 08-13: the Taming page draws INSTEAD of the stable list, in the same frame and panel, so it
+-- inherits the screen's pause, fonts and dismissal. A separate window would have needed its own
+-- copy of all four.
+local function draw_taming_page(X, Y, W, H, sc, pad)
+    draw_tabs(X, Y, W, sc, pad)
+    local es = tame_entries()
+    local ly = Y + 78.0 * sc
+    -- ⛔ ROW HEIGHT MUST CLEAR LABEL *AND* HINT. The first cut used one 40px row for both and the
+    -- hint printed over the next entry's label (Aurora's screenshot). Label sits at the row top,
+    -- hint 20px under it, and the row is 26px taller than the pair so entries stay separated.
+    local rh = 52.0 * sc
+    draw.filled_rect(X + pad, ly - 8.0 * sc, W - pad * 2.0, #es * rh + 16.0 * sc, rc(COL.inset))
+    for i, e in ipairs(es) do
+        local yy = ly + (i - 1) * rh
+        if i == U.tcursor then
+            draw.filled_rect(X + pad, yy - 5.0 * sc, W - pad * 2.0, rh - 6.0 * sc, rc(0x60C8A050))
+        end
+        local col = e.dim and COL.dimtxt
+            or (e.lit and 0xFF9AE89A)
+            or ((i == U.tcursor) and 0xFFFFF0C8 or COL.body)
+        txt(tostring(e.label), X + pad + 10.0 * sc, yy, col)
+        if e.hint then
+            txt(tostring(e.hint), X + pad + 10.0 * sc, yy + 22.0 * sc,
+                (i == U.tcursor) and COL.dimtxt or 0xFF55555F)
+        end
+    end
+    txt("[O / B] Close   [Enter / A] Choose   [Up/Down] Move   [Q / LB] Stable   [E / RB] Homestead",
+        X + pad, Y + H - 26.0 * sc, COL.dimtxt)
+end
+
 local function draw_ui()
     if not U.open then return end
     ensure_fonts()
@@ -524,6 +720,10 @@ local function draw_ui()
     draw.filled_rect(X, Y, W, H, rc(COL.smoke))
     draw.filled_rect(X, Y, W, 2.0 * sc, rc(COL.gold))
     draw.filled_rect(X, Y + H - 2.0 * sc, W, 2.0 * sc, rc(COL.gold))
+    if U.page == "taming" then
+        draw_taming_page(X, Y, W, H, sc, pad)
+        return
+    end
     local rows = stable_rows()
     local list_w = 330.0 * sc
     local ly = Y + 52.0 * sc
@@ -642,10 +842,7 @@ local function draw_ui()
         txt("The Stable Is Empty - Tame A Creature To Begin", X + pad, Y + 70.0 * sc, COL.body)
     end
     -- title LAST among strings, still same layer (rects never cover it)
-    txt("THE  STABLE", X + pad, Y + pad * 0.6, COL.cream, true)
-    -- ⭐ 08-12 ONE MENU (Aurora's mockup): the homestead tabs sit greyed beside the title
-    -- whenever a built plot is in range - so RB visibly has somewhere to go. Contextual:
-    -- out in the world the tabs simply are not there.
+    draw_tabs(X, Y, W, sc, pad)
     if os.clock() > (U.nh_at or 0) then
         U.nh_at = os.clock() + 2.0
         U.near_home = false
@@ -660,19 +857,13 @@ local function draw_ui()
             end
         end)
     end
-    if U.near_home then
-        local tx9 = X + 250.0 * sc
-        for _, nm9 in ipairs({ "Decorations", "Build", "Animals" }) do
-            txt(nm9, tx9, Y + pad * 0.6 + 6.0 * sc, COL.dimtxt)
-            tx9 = tx9 + (text_w(nm9) or 80.0) + 30.0 * sc
-        end
-        txt("[RB >]", X + W - 76.0 * sc, Y + pad * 0.6 + 6.0 * sc, COL.dimtxt)
-    end
-    txt("[O / B] Close   [Enter / A] Summon / Dismiss   [R / X] Rename   [H / DpadRight] Home   [Delete / Y] Release   [RB] Homestead",
-        X + pad, Y + H - 26.0 * sc, COL.dimtxt)
+    txt("[B / O] Close   [A / Enter] Summon / Dismiss   [X / R] Rename   [DpadLeft / C] Customise",
+        X + pad, Y + H - 44.0 * sc, COL.dimtxt)
+    txt("[DpadRight / H] Home   [Y / Delete] Release   [LB / RB] Tabs",
+        X + pad, Y + H - 23.0 * sc, COL.dimtxt)
     if U.msg and os.clock() < (tonumber(U.msg_until) or 0.0) then
         local warn = U.confirm_id ~= nil and os.clock() < (tonumber(U.confirm_until) or 0.0)
-        txt(tostring(U.msg), X + pad, Y + H - 50.0 * sc, warn and COL.warn or 0xFF9AE89A)
+        txt(tostring(U.msg), X + pad, Y + H - 68.0 * sc, warn and COL.warn or 0xFF9AE89A)
     end
     if C.show_pad_mask then
         local mask = 0

@@ -60,13 +60,26 @@ end
 --   because the tidy-up is exactly what gets missed.
 local TTL = 1.0       -- generous: the plaque only re-scans every 0.3s
 local slots = {}      -- [owner] = { text, prio, dist, pos, go, at }
+local function _mounted_now()
+    -- IrisRiddenNow is published by the shared horse/monster ride controller.  The
+    -- griffin publishes one frame earlier while its seat transition is being built;
+    -- honour both so no stale ground prompt can reach that rebuilding panel.
+    return rawget(_G, "IrisRiddenNow") == true
+        or rawget(_G, "IrisGriffinMounted") == true
+end
 _G.IrisPrompt = _G.IrisPrompt or {}
 _G.IrisPrompt.set = function(owner, text, prio, dist, pos, go)
     if not owner then return end
     -- ⛔ 08-13: while seated on a rodeo mount (rodeo publishes IrisRiddenNow) no
     -- world-B prompt is accepted - sow/cookpot/tame/sign are all ground-life acts.
     -- Publishers re-set every frame, so prompts return the instant you dismount.
-    if rawget(_G, "IrisRiddenNow") then slots[owner] = nil; return end
+    if _mounted_now() then slots[owner] = nil; return end
+    -- 08-13 (Aurora: "Collect egg stays on in the menu"): while an IRIS screen owns
+    -- the frame, no world prompt is accepted - they return the instant it closes.
+    if _G.IrisStableUIOpen == true or _G.IrisFurnishUIOpen == true
+        or _G.IrisFurnishFootprint == true or _G.IrisFurnishPlacing == true then
+        slots[owner] = nil; return
+    end
     if text == nil or text == "" then slots[owner] = nil; return end
     slots[owner] = { text = tostring(text), prio = tonumber(prio) or 0,
                      dist = tonumber(dist) or 1e9, pos = pos, go = go, at = os.clock() }
@@ -84,6 +97,10 @@ local raw = {}      -- ["<slot>|<owner>"] = { slot, owner, text, prio, at }
 _G.IrisPrompt.set_slot = function(owner, slot, text, prio)
     if not (owner and slot) then return end
     local k = slot .. "|" .. owner
+    -- Tool/taming publishers can survive for TTL after the mount button is pressed.
+    -- The game's prompt objects are rebuilt during that transition, so even a
+    -- perfectly valid ground label must not be written until the rider is off again.
+    if _mounted_now() then raw[k] = nil; return end
     if text == nil then raw[k] = nil; return end
     -- ⛔ NEVER write an empty string into a live via.gui.Text. Aurora asked for " " for exactly
     --   this reason, and a single space is also the honest label for a button that does nothing
@@ -338,8 +355,21 @@ local function _panel_write(map)
             local path = (slot .. "/PNL_txt/mtx_00")
             local node = getobj:call(root, "PNL_top/" .. path)
             if node then
-                pcall(function() node:call("set_Message", txt) end)
-                ok = true
+                -- getObject(path) can temporarily return another Control subclass while
+                -- DD2 rebuilds a prompt set.  pcall cannot contain the native AV caused by
+                -- invoking via.gui.Text.set_Message on that wrong object: prove its type first.
+                local is_text = false
+                pcall(function()
+                    local td = node:get_type_definition()
+                    while td do
+                        if td:get_full_name() == "via.gui.Text" then is_text = true; return end
+                        td = td:get_parent_type()
+                    end
+                end)
+                if is_text then
+                    pcall(function() node:call("set_Message", txt) end)
+                    ok = true
+                end
             end
         end
     end)
@@ -368,6 +398,15 @@ re.on_application_entry("LateUpdateBehavior", function()
     -- Never let last frame's success suppress a legacy fallback in this frame.
     world.req_ok, world.text_ok, world.owner = false, false, nil
     if M.enabled == false then return end
+
+    -- The mount HUD owns ui010201 while its prompt set is changing.  Purge, rather
+    -- than merely ignore, every ground/tool publication so a one-second TTL entry
+    -- cannot be replayed into the first unstable dismount frame.  Creature-specific
+    -- ride labels are written by their own guarded relabellers and remain intact.
+    if _mounted_now() then
+        slots, raw = {}, {}
+        return
+    end
 
     -- ── the explicit slots first. ⚠ These are deliberately OUTSIDE the native_busy stand-down
     --   and outside the "is anyone offering a B action" test below. "X Chop" is true because a

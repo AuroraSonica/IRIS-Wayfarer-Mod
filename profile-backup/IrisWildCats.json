@@ -1,8 +1,8 @@
 {
-    "ambient_enabled": true,
-    "audio_enabled": true,
-    "cat_pack_chance": 0.33,
-    "enabled": true,
-    "panther_share": 0.5,
-    "replace_wolf_vocals": true
+  "ambient_enabled": true,
+  "audio_enabled": true,
+  "cat_pack_chance": 0.33,
+  "enabled": true,
+  "panther_share": 0.5,
+  "replace_wolf_vocals": true
 }

@@ -15,9 +15,16 @@
 local LEDGER_FILE = "IRIS/iris_tree_clear.json"
 local TREE_IDS = { gm80_109 = true, gm80_110 = true }   -- survey 2026-08-12; grow via receipts
 local MIN_H = 4.0
--- trunk_kill: benched 08-13 on a wrong theory (the broken hoe was resident LockOnTarget,
--- proven by Aurora's own experiments); exonerated and back ON by default.
-local M = { last = "(idle)", radius = 25.0, chop_watch = true, trunk_kill = true }
+-- ⛔⛔ trunk_kill DEFAULT OFF FOREVER (08-13, Aurora: "every tree in the world has
+-- lost collision - I can run through all of them"): SpeedTree collision is INSTANCED.
+-- The same few tree models are reused across the whole map, and killing a plot
+-- tree's collidable kills it for EVERY clone of that model world-wide. The
+-- patch-wide law, one level deeper than we knew. Aurora explicitly prefers the
+-- remaining plot trunks invisible while we lack a safe per-instance collision API.
+-- Keep the global/shared collider untouched and hide only the plot render instances.
+-- Game restart restores all runtime foliage state.
+local M = { last = "(idle)", radius = 25.0, chop_watch = true, trunk_kill = false,
+    zone_foliage_hide = true }
 local ledger = nil
 local seen = {}        -- [addr] = { name, ux, uy, uz, at, missing }  (chop presence-diff)
 local pass_at = 0.0
@@ -217,13 +224,14 @@ end
 
 -- ══ ⭐⭐⭐ TREELESS PLOTS (Aurora's final design, 08-13): every owned plot is simply a
 -- NO-TREE ZONE. No per-tree marking, no chop bookkeeping: gimmick trees inside the zone
--- are destroyed on sight; foliage TREE components (trunk-tested once, remembered in a
--- persistent registry keyed by the component's stable instance-0 position) get every
--- instance inside the zone hidden each pass + surgically uncollided over time.
+-- are destroyed on sight; each foliage SpeedTree inside it is removed by exact instance
+-- id. Never split visibility from collision: foliage colliders are shared by model and
+-- cannot safely be toggled for one tree.
 M.zone_on = M.zone_on ~= false
 M.zone_radius = 45.0
 local ZONE_REG_FILE = "IRIS/iris_tree_comps.json"
-local zone = { cache = nil, scan_at = 0.0, reg = nil, kc = {}, kc_at = {} }
+local zone = { cache = {}, scanned = false, active = false,
+    reg = nil, kc = {}, kc_at = {} }
 local function _zone_trunk_test(x, y, z)
     -- the woodcutting anatomy law: real trees carry layer-2 trunk collision at their
     -- base; wheat/grass/bushes do not. Two crossing rays at chest height.
@@ -305,6 +313,46 @@ local function _zone_scan(rp, d)
     zone.cache = cache
     if #cache > 0 then _log("zone scan: " .. #cache .. " speedtree instance(s) inside plot zones") end
 end
+local function _zone_apply_cache(start_at, budget)
+    local hidden, shrunk = 0, 0
+    local zero = _kray_v3(0.001, 0.001, 0.001)
+    local cache = zone.cache or {}
+    local first = math.max(1, tonumber(start_at) or 1)
+    local last = math.min(#cache, first + math.max(1, tonumber(budget) or 96) - 1)
+    for n = first, last do
+        local e = cache[n]
+        if _fol_set_vis(e.comp, e.i, false) then hidden = hidden + 1 end
+        -- Per-instance transform, unlike the shared physics collidable. Scaling the
+        -- removed visual instance to near-zero also makes its instance-generated trunk
+        -- degenerate without touching the same SpeedTree model elsewhere in the world.
+        local ok, applied = pcall(function()
+            e.comp:call("setLocalScale(System.UInt32, via.vec3)", math.floor(e.i), zero)
+            local got = e.comp:call("getLocalScale(System.UInt32)", math.floor(e.i))
+            return got and tonumber(got.x) and tonumber(got.x) < 0.01
+        end)
+        if ok and applied then shrunk = shrunk + 1 end
+    end
+    return hidden, shrunk, last + 1
+end
+local function _zone_restore_cache(start_at, budget)
+    local shown = 0
+    local one = _kray_v3(1.0, 1.0, 1.0)
+    local cache = zone.cache or {}
+    local first = math.max(1, tonumber(start_at) or 1)
+    local last = math.min(#cache, first + math.max(1, tonumber(budget) or 96) - 1)
+    for n = first, last do
+        local e = cache[n]
+        pcall(function()
+            e.comp:call("setVisibility(System.UInt32, System.Boolean)", math.floor(e.i), true)
+            -- Earlier builds shrank the render instance while its shared trunk remained.
+            -- There is no saved random scale to recover, so neutral scale is the honest
+            -- repair: a slightly different-sized visible tree beats an invisible wall.
+            e.comp:call("setLocalScale(System.UInt32, via.vec3)", math.floor(e.i), one)
+            shown = shown + 1
+        end)
+    end
+    return shown, last + 1
+end
 local function _zone_tick(rp, d, trees)
     if not M.zone_on then return end
     local plots = _zone_plots(d)
@@ -316,48 +364,41 @@ local function _zone_tick(rp, d, trees)
             t.go = nil
         end
     end
-    -- foliage trees: rescan every 25s (streaming shuffles), re-hide the cache each pass
-    if os.clock() > zone.scan_at then
-        zone.scan_at = os.clock() + 25.0
+    -- DD2's foliage collision is shared across a whole SpeedTree component.  Both
+    -- disabling its collider and shrinking/hiding only one render instance have been
+    -- field-proven wrong; removeFoliageInstance was also rejected by this runtime.
+    -- Until a surgical collision API is found, never manufacture invisible solid trees.
+    if M.zone_foliage_hide ~= true then
+        if not zone.scanned then
+            _zone_scan(rp, d)
+            zone.scanned = true
+            zone.restore_i = 1
+        end
+        if (tonumber(zone.restore_i) or 1) <= #(zone.cache or {}) then
+            local shown, next_i = _zone_restore_cache(zone.restore_i, 96)
+            zone.restore_i = next_i
+            if shown > 0 then M.last = "plot foliage restored visibly (shared collision kept honest)" end
+        end
+        return
+    end
+    -- Foliage instances are discovered ONCE per approach to the plot. The former
+    -- 25-second rescan traversed up to 60,000 instances, then rewrote all 658 cached
+    -- trees in 96-item bursts every two seconds. That was Aurora's rhythmic hitch.
+    -- Leaving the work radius drops this cache; streaming back in performs one fresh
+    -- discovery. The actual writes are spread across tiny per-frame batches below.
+    if not zone.scanned then
         _zone_scan(rp, d)
-        -- ⛔ round 2 (Aurora: solid ghosts after 5 minutes): bindings used to be wiped
-        -- HERE every rescan and re-probed 1/pass from index 1 - with 658 speedtree
-        -- entries only the first dozen ever got probed. Bindings are POSITION-KEYED now
-        -- and survive rescans; probing is nearest-the-player-first, 3 per pass.
-    end
-    local cand = {}
-    for _, e in ipairs(zone.cache or {}) do
-        _fol_set_vis(e.comp, e.i, false)
-        local key9 = string.format("%.0f_%.0f", e.x, e.z)
-        local kc = zone.kc[key9]
-        if kc then
-            _kill_fire(kc)
-        elseif os.clock() > (tonumber(zone.kc_at[key9]) or 0) then
-            local dx9, dz9 = e.x - rp.x, e.z - rp.z
-            cand[#cand + 1] = { e = e, key = key9, d2 = dx9 * dx9 + dz9 * dz9 }
-        end
-    end
-    if M.trunk_kill ~= true then return end   -- 08-13: the frozen-shape law (the hoe)
-    table.sort(cand, function(a, b) return a.d2 < b.d2 end)
-    for i = 1, math.min(3, #cand) do
-        local c9 = cand[i]
-        local cols = _kill_probe(c9.e.x, c9.e.y, c9.e.z)
-        if #cols > 0 then
-            zone.kc[c9.key] = cols
-            _kill_fire(cols)
-            _log(string.format("zone: trunk uncollided at (%.0f, %.0f) - %d collidable(s), %.0fm from player",
-                c9.e.x, c9.e.z, #cols, math.sqrt(c9.d2)))
-        else
-            -- probed clean (grass/bush, no trunk): snooze this spot for 5 minutes
-            zone.kc_at[c9.key] = os.clock() + 300.0
-        end
+        zone.scanned = true
+        zone.apply_i = 1
+        zone.apply_hidden = 0
+        zone.apply_shrunk = 0
+        zone.apply_reported = false
     end
 end
 
 _G.IrisTreeClear = {
-    -- IrisWoodcutting calls this at every wild-tree fell (render coords in). Near an
-    -- owned plot -> recorded forever, returns true (woodcutting then immortalizes its
-    -- own session ledger so the invisible trunk never pays timber again).
+    -- IrisWoodcutting calls this at every wild-tree fell (render coords in). Only the
+    -- configured radius of an owned plot qualifies; "near the homestead" is not enough.
     record_foliage_fell = function(rx, ry, rz)
         _load()
         local rp, d = _player()
@@ -368,7 +409,7 @@ _G.IrisTreeClear = {
             for _, pr in ipairs(_G.IrisHomesteadPlots.list()) do
                 if pr.owned ~= false then
                     local dx, dz = (pr.ux or 0) - ux, (pr.uz or 0) - uz
-                    if dx * dx + dz * dz < 90.0 ^ 2 then near = true; break end
+                    if dx * dx + dz * dz < (tonumber(M.zone_radius) or 45.0) ^ 2 then near = true; break end
                 end
             end
         end)
@@ -390,6 +431,9 @@ _G.IrisTreeClear = {
         local rp, d = _player()
         if not (rp and d) then return false end
         local ux, uz = rx + d.x, rz + d.z
+        local in_zone = _zone_inside(ux, uz, _zone_plots(d))
+        if M.zone_on then return in_zone end
+        if in_zone then return true end
         for _, e in ipairs(ledger) do
             if e.kind == "foliage" then
                 local dx, dz = e.x - ux, e.z - uz
@@ -404,11 +448,12 @@ _G.IrisTreeClear = {
         local rp, d = _player()
         if not (rp and d) then return 0 end
         local trees = _standing_trees(rp, 120.0)
+        local plots = _zone_plots(d)
         local n = 0
         for _, t in ipairs(trees) do
             local tux, tuz = t.x + d.x, t.z + d.z
             local dx, dz = tux - ux, tuz - uz
-            if dx * dx + dz * dz <= (r or 25.0) ^ 2 then
+            if dx * dx + dz * dz <= (r or 25.0) ^ 2 and _zone_inside(tux, tuz, plots) then
                 if _fell(t.go) then
                     n = n + 1
                     ledger[#ledger + 1] = { name = t.name, x = tux, y = t.y + d.y, z = tuz }
@@ -434,6 +479,23 @@ re.on_application_entry("UpdateBehavior", function()
                 or "no known trees standing within the radius"
         end
     end
+    -- Amortise foliage mutation over normal frames. Eight instance writes are
+    -- effectively invisible; 96 in a two-second maintenance beat were not.
+    if M.zone_on and M.zone_foliage_hide == true and zone.active
+        and (tonumber(zone.apply_i) or 1) <= #(zone.cache or {}) then
+        local hidden, shrunk, next_i = _zone_apply_cache(zone.apply_i, 8)
+        zone.apply_hidden = (tonumber(zone.apply_hidden) or 0) + hidden
+        zone.apply_shrunk = (tonumber(zone.apply_shrunk) or 0) + shrunk
+        zone.apply_i = next_i
+        M.last = string.format("plot trees: %d/%d hidden, %d verified near-zero",
+            tonumber(zone.apply_hidden) or 0, #(zone.cache or {}),
+            tonumber(zone.apply_shrunk) or 0)
+        if zone.apply_i > #(zone.cache or {}) and not zone.apply_reported then
+            zone.apply_reported = true
+            _log(string.format("zone apply complete: %d hidden, %d near-zero (amortised)",
+                tonumber(zone.apply_hidden) or 0, tonumber(zone.apply_shrunk) or 0))
+        end
+    end
     if os.clock() < pass_at then return end
     pass_at = os.clock() + 2.0
     _load()
@@ -445,7 +507,10 @@ re.on_application_entry("UpdateBehavior", function()
         for _, pr in ipairs(_G.IrisHomesteadPlots.list()) do
             if pr.owned ~= false then
                 local dx, dz = (pr.ux or 0) - (rp.x + d.x), (pr.uz or 0) - (rp.z + d.z)
-                if dx * dx + dz * dz < 90.0 ^ 2 then near_plot = true; break end
+                -- Work only just outside the treeless boundary. The old 90m gate
+                -- made the heavy plot machinery follow Aurora well beyond home.
+                local wr = (tonumber(M.zone_radius) or 45.0) + 15.0
+                if dx * dx + dz * dz < wr * wr then near_plot = true; break end
             end
         end
     end)
@@ -476,11 +541,37 @@ re.on_application_entry("UpdateBehavior", function()
             end
         end
     end
-    if not near_plot then seen = {}; return end
-    local trees = _standing_trees(rp, 45.0)
+    if not near_plot then
+        seen = {}
+        if zone.active then
+            zone.active = false
+            zone.scanned = false
+            zone.cache = {}
+            zone.apply_i = 1
+            zone.gimmick_done = false
+        end
+        return
+    end
+    zone.active = true
+    local trees = {}
+    if M.zone_on then
+        -- Full app.HitController scene traversal is also entry work, not a
+        -- two-second heartbeat. Gimmick trees cannot respawn while the area stays loaded.
+        if not zone.gimmick_done then
+            trees = _standing_trees(rp, 45.0)
+            zone.gimmick_done = true
+        end
+    else
+        trees = _standing_trees(rp, 45.0)
+    end
     -- ⭐⭐ TREELESS PLOTS: the zone rule runs FIRST - anything tree inside an owned
     -- plot's radius is destroyed/hidden/uncollided with no bookkeeping at all
     pcall(function() _zone_tick(rp, d, trees) end)
+    -- The zone is the sole tree-removal authority. The old position ledger, PIN and
+    -- chop-watch routes used a loose 80/90m "near plot" gate and could therefore alter
+    -- trees outside the homestead radius. Keep their data for backwards compatibility,
+    -- but do not execute those routes while treeless plots are enabled.
+    if M.zone_on then seen = {}; return end
     -- 1) RE-KILL: any standing gimmick tree within 2.5m of a ledger entry dies again, silently
     for li, e in ipairs(ledger) do
         if e.kind ~= "foliage" then
@@ -653,36 +744,18 @@ re.on_draw_ui(function()
     if not imgui.tree_node("IRIS Tree Clear (the homestead stays clear)") then return end
     _load()
     imgui.text(M.last)
-    imgui.text("ledgered trees held down: " .. tostring(#ledger))
     imgui.text("known tree ids: gm80_109, gm80_110 (survey more biomes to grow the list)")
     local c
     imgui.separator()
-    c, M.trunk_kill = imgui.checkbox("ghost-trunk collision kill (hidden trees lose their trunks too)##itc_tk", M.trunk_kill ~= false)
     c, M.zone_on = imgui.checkbox("TREELESS PLOTS: every owned plot destroys ALL its trees, forever##itc_zone", M.zone_on ~= false)
     c, M.zone_radius = imgui.slider_float("treeless radius around each plot (m)##itc_zr", tonumber(M.zone_radius) or 45.0, 15.0, 90.0)
-    if imgui.button("rescan the zone now##itc_zs") then zone.scan_at = 0.0 end
-    imgui.text("zone: " .. tostring(#(zone.cache or {})) .. " tree instance(s) currently held down")
-    imgui.separator()
-    c, M.radius = imgui.slider_float("clear radius (m)##itc", tonumber(M.radius) or 25.0, 5.0, 60.0)
-    if imgui.button("CLEAR: fell every tree around me now##itc_go") then clear_pending = true end
-    if imgui.button("PIN: hold down the tree at my feet (hide + uncollide, forever)##itc_pin") then M.pin_pending = true end
-    c, M.chop_watch = imgui.checkbox("chop permanence (trees YOU fell near the plot stay down)##itc_cw", M.chop_watch == true)
-    local nfol = 0
-    for _, e in ipairs(ledger) do if e.kind == "foliage" then nfol = nfol + 1 end end
-    imgui.text("big trees held down (chopped near the plot): " .. tostring(nfol))
-    imgui.text("(big trees go permanent through your AXE - chop them and they stay gone)")
-    if #ledger > 0 and imgui.button("UNDO: forget the whole ledger (trees return on next stream-in)##itc_undo") then
-        for _, binds in pairs(fol_bind) do
-            for _, b in ipairs(binds) do
-                pcall(function() for _, k in ipairs(b.idxs) do _fol_set_vis(b.comp, k, true) end end)
-            end
-        end
-        fol_bind = {}
-        ledger = {}
-        _save()
-        killed_this_load = {}
-        M.last = "ledger forgotten - the forest may return"
-        _log("ledger CLEARED by hand")
+    if imgui.button("rescan the zone now##itc_zs") then
+        zone.scanned = false
+        zone.cache = {}
+        zone.apply_i = 1
+        zone.gimmick_done = false
     end
+    imgui.text("zone: " .. tostring(#(zone.cache or {})) .. " tree instance(s) held invisible; panel status reports verified shrink")
+    imgui.text("Tree removal is clamped to the owned-plot radius; the old loose PIN/CLEAR routes are retired.")
     imgui.tree_pop()
 end)

@@ -2260,6 +2260,21 @@ _G.IrisForge = {
     despawn_tag   = function(tag)
         if not tag or tag == "house" then return 0 end
         local n = 0
+        -- ⛔ 08-13 (Aurora: cancel mid-siting and "the mesh still gets placed"): the
+        -- ghost births PIECE BY PIECE through the pump - killing only the born pieces
+        -- let the queued remainder keep building into the world after cancel. Purge
+        -- the UNBORN too: queued pieces, the in-flight piece, the deferred plot build.
+        for i = #build_queue, 1, -1 do
+            if (build_queue[i].tag or "house") == tag then
+                table.remove(build_queue, i); n = n + 1
+            end
+        end
+        pcall(function()
+            if cur_build and (cur_build.tag or "house") == tag then cur_build = nil end
+            if plot_build_pending and (plot_build_pending.tag or "house") == tag then
+                plot_build_pending = nil
+            end
+        end)
         for i = #instances, 1, -1 do
             if instances[i].tag == tag then
                 pcall(function() instances[i].go:call("destroy", instances[i].go) end)

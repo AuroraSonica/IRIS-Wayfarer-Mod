@@ -107,8 +107,17 @@ local function _other_ui_busy()
     -- dialog mutex (obligation 9) + screen mutex: never talk over another conversation
     if _G.IrisFurnishUIOpen == true or _G.IrisFurnishFootprint == true then return true end
     if _G.IrisStableUIOpen == true then return true end
+    -- ⛔ 08-13 (receipts: "WAITING ui_busy=true ... EXPIRED"): the Dialog RetVal is
+    -- the LAST answer ever given and stays nonzero forever after any dialog - a
+    -- stale answer is not a live conversation. Busy only while the value is FRESH
+    -- (changed within 4s); an unchanged leftover stops gating us.
     local pick = _dialog_pick()
-    if pick ~= nil and pick ~= 0 and not dlg.open then return true end
+    if pick ~= M._lastpick then M._lastpick = pick; M._pickat = os.clock() end
+    -- (08-13 round 2, Aurora: "taking forever") 4.0s -> 1.0s: the runes screen
+    -- itself bumps the RetVal on close, so a long freshness window made every
+    -- examine wait out the whole guard before the dialog could land
+    if pick ~= nil and pick ~= 0 and not dlg.open
+        and os.clock() - (tonumber(M._pickat) or 0) < 1.0 then return true end
     return false
 end
 local function _show_dialog(prompt, opt1, opt2, site, opt3, mode)
@@ -140,6 +149,35 @@ local function _close_dialog()
 end
 pcall(_close_dialog)   -- softlock guard: a reload must never strand an orphaned dialog
 
+-- ⭐ 08-13 (Aurora: "can the prompt not appear AS you read the sign, like buying
+-- land?"): the DeedSign precedent - the choice dialog renders OVER the open runes
+-- screen, and the dialog reader is pause-unguarded, so answers land while reading.
+-- Returns "dlg" when a dialog opened, "paid" for a pre-paid site (the hammer must
+-- NEVER start on a paused frame - that path still waits for the close), nil = no
+-- matching site in the "site" state.
+local function _examine_dialog(key)
+    _load()
+    for _, s in ipairs(sites) do
+        if s.key == key and s.state == "site" then
+            if s.paid then return "paid" end
+            local ht = _count_item(TIMBER_ITEM)
+            local hs = _count_item(STONE_ITEM)
+            local nt, ns = tonumber(s.timber) or 0, tonumber(s.stone) or 0
+            if ht >= nt and hs >= ns then
+                _show_dialog("Raise the " .. tostring(s.label) .. "?\n"
+                    .. string.format("%d Timber, %d Stone", nt, ns),
+                    "Raise it", "Not yet", s, "Cancel the commission")
+            else
+                _show_dialog("The " .. tostring(s.label) .. " wants "
+                    .. string.format("%d Timber, %d Stone.", nt, ns),
+                    "Cancel the commission", "Leave it", s, "", "poor")
+            end
+            return "dlg"
+        end
+    end
+    return nil
+end
+
 -- ── gates (blocker 6): nothing raises while any heavy pump is mid-flight ────────────────
 local function _gates_idle()
     local ok = true
@@ -170,26 +208,41 @@ end
 -- the pool's equality gate sees the bigger piece list, tears down and re-grafts EVERYTHING
 local function _queue_collision_refresh(site)
     site.coll_pending = true
+    site.coll_started = nil
+    site.coll_error = nil
     _save()
 end
-local function _collision_refresh_tick()
-    local due
-    for _, s in ipairs(sites or {}) do if s.coll_pending then due = s end end
+local function _collision_refresh_tick(wanted)
+    local due = wanted and wanted.coll_pending and wanted or nil
+    if not due then
+        for _, s in ipairs(sites or {}) do if s.coll_pending then due = s break end end
+    end
     if not due then return end
     if not _gates_idle() then return end
     local C9 = _G.IrisCollision
-    if not (C9 and C9.add) then due.coll_pending = nil; _save(); return end
+    if not (C9 and C9.add) then
+        due.coll_pending = nil
+        due.coll_error = "collision service unavailable"
+        _save()
+        return
+    end
     pcall(function() if C9.park then C9.park() end end)
-    pcall(function() C9.add() end)
+    local add_ok = pcall(function() C9.add() end)
     local took = false
     pcall(function()
-        took = (C9.busy and C9.busy() == true) or (C9.count and (tonumber(C9.count()) or 0) > 0)
+        took = add_ok and ((C9.busy and C9.busy() == true)
+            or (C9.count and (tonumber(C9.count()) or 0) > 0))
     end)
     -- consume only on success (blocker 3's law, applied to our own flag)
     if took then
         due.coll_pending = nil
+        due.coll_started = os.clock()
         _save()
         _log("collision refresh queued after '" .. tostring(due.label) .. "'")
+    elseif not add_ok then
+        due.coll_pending = nil
+        due.coll_error = "collision build request failed"
+        _save()
     end
 end
 
@@ -285,6 +338,8 @@ _G.IrisOutbuildings = {
                 if scene and scene.site == s then _fsm_enabled(true); scene = nil end
                 table.remove(sites, i)
                 _save()
+                -- record is gone: the reaper may now hunt the physical signboard
+                pcall(function() _G.IrisOutbuildings.reap_sign(key, s.ux, s.uz) end)
                 _log(string.format("CANCELLED %s (refund %dT %dS)", tostring(key), rt, rs))
                 return true, rt, rs
             end
@@ -386,6 +441,51 @@ local function _sign_adopt(s)
         end
     end)
     return found
+end
+-- ⭐ 08-13 THE SIGN REAPER (Aurora: "cancelling it via the UI keeps the signs in
+-- place"): cancel_site is declared before `signs` exists, and a sign planted in an
+-- EARLIER load is an orphan no sweep can see (record gone = never adopted, never
+-- reaped). Every cancel path calls this: the tracked wrapper first, then a
+-- proximity hunt for any survivor signboard within 3m of the dead site. A sign
+-- belonging to a still-LIVE site record is never touched.
+_G.IrisOutbuildings.reap_sign = function(key, ux, uz)
+    pcall(function() _sign_remove(key) end)
+    if not (ux and uz) then return end
+    pcall(function()
+        local tf9 = _ptf()
+        local rp9 = tf9:call("get_Position")
+        local up9 = tf9:call("get_UniversalPosition")
+        if not (rp9 and up9) then return end
+        for _, s2 in ipairs(sites) do
+            if s2.state == "site" then
+                local pdx, pdz = (s2.ux or 1e9) - ux, (s2.uz or 1e9) - uz
+                if pdx * pdx + pdz * pdz < 9.0 then return end
+            end
+        end
+        local sx, sz = ux - (up9.x - rp9.x), uz - (up9.z - rp9.z)
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene9 = sdk.call_native_func(sm, smt, "get_CurrentScene")
+        local comps = scene9:call("findComponents(System.Type)", sdk.typeof("app.gm81_128"))
+        local n = 0
+        pcall(function() n = comps:call("get_Length") or 0 end)
+        if n == 0 then pcall(function() n = comps:get_size() or 0 end) end
+        for i = 0, (tonumber(n) or 0) - 1 do
+            pcall(function()
+                local c
+                pcall(function() c = comps:call("get_Item", i) end)
+                if not c then pcall(function() c = comps:get_element(i) end) end
+                local go = c and c:call("get_GameObject")
+                local p = go and go:call("get_Transform"):call("get_Position")
+                if not p then return end
+                local dx, dz = p.x - sx, p.z - sz
+                if dx * dx + dz * dz < 9.0 then
+                    go:call("destroy", go)
+                    _log("sign REAPED at cancelled site " .. tostring(key))
+                end
+            end)
+        end
+    end)
 end
 local function _sign_spawn(s)
     for _, j in ipairs(sign_jobs) do if j.key == s.key then return end end
@@ -563,10 +663,18 @@ re.on_application_entry("UpdateBehavior", function()
                 end
                 site.state = "raising"
                 _save()
-                _fsm_enabled(false)
-                _play_clip(61, 4100)   -- hammer windup (the purchase flow's scene)
-                scene = { stage = "start", t = os.clock(), site = site }
-                _log("RAISING " .. tostring(site.key))
+                if _world_paused() then
+                    -- ⛔ 08-13: the dialog now overlays the RUNES (still paused) - the
+                    -- hammer scene must never start on a paused frame (the pause-spawn
+                    -- crash class). Defer to the first live frame below.
+                    M.raise_pending = site
+                    _log("RAISING deferred until the runes close: " .. tostring(site.key))
+                else
+                    _fsm_enabled(false)
+                    _play_clip(61, 4100)   -- hammer windup (the purchase flow's scene)
+                    scene = { stage = "start", t = os.clock(), site = site }
+                    _log("RAISING " .. tostring(site.key))
+                end
             end
         elseif p == 2 or p == 5 then   -- not yet / cancel: re-offer after a cooldown
             local site = dlg.site
@@ -582,9 +690,24 @@ re.on_application_entry("UpdateBehavior", function()
         -- fresh through any pause, and shorten the grace so the dialog lands promptly
         if _G.IrisOBSignExamined then _G.IrisOBSignExamined.at = os.clock() end
         pause_grace = os.clock() + (_G.IrisOBSignExamined and 0.6 or 3.0)
+        -- ⭐ 08-13: open the choice OVER the runes (the DeedSign look) - the reader
+        -- above this pause-return answers it. Pre-paid sites wait for the close.
+        local ex0 = _G.IrisOBSignExamined
+        if ex0 and not dlg.open and not scene then
+            if _examine_dialog(ex0.key) == "dlg" then _G.IrisOBSignExamined = nil end
+        end
         return
     end
     if os.clock() < pause_grace then return end
+    -- deferred raise: answered "Raise it" over the runes; this is the first live frame
+    if M.raise_pending then
+        local sp = M.raise_pending
+        M.raise_pending = nil
+        _fsm_enabled(false)
+        _play_clip(61, 4100)
+        scene = { stage = "start", t = os.clock(), site = sp }
+        _log("RAISING (deferred past the runes) " .. tostring(sp.key))
+    end
 
     -- hammer scene FSM (runs above the throttle: animation timing is per-frame business)
     if scene then
@@ -619,59 +742,86 @@ re.on_application_entry("UpdateBehavior", function()
             pcall(function() building = _G.IrisForge.status().building == true end)
             local up = 0
             pcall(function() up = _G.IrisForge.tag_count(site.key) or 0 end)
-            if (not building and up > 0) or os.clock() - scene.t > 60.0 then
-                _play_clip(61, 4102)   -- the finishing blow
+            local kit9 = _kit_row(site.kit)
+            scene.expected = tonumber(kit9 and kit9.pieces) or scene.expected or 1
+            scene.up = up
+            if not building and up > 0 then
+                -- Visual construction is only 85% of the job.  Keep the player in the
+                -- hammer scene until the collision pool has accepted and completed its rebuild.
+                scene.stage = "collision"
+                scene.t = os.clock()
+                _queue_collision_refresh(site)
+                _log("visual build complete for " .. tostring(site.key) .. "; applying collision")
+            elseif os.clock() - scene.t > 90.0 then
+                _fsm_enabled(true)
+                site.state = "site"; site.paid = true
+                _save()
+                M.last = "the visual build did not complete; the commission remains paid"
+                _log("raise FAILED: visual forge timed out for " .. tostring(site.key))
+                scene = nil
+            end
+        elseif scene.stage == "collision" then
+            _collision_refresh_tick(site)
+            if site.coll_error then
+                _fsm_enabled(true)
+                site.state = "site"; site.paid = true
+                _save()
+                M.last = "the structure stands, but collision failed: " .. tostring(site.coll_error)
+                card = { title = "Building Paused", body = M.last, col = 0xFFC8B8A0, until_t = os.clock() + 6.0 }
+                _log("raise NOT completed: " .. tostring(site.coll_error))
+                scene = nil
+            elseif site.coll_started then
+                local busy9, count9 = false, 0
+                pcall(function()
+                    local C9 = _G.IrisCollision
+                    busy9 = C9 and C9.busy and C9.busy() == true or false
+                    count9 = C9 and C9.count and (tonumber(C9.count()) or 0) or 0
+                end)
+                if not busy9 and count9 > 0 then
+                    scene.stage = "finish"
+                    scene.t = os.clock()
+                    _play_clip(61, 4102)   -- finishing blow only after collision exists
+                end
+            elseif os.clock() - scene.t > 45.0 then
+                site.coll_pending = nil
+                site.coll_error = "collision build timed out"
+            end
+        elseif scene.stage == "finish" then
+            if os.clock() - scene.t > 398 / 60 then
                 _fsm_enabled(true)
                 site.state = "built"
+                site.paid = nil
+                site.coll_started, site.coll_pending, site.coll_error = nil, nil, nil
                 _save()
-                _queue_collision_refresh(site)
-                M.last = tostring(site.label) .. " raised (" .. up .. " pieces)"
+                local up = tonumber(scene.up) or 0
+                M.last = tostring(site.label) .. " raised (" .. up .. " pieces, collision applied)"
                 card = { title = "Raised", body = tostring(site.label) .. " stands.", col = 0xFF9AE89A, until_t = os.clock() + 5.0 }
                 _log("RAISED " .. tostring(site.key) .. " pieces=" .. up)
                 scene = nil
             end
         end
+        if scene then
+            local elapsed = os.clock() - scene.t
+            local frac, label = 0.0, "Raising " .. tostring(site.label or "the structure")
+            if scene.stage == "start" then
+                frac = 0.15 * math.min(1.0, elapsed / 4.5)
+            elseif scene.stage == "loop" then
+                frac = 0.15 + 0.70 * math.min(1.0,
+                    (tonumber(scene.up) or 0) / math.max(1, tonumber(scene.expected) or 1))
+            elseif scene.stage == "collision" then
+                frac = 0.85 + (site.coll_started and 0.11 or 0.04)
+                label = "Applying collision to " .. tostring(site.label or "the structure")
+            elseif scene.stage == "finish" then
+                frac = 0.96 + 0.04 * math.min(1.0, elapsed / (398 / 60))
+            end
+            _G.IrisProgressHUD = { active = true, t = os.clock(), frac = frac, label = label }
+        end
         return
     end
 
-    -- ── the deliberate raise press: N key or pad B while armed at a site ────────────────
-    local adn = false
-    pcall(function()
-        if type(iris_input_blocked) == "function" and iris_input_blocked() then return end
-        adn = reframework:is_key_down(0x4E) == true
-        if not adn then
-            local gs = sdk.get_native_singleton("via.hid.GamePad")
-            local gt = sdk.find_type_definition("via.hid.GamePad")
-            local dev = sdk.call_native_func(gs, gt, "get_MergedDevice")
-            local b = dev and dev:call("get_Button") or 0
-            adn = (math.floor(b) & 0x40080) ~= 0   -- B/Circle (the taming mask)
-        end
-    end)
-    if adn and not M.act_prev and M.armed and not dlg.open and not scene then
-        local s = M.armed
-        if not (_gates_idle() and not _other_ui_busy()) then
-            M.last = "the builders are busy - a breath, then press again"
-        elseif s.paid then
-            -- a previously-paid site skips the dialog and goes straight to the hammer
-            s.state = "raising"
-            s.paid = nil
-            _save()
-            _fsm_enabled(false)
-            _play_clip(61, 4100)
-            scene = { stage = "start", t = os.clock(), site = s }
-            _log("RAISING (pre-paid) " .. tostring(s.key))
-        elseif M.armed_enough then
-            _show_dialog("Raise the " .. tostring(s.label) .. "?\n"
-                .. string.format("%d Timber, %d Stone", tonumber(s.timber) or 0, tonumber(s.stone) or 0),
-                "Raise it", "Not yet", s, "Cancel the commission")
-        else
-            -- short on materials: the sign still talks - and offers the way out
-            _show_dialog("The " .. tostring(s.label) .. " wants "
-                .. string.format("%d Timber, %d Stone.", tonumber(s.timber) or 0, tonumber(s.stone) or 0),
-                "Cancel the commission", "Leave it", s, "", "poor")
-        end
-    end
-    M.act_prev = adn
+    -- Proximity never opens a commission dialog.  The only production entry is the
+    -- native Examine callback on this site's physical sign (handled below).
+    M.act_prev = false
 
     _sign_pump()
     -- Examine on OUR sign (the native B prompt): the raise conversation opens after the
@@ -681,11 +831,16 @@ re.on_application_entry("UpdateBehavior", function()
         local age9 = os.clock() - (tonumber(ex9.at) or 0)
         if age9 > 8.0 then
             _G.IrisOBSignExamined = nil
-        elseif age9 > 1.2 and not _other_ui_busy() and _gates_idle() then
+            -- 08-13 RECEIPTS (Aurora: "the sign isn't letting me cancel"): every
+            -- refusal path in this consume block was silent - never again
+            _log("sign examine EXPIRED unconsumed (ui_busy/gates never cleared in 8s)")
+        elseif age9 > 0.5 and not _other_ui_busy() and _gates_idle() then
             _G.IrisOBSignExamined = nil
             _load()
+            local matched9 = false
             for _, s in ipairs(sites) do
                 if s.key == ex9.key and s.state == "site" then
+                    matched9 = true
                     local ht = _count_item(TIMBER_ITEM)
                     local hs = _count_item(STONE_ITEM)
                     local nt, ns = tonumber(s.timber) or 0, tonumber(s.stone) or 0
@@ -708,6 +863,19 @@ re.on_application_entry("UpdateBehavior", function()
                     end
                 end
             end
+            if not matched9 then
+                local st9 = {}
+                for _, s in ipairs(sites) do
+                    st9[#st9 + 1] = tostring(s.key) .. "=" .. tostring(s.state)
+                end
+                _log("sign examine: NO site-state record for key '" .. tostring(ex9.key)
+                    .. "' (sites: " .. table.concat(st9, ", ") .. ")")
+                M.last = "this sign's site record is not in the 'site' state - see the log"
+            end
+        elseif age9 > 0.5 and os.clock() > (M.exlog_at or 0) then
+            M.exlog_at = os.clock() + 2.0
+            _log(string.format("sign examine WAITING: ui_busy=%s gates_idle=%s age=%.1fs",
+                tostring(_other_ui_busy()), tostring(_gates_idle()), age9))
         end
     end
 
@@ -790,8 +958,7 @@ re.on_application_entry("UpdateBehavior", function()
                 col = enough and 0xFF9AE89A or 0xFFEAD8B0, until_t = os.clock() + 1.5 }
             -- ⭐ 08-13 (Aurora: "there's nothing to interact with - put up a sign"): the
             -- site no longer ambushes with an auto-dialog. It ARMS when you stand close
-            -- with everything in hand; the floating sign shows [N / B] and the press
-            -- (handled per-frame below) opens the raise conversation deliberately.
+            -- with everything in hand; the physical sign's native Examine owns B.
             -- arm on PROXIMITY alone (Aurora: the sign must also offer the UNDO) - the
             -- press decides what conversation opens; materials only shape the options
             if d2 < 8.0 ^ 2 and settled then
@@ -879,7 +1046,7 @@ re.on_frame(function()
                         if s.state == "raising" then
                             l2 = "the hammer swings..."
                         elseif M.armed == s then
-                            l2 = M.armed_enough and "[N / B] Begin the Raising" or "[N / B] Site options"
+                            l2 = M.armed_enough and "[B] Examine the sign to begin" or "[B] Examine the sign for options"
                         else
                             l2 = string.format("%d Timber, %d Stone to raise", tonumber(s.timber) or 0, tonumber(s.stone) or 0)
                         end
@@ -927,6 +1094,13 @@ re.on_draw_ui(function()
             table.remove(sites, i)
             _save()
         end
+    end
+    if imgui.button("REAP STRAY SIGN NEAR ME (stand at it - away from the deed sign)##iob_reap") then
+        pcall(function()
+            local tf9 = _ptf()
+            local up9 = tf9:call("get_UniversalPosition")
+            if up9 then _G.IrisOutbuildings.reap_sign("stray", up9.x, up9.z) end
+        end)
     end
     if imgui.button("DEV: give 60 Timber + 20 Stone (test loop)##iob_give") then
         pcall(function()

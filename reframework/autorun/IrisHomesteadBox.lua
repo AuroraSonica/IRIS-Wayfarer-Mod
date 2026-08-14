@@ -105,7 +105,9 @@ local function nearest_bell_dist()
     pcall(function()
         local now = os.clock()
         if not (B.bells and now < (tonumber(B.bells_at) or 0.0)) then
-            B.bells_at = now + 4.0
+            -- 08-13 STUTTER (Aurora's A/B named the box): a SCENE-WIDE findComponents
+            -- sweep every 4s is a rhythmic hitch. Bells do not move - 30s is plenty.
+            B.bells_at = now + 30.0
             B.bells = {}
             local sm = sdk.get_native_singleton("via.SceneManager")
             local smt = sdk.find_type_definition("via.SceneManager")
@@ -223,6 +225,14 @@ B.near = B.near or false
 -- the produce gate's question (IrisFarming): is this GO one of the homestead's animals?
 B.is_resident = function(go_addr)
     return go_addr ~= nil and B.addrs[go_addr] ~= nil
+end
+B.resident_id = function(go_addr)
+    return go_addr ~= nil and B.addrs[go_addr] or nil
+end
+B.resident_name = function(go_addr)
+    local id = go_addr ~= nil and B.addrs[go_addr] or nil
+    local e = id and B.bodies[id] or nil
+    return e and e.name or nil
 end
 -- the stable's question (08-12, Aurora: "you should need to go up to them at the home
 -- to actually return them"): may a home soul be called back RIGHT NOW? Yes only when
@@ -362,6 +372,57 @@ local function make_quat_identity()
     local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
     q.x = 0; q.y = 0; q.z = 0; q.w = 1
     return q
+end
+
+-- Physics is render-space.  The herd target and resident positions are universal,
+-- so the player's live universal/render delta is the only safe conversion.  This
+-- ray uses static world collision only: an animal or the bell itself cannot block it.
+local bell_ray = { ready = false }
+local function bell_ray_ready()
+    if bell_ray.ready then return true end
+    local ok = pcall(function()
+        bell_ray.system = sdk.get_native_singleton("via.physics.System")
+        bell_ray.method = sdk.find_type_definition("via.physics.System")
+            :get_method("castRay(via.physics.CastRayQuery, via.physics.CastRayResult)")
+        bell_ray.query = sdk.create_instance("via.physics.CastRayQuery"):add_ref()
+        bell_ray.result = sdk.create_instance("via.physics.CastRayResult"):add_ref()
+        bell_ray.query:clearOptions(); bell_ray.query:enableAllHits(); bell_ray.query:enableNearSort()
+        bell_ray.filter = bell_ray.query:get_FilterInfo()
+    end)
+    bell_ray.ready = ok and bell_ray.system ~= nil and bell_ray.method ~= nil
+        and bell_ray.query ~= nil and bell_ray.result ~= nil and bell_ray.filter ~= nil
+    return bell_ray.ready == true
+end
+
+local function bell_path_clear(from_u, to_u)
+    if not (from_u and to_u) or not bell_ray_ready() then return true end -- fail open
+    local pu, pr = player_spaces()
+    if not (pu and pr) then return true end
+    local tx, ty, tz = to_u.x or to_u.ux, to_u.y or to_u.uy, to_u.z or to_u.uz
+    if not (tx and ty and tz) then return true end
+    local dx, dz = tx - from_u.x, tz - from_u.z
+    local d = math.sqrt(dx * dx + dz * dz)
+    if d <= 3.0 then return true end
+    -- Stop short of the bell post: it is the destination, not an obstruction.
+    local trim = math.min(1.5, d * 0.25)
+    tx, tz = tx - dx / d * trim, tz - dz / d * trim
+    local ox, oy, oz = pu.x - pr.x, pu.y - pr.y, pu.z - pr.z
+    local hits = 0
+    pcall(function()
+        local function v3(x, y, z)
+            local v = ValueType.new(sdk.find_type_definition("via.vec3"))
+            v.x, v.y, v.z = x, y, z
+            return v
+        end
+        bell_ray.filter:set_Group(0); bell_ray.filter:set_Layer(2); bell_ray.filter:set_MaskBits(0)
+        bell_ray.result:clear()
+        bell_ray.query:call("setRay(via.vec3, via.vec3)",
+            v3(from_u.x - ox, from_u.y - oy + 0.8, from_u.z - oz),
+            v3(tx - ox, ty - oy + 0.8, tz - oz))
+        bell_ray.method:call(bell_ray.system, bell_ray.query, bell_ray.result)
+        hits = tonumber(bell_ray.result:get_NumContactPoints()) or 0
+    end)
+    return hits == 0
 end
 
 local function home_rows()
@@ -524,7 +585,8 @@ local function spawn_resident(rec, ax, ay, az, slot)
     local ok = pcall(function() B.spawner:requestAddInstances(code, pos, rot, cfg, 1) end)
     if ok then
         B.bodies[rec.id] = { addr = nil, name = rec.name, code = code, at = os.clock(),
-            want = { x = ux, y = uy, z = uz } }   -- the probed safe spot (the river check reads it)
+            want = { x = ux, y = uy, z = uz },
+            spawn = { x = ux, y = uy, z = uz } } -- immutable fall-return point
         pcall(function() log.info("[IrisHomesteadBox] resident spawning: " .. tostring(rec.name)
             .. " (" .. tostring(code) .. ") scale " .. string.format("%.2f", sc)) end)
     end
@@ -570,12 +632,31 @@ end
 -- `tgt` = { ux, uy, uz } in UNIVERSAL space, or nil for "walk to whoever rang" (the player).
 -- ⛔ It must be universal: call_tick measures with get_UniversalPosition, and B.bells caches
 -- render as well -- handing it a render point is the coord shear this file already has scars from.
+local function bell_gather_target(tgt)
+    if not tgt then return nil end
+    local pu = select(1, player_spaces())
+    local tx, tz = tonumber(tgt.x or tgt.ux), tonumber(tgt.z or tgt.uz)
+    if not (pu and tx and tz) then return tgt end
+    -- Gather on the RINGER'S side of the bell. The decorative homestead wall has enough
+    -- physical presence to stop the puppet, but not enough query presence for the LOS cast;
+    -- steering to the bell centre therefore accepted the wrong side of it. A point 1.8m
+    -- towards the player is both reachable and visibly "at the bell".
+    local dx, dz = (tonumber(pu.x) or tx) - tx, (tonumber(pu.z) or tz) - tz
+    local dl = math.sqrt(dx * dx + dz * dz)
+    if dl < 0.20 then dx, dz, dl = 1.0, 0.0, 1.0 end
+    return { x = tx + dx / dl * 1.8, y = tonumber(pu.y) or tonumber(tgt.y or tgt.uy) or 0.0,
+        z = tz + dz / dl * 1.8, bell = true }
+end
+
 B.call_all = function(tgt)
     local n = 0
     for _, e in pairs(B.bodies) do
-        if e.ch and e.addr then e.calling = true; e.call_clip_on = nil; n = n + 1 end
+        if e.ch and e.addr then
+            e.calling = true; e.call_clip_on = nil; e.parked = nil
+            e.call_los_at = nil; e.call_prog = nil; n = n + 1
+        end
     end
-    B.call_target = tgt
+    B.call_target = bell_gather_target(tgt)
     B.call_until = os.clock() + 45.0
     B.call_last = nil     -- the first tick must not bill itself for the idle gap since the last call
     pcall(function() log.info("[IrisHomesteadBox] THE CALL: " .. n .. " resident(s) called to "
@@ -590,7 +671,10 @@ B.call_one = function(id, tgt)
     if not (e and e.ch and e.addr) then return false end
     e.calling = true
     e.call_clip_on = nil
-    B.call_target = tgt
+    e.parked = nil
+    e.call_los_at = nil
+    e.call_prog = nil
+    B.call_target = bell_gather_target(tgt)
     B.call_until = os.clock() + 45.0
     B.call_last = nil
     pcall(function() log.info("[IrisHomesteadBox] THE CALL (one): " .. tostring(e.name) .. " called to "
@@ -603,8 +687,23 @@ local function call_tick(now)
     if now > B.call_until then
         for _, e in pairs(B.bodies) do
             if e.calling then
-                e.calling = nil
-                pcall(function() call_hold(e.ch, e.ch:call("get_GameObject"), false) end)
+                pcall(function()
+                    local go = e.ch:call("get_GameObject")
+                    local tr = go:call("get_Transform")
+                    local u = tr:call("get_UniversalPosition")
+                    if B.call_target then
+                        local tg = B.call_target
+                        local tx, ty, tz = tg.x or tg.ux, tg.y or tg.uy, tg.z or tg.uz
+                        local p = { x = tx, y = ty + 0.25, z = tz }
+                        tr:call("set_UniversalPosition", make_position(p.x, p.y, p.z))
+                        e.want = { x = p.x, y = p.y, z = p.z }
+                        e.parked = true
+                        call_hold(e.ch, go, true); call_clip(e.ch, 0, 0)
+                    else
+                        call_hold(e.ch, go, false)
+                    end
+                end)
+                e.calling, e.call_prog, e.call_clip_on = nil, nil, nil
             end
         end
         B.call_until = nil
@@ -629,17 +728,73 @@ local function call_tick(now)
                 -- them shuffling at the bell forever whenever she stepped away from it.
                 local dx, dz = (tg.x or tg.ux) - u.x, (tg.z or tg.uz) - u.z
                 local dd = math.sqrt(dx * dx + dz * dz)
-                if dd < 3.0 then
+                local arrival = B.call_target and 1.15 or 3.0
+                if dd < arrival then
                     -- arrived: hand the body back (small ones resume their wander at
                     -- your feet; parked bigs stand with you, nav still safely cut).
                     -- ⭐ 08-12: the arrival spot becomes the body's new truth - without
                     -- this, the navmesh-snap verifier warps it back to the OLD want.
                     e.calling = nil
+                    e.call_prog = nil
+                    -- ⭐ 08-13 (Aurora: "when they arrive at the bell, they stay in
+                    -- that proximity"): the arrival spot IS the new want/home truth,
+                    -- so the verifier and any re-place keep them by the bell.
                     e.want = { x = u.x, y = u.y, z = u.z }
-                    call_hold(e.ch, go, false)
+                    if B.call_target then
+                        -- Bell calls are a gather-and-stay command.  Keep the AI parked
+                        -- and put the rig into a single standing idle once it arrives.
+                        e.parked = true
+                        call_hold(e.ch, go, true)
+                        call_clip(e.ch, 0, 0)
+                    else
+                        e.parked = nil
+                        call_hold(e.ch, go, false)
+                    end
                     return
                 end
                 live = live + 1
+                -- A wall or terrain ridge between resident and bell cannot be solved by
+                -- transform-stepping.  Detect it immediately and carry the animal to the
+                -- near side of the bell instead of making it wait for the stuck timer.
+                if B.call_target and now >= (tonumber(e.call_los_at) or 0.0) then
+                    e.call_los_at = now + 0.35
+                    if not bell_path_clear(u, tg) then
+                        local tx, ty, tz = tg.x or tg.ux, tg.y or tg.uy, tg.z or tg.uz
+                        local px, pz = tx, tz
+                        local py = ty + 0.25
+                        tr:call("set_UniversalPosition", make_position(px, py, pz))
+                        e.want = { x = px, y = py, z = pz }
+                        e.calling, e.call_prog, e.call_clip_on = nil, nil, nil
+                        e.parked = true
+                        call_hold(e.ch, go, true); call_clip(e.ch, 0, 0)
+                        pcall(function() log.info("[IrisHomesteadBox] " .. tostring(e.name)
+                            .. " had no line of sight to the bell - carried beside it and parked") end)
+                        return
+                    end
+                end
+                -- ⭐ 08-13 STUCK RESCUE: watch progress TOWARDS the bell, not raw
+                -- displacement. A resident scraping sideways along Ratina's decorative
+                -- homestead wall moves plenty but never closes the distance, so the old
+                -- position-only test could run forever. Gain 0.35m = refresh the timer;
+                -- otherwise four seconds is enough evidence that the puppet path is lost.
+                local pg = e.call_prog
+                if not pg then
+                    e.call_prog = { best_d = dd, t = now }
+                elseif dd < (tonumber(pg.best_d) or dd) - 0.35 then
+                    pg.best_d, pg.t = dd, now
+                elseif B.call_target and (now - (tonumber(pg.t) or now)) > 4.0 then
+                    local tx, ty, tz = tg.x or tg.ux, tg.y or tg.uy, tg.z or tg.uz
+                    local px, pz = tx, tz
+                    local py = (ty or u.y) + 0.25
+                    tr:call("set_UniversalPosition", make_position(px, py, pz))
+                    e.want = { x = px, y = py, z = pz }
+                    e.calling, e.call_prog, e.call_clip_on = nil, nil, nil
+                    e.parked = true
+                    call_hold(e.ch, go, true); call_clip(e.ch, 0, 0)
+                    pcall(function() log.info("[IrisHomesteadBox] " .. tostring(e.name)
+                        .. " made no progress towards the bell for 4s - carried beside it and parked") end)
+                    return
+                end
                 call_hold(e.ch, go, true)
                 if not e.call_clip_on then
                     e.call_clip_on = true
@@ -656,6 +811,73 @@ local function call_tick(now)
         end
     end
     if live == 0 then B.call_until = nil; B.call_target = nil end
+end
+
+-- Continuous cliff/fall guard.  Spawn is deliberately immutable: bell calls may move
+-- `want`, but a falling animal always returns to the safe ground-probed point it entered
+-- the homestead at, exactly as the Animals screen promises.
+local safety_at = 0.0
+local function resident_safety_tick(now)
+    if now < safety_at then return end
+    safety_at = now + 0.12
+    local cast = rawget(_G, "route3_cast_ground_below")
+    for _, e in pairs(B.bodies) do
+        if e.ch and e.spawn then pcall(function()
+            local go = e.ch:call("get_GameObject")
+            local tr = go and go:call("get_Transform")
+            local u = tr and tr:call("get_UniversalPosition")
+            local r = tr and tr:call("get_Position")
+            if not (u and r) then return end
+            -- A rescue is itself a downward settle: we place the body 0.4 m over
+            -- its anchor and the controller lowers it onto the floor.  The old
+            -- detector interpreted that normal settle as another fall every
+            -- 120 ms, especially when the optional ground probe returned nil.
+            -- Give the controller time to settle and never turn an unavailable
+            -- probe into `math.huge` (which means "definite abyss").
+            if now < (tonumber(e.safety_recover_until) or 0.0) then
+                e.safety_y = tonumber(u.y)
+                e.safety_fall = nil
+                return
+            end
+            local last_y = tonumber(e.safety_y)
+            local falling = last_y ~= nil and tonumber(u.y) < last_y - 0.18
+            e.safety_y = tonumber(u.y)
+            local floor = nil
+            if type(cast) == "function" then
+                pcall(function() floor = cast(r.x, u.y, r.z, 0.7, 6.0) end)
+            end
+            local floor_gap = floor and (tonumber(u.y) - tonumber(floor.y)) or nil
+            local below_spawn = tonumber(u.y) < (tonumber(e.spawn.y) or 0.0) - 2.5
+            -- A valid ray can confirm a drop immediately.  If the ray is
+            -- unavailable, require a continuous fall of both time and distance;
+            -- one noisy Y sample or an ordinary 40 cm spawn settle is not a fall.
+            local unsupported_fall = false
+            if falling and (not floor_gap or floor_gap > 1.8) then
+                if not e.safety_fall then
+                    e.safety_fall = { at = now, y = last_y or tonumber(u.y) }
+                end
+                local sf = e.safety_fall
+                unsupported_fall = floor_gap ~= nil
+                    or (now - (tonumber(sf.at) or now) >= 0.45
+                        and (tonumber(sf.y) or tonumber(u.y)) - tonumber(u.y) >= 1.0)
+            elseif not falling or (floor_gap and floor_gap <= 1.0) then
+                e.safety_fall = nil
+            end
+            if below_spawn or unsupported_fall then
+                tr:call("set_UniversalPosition", make_position(
+                    e.spawn.x, (tonumber(e.spawn.y) or 0.0) + 0.4, e.spawn.z))
+                e.want = { x = e.spawn.x, y = e.spawn.y, z = e.spawn.z }
+                e.calling, e.call_prog, e.call_clip_on = nil, nil, nil
+                e.parked = true
+                e.safety_y = (tonumber(e.spawn.y) or 0.0) + 0.4
+                e.safety_fall = nil
+                e.safety_recover_until = now + 2.0
+                call_hold(e.ch, go, true); call_clip(e.ch, 0, 0)
+                pcall(function() log.info("[IrisHomesteadBox] " .. tostring(e.name)
+                    .. " was detected falling - returned to its safe spawn point") end)
+            end
+        end) end
+    end
 end
 
 -- ⛔ 08-12 (Clucky: killed at her own homestead for +6 XP): residents had NO protection --
@@ -880,7 +1102,10 @@ local placed_bells, placed_bells_at = nil, 0.0
 local function placed_bell_list()
     local now = os.clock()
     if placed_bells and now < placed_bells_at then return placed_bells end
-    placed_bells_at = now + 5.0
+    -- ⛔ 08-13 THE STUTTER'S TRUE SOURCE (survived the scan fix): a DISK json read
+    -- + parse every 5s. Furniture changes only when Aurora places it - 120s cache;
+    -- a freshly placed bell answers within two minutes, the frame-time every 5s.
+    placed_bells_at = now + 120.0
     local out = {}
     pcall(function()
         local d = json.load_file("IRIS/iris_furniture.json")
@@ -1379,6 +1604,7 @@ re.on_application_entry("UpdateBehavior", function()
     -- world are the pause-spawn crash family. It sits BEFORE the spawner guard because the
     -- herd must still walk in a session where the spawner never came up.
     pcall(function() call_tick(os.clock()) end)
+    pcall(function() resident_safety_tick(os.clock()) end)
     if not B.spawner then return end
     pcall(function()
         B.spawner:updateInstanceCounts()
@@ -1462,13 +1688,22 @@ re.on_frame(function()
         -- addresses every heartbeat - the hook now matches residents by ADDRESS (the
         -- HoldWolf pattern, the proven cure for the wrapper-identity disease).
         if (tonumber(B.shield_at) or 0.0) < now then
-            B.shield_at = now + 3.0
+            -- 08-13 STUTTER (the A/B named the box): shielding the WHOLE roster in
+            -- one frame every 3s was the rhythm Aurora felt. Round-robin: ONE body
+            -- per 0.7s beat - the flags are sticky, so each body is still re-asserted
+            -- every few seconds; the address publish is cheap and stays whole.
+            B.shield_at = now + 0.7
+            local ids = {}
+            for id in pairs(B.bodies) do ids[#ids + 1] = id end
+            table.sort(ids)
+            if #ids > 0 then
+                B.shield_i = ((tonumber(B.shield_i) or 0) % #ids) + 1
+                local e1 = B.bodies[ids[B.shield_i]]
+                if e1 and e1.ch then resident_shield(e1.ch) end
+            end
             local chaddrs = {}
             for _, e in pairs(B.bodies) do
-                if e.ch then
-                    resident_shield(e.ch)
-                    pcall(function() chaddrs[e.ch:get_address()] = true end)
-                end
+                if e.ch then pcall(function() chaddrs[e.ch:get_address()] = true end) end
             end
             _G.IrisResidentChAddrs = chaddrs
         end
@@ -1580,7 +1815,8 @@ re.on_frame(function()
                         local dx0, dz0 = u0.x - ax, u0.z - az
                         -- 60m: a called/wandered body must not slip the net (35m did)
                         if dx0 * dx0 + dz0 * dz0 > 60.0 * 60.0 then return end
-                        strays[#strays + 1] = { ch = ch0, go = go0, addr = addr0, band = band0 }
+                        strays[#strays + 1] = { ch = ch0, go = go0, addr = addr0, band = band0,
+                            u = { x = u0.x, y = u0.y, z = u0.z } }
                     end)
                 end
                 pcall(function() log.info("[IrisHomesteadBox] reacquire scan: " .. #strays
@@ -1593,6 +1829,12 @@ re.on_frame(function()
                                 B.bodies[r0.id] = B.bodies[r0.id] or { name = r0.name, at = os.clock() }
                                 local e0 = B.bodies[r0.id]
                                 e0.addr = s0.addr; e0.ch = s0.ch
+                                if not e0.spawn then
+                                    local pin0 = type(r0.home_pin) == "table" and r0.home_pin or nil
+                                    e0.spawn = pin0 and { x = pin0.x, y = pin0.y, z = pin0.z }
+                                        or { x = s0.u.x, y = s0.u.y, z = s0.u.z }
+                                end
+                                e0.want = e0.want or { x = e0.spawn.x, y = e0.spawn.y, z = e0.spawn.z }
                                 B.addrs[s0.addr] = r0.id
                                 resident_shield(s0.ch)
                                 pcall(function()

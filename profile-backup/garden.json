@@ -1,5 +1,105 @@
 {
-    "beds": null,
-    "last_day": 315,
+    "beds": [
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 133.35950223523074,
+            "uy": 15.277190208435059,
+            "uz": -1141.470783945772,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 133.35950223523074,
+            "uy": 15.277190208435059,
+            "uz": -1140.5207839457719,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 133.35950223523074,
+            "uy": 15.277190208435059,
+            "uz": -1142.420783945772,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 136.15950223523075,
+            "uy": 15.277190208435059,
+            "uz": -1141.470783945772,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 136.15950223523075,
+            "uy": 15.277190208435059,
+            "uz": -1142.420783945772,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 134.75950223523074,
+            "uy": 15.277190208435059,
+            "uz": -1141.470783945772,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 134.75950223523074,
+            "uy": 15.277190208435059,
+            "uz": -1142.420783945772,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 134.75950223523074,
+            "uy": 15.277190208435059,
+            "uz": -1140.5207839457719,
+            "yaw": -90.0
+        },
+        {
+            "dry": 0,
+            "grown": 0,
+            "lift": 0.0,
+            "missed": 0,
+            "plot": "South Central Vermund Riverside",
+            "ux": 136.15950223523075,
+            "uy": 15.277190208435059,
+            "uz": -1140.5207839457719,
+            "yaw": -90.0
+        }
+    ],
+    "last_day": 316,
     "seeds": null
 }

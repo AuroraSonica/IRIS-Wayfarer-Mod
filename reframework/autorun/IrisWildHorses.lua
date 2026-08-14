@@ -3158,6 +3158,16 @@ local function post_event(event_id, target, lane)
 end
 
 local function play_category(category, target)
+    -- ⛔ 08-13 CIRCUIT BREAKER (TWO audio-thread CTDs at the homestead - the shelter
+    -- placement and the Shadow mount - both with "createRequestInfo returned nil"
+    -- failures in the minutes before, both dying in AK/Wwise frames): a target whose
+    -- Wwise container answers nil is not healthy, and hammering the sound engine
+    -- with more requests against it is the suspected crash cocktail. 3 consecutive
+    -- failures = ambient audio stands down for 5 minutes.
+    if (tonumber(A.post_fail_n) or 0) >= 3
+        and os.clock() < (tonumber(A.post_cool) or 0) then
+        return false, "audio circuit open (cooling down)"
+    end
     local bucket = A.categories[category]
     if not bucket or #bucket == 0 then
         return false, "no sounds in category " .. tostring(category)
@@ -3177,7 +3187,15 @@ local function play_category(category, target)
         hoof_lane and "hoof" or "vocal")
     if ok then
         A.last_played = entry.name
+        A.post_fail_n = 0
     else
+        A.post_fail_n = (tonumber(A.post_fail_n) or 0) + 1
+        if A.post_fail_n >= 3 then
+            A.post_cool = os.clock() + 300.0
+            if A.post_fail_n == 3 then
+                log("audio circuit OPEN: 3 consecutive post failures - ambient audio stands down 5 min")
+            end
+        end
         -- 08-07 (Aurora: "no horse noises at all" after the doe-vocal
         -- flip): every silent drop NAMES ITSELF, throttled to 1 line/2s
         local nowl = os.clock()
@@ -3305,6 +3323,8 @@ local trigger_method = sdk.find_type_definition("app.WwiseContainerApp")
     :get_method("trigger(soundlib.SoundManager.RequestInfo)")
 local trigger_hook_installed = false
 local function install_horse_trigger_hook()
+    -- (08-13: stood down during the mount-CTD hunt and EXONERATED -- the cause was the griffin
+    -- ride HUD's set_Visible force-show, not this hook. Restored.)
     if trigger_hook_installed or not trigger_method then return end
     trigger_hook_installed = true
     sdk.hook(trigger_method, function(args)

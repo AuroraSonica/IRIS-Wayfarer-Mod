@@ -250,11 +250,21 @@ local DEFAULT = {
     route3_air_seat = false, -- ⭐ per-SPECIES (profile key): release the native climb in FLIGHT and root-seat
                              -- the rider instead. Drake ch257 = true via migration; griffin stays false --
                              -- her native climb is authored for carrying riders and works.
+    -- Drake air-seat geometry is deliberately separate from the ground/native-climb seat.
+    -- The old air seat inherited the griffin's root-relative (0,2.3,1.6) point and applied it
+    -- yaw-only. ch257's actual back is around Spine_2/Spine_3, ~4.5m above root, and pitches
+    -- substantially in flight. Anchor to the visible spine and rotate this small LOCAL offset
+    -- by the body quaternion; landing still uses route3_seat_offset_* for the native re-latch.
+    route3_air_seat_joint = "Spine_2",
+    route3_air_seat_offset_x = 0.0,
+    route3_air_seat_offset_y = 1.0,
+    route3_air_seat_offset_z = 0.0,
+    route3_air_seat_frame_v = 2, -- animated spine/shoulder frame; v1 lagged skeleton deformation
     route3_air_seat_cam = true, -- seat-owned flight chase camera (the native one has no ride view without a climb)
     route3_air_seat_cam_dist = 9.0,
     route3_air_seat_cam_height = 3.0,
     route3_air_seat_anchor_up = 2.5, -- v13: back to the July value (9.0 leaked into the rendered body)
-    route3_drake_cam_dist = 15.0, -- v14: native camera BaseDistance while mounted on the drake
+    route3_drake_cam_dist = 22.0, -- additive native-camera pull-back; 15 was still visibly close on ch257
     -- ⭐⭐⭐ v17 LEVITATE HOLD (the architecture flip). v12-v16 held her as a PUPPET (FSM off,
     -- controller off, think-stop) and lost: with no action system to own her, the game fell back
     -- to HighFall every frame and something under it dragged her -Y ~2.5m/frame forever (diag:
@@ -265,6 +275,9 @@ local DEFAULT = {
     -- UpDownMode=3) -- then write her position per frame. A levitating player does not fall, is
     -- not HighFall, bills no fall damage, and keeps a normal camera. Untick = the old puppet.
     route3_air_seat_levitate = true,
+    -- Render-only Wilds riding pose: unlike changeMotion it does not evict levitate, so this
+    -- supplies the Griffin-style mounted body without stealing the Drake's flight animation.
+    route3_air_seat_pose_mode = "wilds",
     -- v18: levitate is a SPELL, so it arrives with a hum, a glow and a caster float pose. We only
     -- ever wanted its no-fall state, so mute/hide/repose it: sweep her GameObject tree for the
     -- effect + sound components while the seat holds, and paint the cling clip over the float.
@@ -275,6 +288,20 @@ local DEFAULT = {
     -- is back for the rest of the flight. changeMotion competes with the action system for the
     -- same layer; in puppet mode that was free (no action system left alive to lose).
     route3_air_seat_lev_pose = false,
+    -- Drake-native mounted attacks. These are full node paths captured from the live ch257
+    -- node tree; no griffin bank-50 clip ids are reused on the drake.
+    route3_drake_attacks = true,
+    route3_drake_ground_x_node = "UniqueAttack.Ch257_CleaveBreath_L",
+    route3_drake_ground_y_node = "UniqueAttack.Ch257_Bite3Combo",
+    route3_drake_ground_l2_node = "",
+    route3_drake_ground_r2_node = "UniqueAttack.Ch257_TailCleave",
+    route3_drake_air_x_node = "Fly.HoverAttack.Ch257_HoverBreathF_Start",
+    route3_drake_air_y_node = "Fly.HoverAttack.Ch257_HoverBreath",
+    route3_drake_air_l2_node = "",
+    route3_drake_air_r2_node = "",
+    route3_drake_attack_secs = 3.5,
+    route3_drake_attack_cooldown = 0.35,
+    route3_drake_attack_lock_movement = true,
     route3_rider_lock_write_character = false, -- unsafe diagnostic: logical writes fight climb/camera ownership
     route3_rider_joint_anchor_enabled = false, -- used only by the parked transform-puppet experiment
     route3_rider_anchor_joint = "Neck_1", -- 07-16 field-tuned default: neck seat rides the
@@ -927,7 +954,7 @@ local DEFAULT = {
     -- on purpose: no EAT action exists yet, and a prompt describing an action that does not
     -- happen is lying (the file's own carrying-override law). Wire eating first, then label it.
     route3_hud_faker3 = true,
-    route3_hud_r3_ground = "Fly",
+    route3_hud_r3_ground = "Take Off",
     route3_hud_r3_flight = "Land",
     route3_hud_r3_carry = "",
     route3_hud_faker3_dy = 27.0,   -- px ABOVE the fake B line (1080p-authored, scales)
@@ -1426,7 +1453,7 @@ local DEFAULT = {
     route3_ground_jump_settle_secs = 0.5,     -- jump landing hold
     route3_descend_loop_min_agl = 25.0,       -- metres above ground required to fire the descend loop
     route3_face_turn_rate = 2.5,              -- rad/s bodily turn rate for the lock-on facing
-    route3_gatk_hit_sound_id = 1075806062,    -- wwise trigger on a CONNECTED peck/stomp (Aurora's pick)
+    route3_gatk_hit_sound_id = 0,             -- native DamageInfo owns material-aware impact audio
     route3_gatk_blowback = true,              -- small shove on a connected peck/stomp
     route3_eat_corpse_vanish = true,          -- warp the remains away when the eat finishes (never destroy)
     route3_eat_leave_bones = true,            -- spawn the gm51_581 bone pile where the meal lay
@@ -1457,6 +1484,9 @@ local ctx = require("IrisGriffin.context")
 local C, S = ctx.C, ctx.S
 for k in pairs(C) do C[k] = nil end
 for k, v in pairs(merge_config(merge_config({}, DEFAULT), json.load_file(MOD .. ".json"))) do C[k] = v end
+-- The temporary metallic confirmation sound predates native contact packets.
+-- Retire that exact saved default while preserving any deliberate custom ID.
+if tonumber(C.route3_gatk_hit_sound_id) == 1075806062 then C.route3_gatk_hit_sound_id = 0 end
 -- FOLLOWER FIX v1 (2026-08-10).  Saved configs predate the corrected default and therefore keep
 -- winning with native_climb_suppress_climb_ctrl=true.  Migrate once, narrowly: movement remains
 -- suppressed by the zero-speed trio, but the native attachment solver must be allowed to update.
@@ -5696,6 +5726,8 @@ function griffin_find_prey_or_enemy(radius)
                 if mounts[ch] == true then return end
                 if griffin_is_self(ch) then return end
                 if is_player_or_party(ch) or is_dead(ch) then return end
+                local residents = rawget(_G, "IrisResidentChAddrs")
+                if residents and residents[ch:get_address()] == true then return end
                 local nm = tostring(go_name(char_go(ch)) or "")
                 -- ch299* = DD2 wildlife (deer/fowl/fish/rabbit/boar/ox)
                 if not nm:find("ch299", 1, true) then return end
@@ -8007,57 +8039,46 @@ function griffin_apply_damage_to_target(amount)
     return ok
 end
 
-function griffin_damage_via_pipeline(hc, dmg)
-    -- construct a DamageInfo and run damageProc: the native hit path (real
-    -- reaction + death). Returns true only if the pipeline actually ran.
+function griffin_make_damage_packet(hc, dmg, attacker_go, attack_kind)
+    -- Build enough of the real hit packet for DD2 to resolve the receiving
+    -- region, surface/material sound, hit-stop and reaction.  GameObject-only
+    -- packets can drain HP, but without the two HitController references the
+    -- material/reaction half of the native path has no collision participants.
     if not hc then return false end
     local di = nil
     pcall(function() di = sdk.create_instance("app.HitController.DamageInfo") end)
     if not di then pcall(function() di = sdk.create_instance("app.HitController.DamageInfo", true) end) end
-    if not di then return false end
-    local gch, ggo = reacquire_griffin()
+    if not di then return nil end
+    local _, default_go = reacquire_griffin()
+    local ggo = attacker_go
+    if ggo then
+        local ok_valid, is_valid = pcall(function() return ggo:call("get_Valid") end)
+        if (not ok_valid) or is_valid == false then ggo = nil end
+    end
+    if not ggo then ggo = default_go end
     local victim_go = nil
     pcall(function() victim_go = hc:call("get_GameObject") end)
-    pcall(function() di:set_field("Damage", tonumber(dmg) or 60.0) end)
-    pcall(function() di:set_field("FixedDamage", tonumber(dmg) or 60.0) end)
-    pcall(function() di:set_field("DamageRate", 1.0) end)
-    pcall(function() di:set_field("DamageRateReaction", 1.0) end)
-    pcall(function() di:set_field("IsDirectDamage", true) end)
-    pcall(function() di:set_field("IsDirectDamageEnableAllDamageType", true) end)
-    pcall(function()
-        if victim_go then
-            di:set_field("<DamageGameObject>k__BackingField", victim_go)
-        end
-    end)
-    pcall(function() if ggo then di:set_field("<AttackGameObject>k__BackingField", ggo) end end)
-    pcall(function() if ggo then di:set_field("<AttackOwnerObject>k__BackingField", ggo) end end)
-    local ran = false
-    pcall(function() hc:call("damageProc(app.HitController.DamageInfo)", di); ran = true end)
-    if not ran then pcall(function() hc:call("setDamageInfo(app.HitController.DamageInfo)", di); hc:call("setDamageReaction"); ran = true end) end
-    return ran
-end
-
-function griffin_damage_via_update(hc, dmg)
-    -- Target dump showed the goblin exposes updateDamageHp(DamageInfo, amount,
-    -- bool). This is safer than raw field writes and more direct than guessing
-    -- private HP storage.
-    if not hc then return false end
-    local di = nil
-    pcall(function() di = sdk.create_instance("app.HitController.DamageInfo") end)
-    if not di then pcall(function() di = sdk.create_instance("app.HitController.DamageInfo", true) end) end
-    if not di then return false end
     local amount = tonumber(dmg) or 60.0
-    local gch, ggo = reacquire_griffin()
-    local victim_go = nil
-    pcall(function() victim_go = hc:call("get_GameObject") end)
+    local kind = tostring(attack_kind or "slash")
+    local heavy = kind == "heavy" or kind == "blow" or kind == "voice"
     pcall(function() di:set_field("Damage", amount) end)
     pcall(function() di:set_field("FixedDamage", amount) end)
     pcall(function() di:set_field("DamageRate", 1.0) end)
     pcall(function() di:set_field("DamageRateReaction", 1.0) end)
+    pcall(function() di:set_field("DamageReaction", math.max(20.0, amount * (heavy and 0.8 or 0.45))) end)
+    pcall(function() di:set_field("LeanReactionRate", heavy and 1.0 or 0.55) end)
+    pcall(function() di:set_field("BlownReactionRate", heavy and 1.0 or 0.25) end)
     pcall(function() di:set_field("IsDirectDamage", true) end)
     pcall(function() di:set_field("IsDirectDamageEnableAllDamageType", true) end)
-    pcall(function() di:set_field("IsSlashAttack", true) end)
-    pcall(function() di:set_field("SlashDamage", amount) end)
+    pcall(function() di:set_field("RegionNo", 0) end)
+    pcall(function() di:set_field("RegionStatusNo", 0) end)
+    if heavy then
+        pcall(function() di:set_field("BlowDamage", amount) end)
+        pcall(function() di:set_field("IsBlowAttack", true) end)
+    else
+        pcall(function() di:set_field("SlashDamage", amount) end)
+        pcall(function() di:set_field("IsSlashAttack", true) end)
+    end
     pcall(function()
         if victim_go then
             di:set_field("<DamageGameObject>k__BackingField", victim_go)
@@ -8065,11 +8086,59 @@ function griffin_damage_via_update(hc, dmg)
     end)
     pcall(function() if ggo then di:set_field("<AttackGameObject>k__BackingField", ggo) end end)
     pcall(function() if ggo then di:set_field("<AttackOwnerObject>k__BackingField", ggo) end end)
+    pcall(function() di:set_field("<DamageHitController>k__BackingField", hc) end)
+    pcall(function()
+        local ahc = ggo and get_component(ggo, "app.HitController")
+        if ahc then di:set_field("<AttackHitController>k__BackingField", ahc) end
+    end)
+    pcall(function()
+        local ap, vp = ggo and transform_pos(ggo), victim_go and transform_pos(victim_go)
+        if ap and vp then
+            local vec = make_vec3((tonumber(vp.x) or 0.0) - (tonumber(ap.x) or 0.0),
+                (tonumber(vp.y) or 0.0) - (tonumber(ap.y) or 0.0),
+                (tonumber(vp.z) or 0.0) - (tonumber(ap.z) or 0.0))
+            di:set_field("AttackVec", vec)
+            di:set_field("HitBackVec", vec)
+        end
+    end)
+    return di
+end
+
+function griffin_damage_via_pipeline(hc, dmg, attacker_go, attack_kind)
+    -- RETIRED 08-14: DamageInfo is not a plain data bag.  A fabricated packet
+    -- lacks the engine-owned AttackUserData/collider state copied by damageProc;
+    -- calling this path produced repeated access violations in setHitVec,
+    -- damageProc and DamageInfo.copy, followed by an eventual Wwise crash.
+    -- Keep the probe code behind an explicit developer-only latch, but never
+    -- let live combat enter it.
+    if rawget(_G, "IRIS_UNSAFE_DAMAGE_PACKET") ~= true then return false end
+    -- Run one native hit transaction.  setHitVec lets the receiver resolve
+    -- facing/region before damageProc chooses the material and reaction.
+    if not hc then return false end
+    local di = griffin_make_damage_packet(hc, dmg, attacker_go, attack_kind)
+    if not di then return false end
+    local ran = false
+    pcall(function() hc:call("setHitVec(app.HitController.DamageInfo)", di) end)
+    pcall(function() hc:call("damageProc(app.HitController.DamageInfo)", di); ran = true end)
+    if not ran then pcall(function() hc:call("setDamageInfo(app.HitController.DamageInfo)", di); hc:call("setDamageReaction"); ran = true end) end
+    return ran, di
+end
+
+function griffin_damage_via_update(hc, dmg, attacker_go, attack_kind)
+    -- Same incomplete-DamageInfo hazard as griffin_damage_via_pipeline above.
+    if rawget(_G, "IRIS_UNSAFE_DAMAGE_PACKET") ~= true then return false end
+    -- Target dump showed the goblin exposes updateDamageHp(DamageInfo, amount,
+    -- bool). This is safer than raw field writes and more direct than guessing
+    -- private HP storage.
+    if not hc then return false end
+    local di = griffin_make_damage_packet(hc, dmg, attacker_go, attack_kind)
+    if not di then return false end
+    local amount = tonumber(dmg) or 60.0
     local ran = false
     pcall(function() hc:call("updateDamageHp(app.HitController.DamageInfo, System.Single, System.Boolean)", di, amount, true); ran = true end)
     if not ran then pcall(function() hc:call("updateDamage(app.HitController.DamageInfo, System.UInt32, System.Single, System.Boolean)", di, 0, amount, true); ran = true end) end
     if ran then pcall(function() hc:call("updateDamageReaction(app.HitController.DamageInfo)", di) end) end
-    return ran
+    return ran, di
 end
 
 function griffin_dump_hate_ai()
@@ -9322,6 +9391,8 @@ griffin_profile_keys = {
     "route3_flap_blend_frames", "route3_allow_sprint", "route3_allow_flight",
     "route3_mountable",
     "route3_seat_offset_x", "route3_seat_offset_y", "route3_seat_offset_z",
+    "route3_air_seat_joint", "route3_air_seat_offset_x", "route3_air_seat_offset_y", "route3_air_seat_offset_z",
+    "route3_air_seat_frame_v",
     "route3_air_seat",
     "spawn_scale", "route3_landing_height_offset",
     "root_motion_walk", "root_motion_run", "root_motion_idle", "idle_motion",
@@ -9514,6 +9585,38 @@ function griffin_species_profile_apply(key)
     -- must be era-guarded; nil-backfills can't re-fire).
     if p.route3_air_seat == nil then
         p.route3_air_seat = key:find("ch257", 1, true) ~= nil
+        migrated = true
+    end
+    -- v22 2026-08-13: the captured ch257 rig disproved the root-height theory. root really is
+    -- ground-level; the saddle line is Spine_2/Spine_3. Give the air seat its own body-relative
+    -- anchor/offset so fixing flight cannot move the native ground re-latch. Nil-only migration
+    -- is idempotent and leaves any later hand tuning untouched.
+    if p.route3_air_seat_joint == nil then
+        if key:find("ch257", 1, true) then
+            p.route3_air_seat_joint = "Spine_2"
+            p.route3_air_seat_offset_x = 0.0
+            p.route3_air_seat_offset_y = -1.6
+            p.route3_air_seat_offset_z = 0.0
+        else
+            p.route3_air_seat_joint = "root"
+            p.route3_air_seat_offset_x = 0.0
+            p.route3_air_seat_offset_y = tonumber(p.route3_seat_offset_y) or 2.3
+            p.route3_air_seat_offset_z = tonumber(p.route3_seat_offset_z) or 1.6
+        end
+        migrated = true
+    end
+    -- v23 2026-08-14: one animated point plus the actor quaternion is not a saddle frame.
+    -- The new basis follows the live spine tangent and shoulder line. Old offsets were
+    -- compensation for the invalid axes, so reset them once on adoption; later tuning survives.
+    if key:find("ch257", 1, true) and math.floor(tonumber(p.route3_air_seat_frame_v) or 0) < 2 then
+        p.route3_air_seat_joint = "Spine_2"
+        p.route3_air_seat_offset_x = 0.0
+        p.route3_air_seat_offset_y = 1.0
+        p.route3_air_seat_offset_z = 0.0
+        p.route3_air_seat_frame_v = 2
+        migrated = true
+    elseif p.route3_air_seat_frame_v == nil then
+        p.route3_air_seat_frame_v = 2
         migrated = true
     end
     -- v13 (Aurora: "a long R3 descend has the drake start doing a take off animation"):
@@ -11441,6 +11544,55 @@ function route3_root_space_seat_position(go, ox, oy, oz)
         (tonumber(gpos.y) or 0.0) + oy,
         (tonumber(gpos.z) or 0.0) + (right.z * ox) + (fwd.z * oz)
     )
+end
+
+-- Visible-body custom seat. Joint positions are RENDER space, while player writes are UNIVERSAL.
+-- The origin follows Spine_2 and the offset follows an ANIMATED skeleton frame: spine tangent for
+-- pitch and shoulder line for roll. Actor rotation alone cannot see flap/soar bending the back.
+function route3_air_seat_position(go)
+    if not go then return nil, "no ridden body" end
+    local gtf = transform_of(go)
+    local jname = tostring(C.route3_air_seat_joint or "Spine_2")
+    local joint = gtf and managed_call(gtf, "getJointByName", jname)
+    local jp = joint and managed_call(joint, "get_Position")
+    local gup, grp = transform_pos(go), transform_render_pos(go)
+    if not (jp and gup and grp and sane_position(jp)) then
+        return nil, "air-seat joint '" .. jname .. "' unavailable"
+    end
+    local local_off = {
+        x = tonumber(C.route3_air_seat_offset_x) or 0.0,
+        y = tonumber(C.route3_air_seat_offset_y) or 1.0,
+        z = tonumber(C.route3_air_seat_offset_z) or 0.0,
+    }
+    local world_off = nil
+    local frame_mode = nil
+    local okf, M, fm = pcall(griffin_saddle_frame, gtf)
+    if okf and M then
+        world_off = {
+            x = M[1][1] * local_off.x + M[1][2] * local_off.y + M[1][3] * local_off.z,
+            y = M[2][1] * local_off.x + M[2][2] * local_off.y + M[2][3] * local_off.z,
+            z = M[3][1] * local_off.x + M[3][2] * local_off.y + M[3][3] * local_off.z,
+        }
+        frame_mode = fm or "skeleton"
+    end
+    if not world_off then
+        local q = transform_rot(go)
+        if q then world_off = griffin_q_rotate_vec(q, local_off) end
+    end
+    if not world_off then
+        local yaw = yaw_from_transform(go) or S.heading_yaw or 0.0
+        local fwd, right = transform_flat_axes(go, yaw)
+        world_off = {
+            x = right.x * local_off.x + fwd.x * local_off.z,
+            y = local_off.y,
+            z = right.z * local_off.x + fwd.z * local_off.z,
+        }
+    end
+    return make_position(
+        (tonumber(jp.x) or 0.0) + (tonumber(gup.x) or 0.0) - (tonumber(grp.x) or 0.0) + world_off.x,
+        (tonumber(jp.y) or 0.0) + (tonumber(gup.y) or 0.0) - (tonumber(grp.y) or 0.0) + world_off.y,
+        (tonumber(jp.z) or 0.0) + (tonumber(gup.z) or 0.0) - (tonumber(grp.z) or 0.0) + world_off.z),
+        jname .. (frame_mode and (" animated-" .. frame_mode .. " frame") or " body fallback")
 end
 
 function route3_abort_native_climb(player)
@@ -13402,6 +13554,17 @@ local function route3_seat_transform_drive_tick(ch, go, gpos, x, z, ascend, desc
         S.last_character_root_move_error = "(grounded dogfight skid owns transform)"
         return false
     end
+    -- Mounted Drake attacks own the body. Letting the ordinary transform drive consume
+    -- stick input during Bite/Cleave/Tail made it skate through otherwise-correct attacks.
+    if C.route3_drake_attack_lock_movement ~= false and type(S.route3_drake_attack) == "table" then
+        S.last_character_root_move_call_ok = true
+        S.last_character_root_move_moved = false
+        S.last_character_root_move_delta = 0.0
+        S.last_character_root_move_run = false
+        S.last_character_root_move_step = 0.0
+        S.last_character_root_move_error = "(Drake attack owns movement)"
+        return true
+    end
     if not ((S.route3_seat_parented == true or S.route3_proxy_ride_active == true) and C.route3_transform_drive_after_parent == true) then return false end
     if not (ch and go and gpos) then
         S.last_character_root_move_call_ok = false
@@ -14710,6 +14873,29 @@ if rel_method then
                 S.friend_hits = S.friend_hits + 1
                 return REL_FRIEND
             end
+            -- Shadow native-combat proof: ridden companions are normally FRIEND
+            -- to the whole world below, which is correct for passive companion
+            -- life but causes a genuine ch223 AttackUserData hit to be rejected
+            -- after its collider overlaps.  Open ENEMY for exactly the selected
+            -- pair and only for the short ActionManager lease.  Addresses avoid
+            -- retaining managed wrappers in a cross-file global; the player and
+            -- party safety answer above always wins.
+            local native_wyrm = rawget(_G, "IrisWyrmNativeAttackLease")
+            if native_wyrm and os.clock() <= (tonumber(native_wyrm.until_t) or 0.0) then
+                local aa, bb = nil, nil
+                pcall(function()
+                    aa = tonumber(a:get_address())
+                    bb = tonumber(b:get_address())
+                end)
+                local ma = tonumber(native_wyrm.mount_addr)
+                local ta = tonumber(native_wyrm.target_addr)
+                if ma and ta and ((aa == ma and bb == ta)
+                    or (aa == ta and bb == ma)) then
+                    _G.IrisWyrmNativeRelHits =
+                        (tonumber(rawget(_G, "IrisWyrmNativeRelHits")) or 0) + 1
+                    return GRIFFIN_IRIS_REL_ENEMY
+                end
+            end
             -- UNLEASHED: her native monster AI must see real enemies to fight.
             -- Keep ONLY the player + party forced-friendly (the safety shield);
             -- for everyone else defer to the game (native = hostile to enemies)
@@ -14744,10 +14930,12 @@ if rel_method then
                 local ridden_rel = false
                 pcall(function()
                     local api = rawget(_G, "IrisHorseMount")
-                    ridden_rel = api and api.is_mounted
+                    ridden_rel = rawget(_G, "IrisWyrmMounted") ~= true
+                        and api and api.is_mounted
                         and api.is_mounted() == true
                 end)
-                if (C.route3_companion_can_be_attacked == true or ridden_rel)
+                if rawget(_G, "IrisWyrmMounted") ~= true
+                    and (C.route3_companion_can_be_attacked == true or ridden_rel)
                     and not is_player_or_party(other) then
                     _G.IrisMountedRelEnemy =
                         (tonumber(rawget(_G, "IrisMountedRelEnemy")) or 0) + 1
@@ -15410,10 +15598,12 @@ if hate_add_method then
                 local ridden_now = false
                 pcall(function()
                     local api = rawget(_G, "IrisHorseMount")
-                    ridden_now = api and api.is_mounted
+                    ridden_now = rawget(_G, "IrisWyrmMounted") ~= true
+                        and api and api.is_mounted
                         and api.is_mounted() == true
                 end)
-                if C.route3_companion_can_be_attacked == true or ridden_now then
+                if rawget(_G, "IrisWyrmMounted") ~= true
+                    and (C.route3_companion_can_be_attacked == true or ridden_now) then
                     -- r86: COUNT the exemption. If the cyclops still cannot
                     -- fight and this counter is 0, the hook is not reaching
                     -- here (stacked stale closures, or hate never routed
@@ -15451,6 +15641,11 @@ end
 
 re.on_application_entry("UpdateBehavior", function()
     S.world_paused = griffin_world_paused()
+    -- ⭐ 08-13 (Aurora: "I just got a bird tame while sprinting on the back of a
+    -- drake"): publish the griffin/drake seat every frame - the rodeo's IrisRiddenNow
+    -- publisher folds this in, so tame prompts/presses and the stable UI stand down
+    -- on EVERY mount, not just the rodeo's.
+    _G.IrisGriffinMounted = (S.mounted == true) or nil
     if griffin_world_sentry() ~= true then return end
     if S.spawner then
         pcall(function()
@@ -15955,6 +16150,167 @@ function griffin_rider_fall_kill_tick(seat)
         tostring(fed), tostring(stuck), fh and string.format("%.1f", fh) or "?")
 end
 
+-- ============================ DRAKE MOUNTED ATTACKS ============================
+-- Species firewall: ch257 must never enter the griffin's bank-50/node combat paths. The drake
+-- owns a small native-node kit instead, using names captured from its live FSM tree.
+function route3_drake_mounted()
+    if S.mounted ~= true then return false end
+    local species = tostring(S.route3_tamed_species or "")
+    if species ~= "" then return species:find("ch257", 1, true) ~= nil end
+    local _, go = reacquire_griffin()
+    local raw = tostring(go_name(go) or "")
+    if raw ~= "" then return raw:find("ch257", 1, true) ~= nil end
+    return S.route3_mount_is_drake == true
+end
+
+function route3_drake_attack_end(reason)
+    local st = S.route3_drake_attack
+    S.route3_drake_attack = nil
+    if type(S.base_owner) == "table" and tostring(S.base_owner.name or "") == "drake_attack" then
+        S.base_owner = nil
+    end
+    S.route3_drake_attack_status = string.format("%s ended (%s)",
+        tostring(st and st.label or "attack"), tostring(reason or "done"))
+end
+
+function route3_drake_attack_request_node(node)
+    node = tostring(node or ""):gsub("%s+", "")
+    if node == "" or not griffin_fsm_node_exists(node) then return false, "NODE NOT FOUND: " .. node end
+    local leaf = node:match("([^%.]+)$") or node
+    local ok4, ok0 = false, false
+    pcall(function() ok4 = request_griffin_action(leaf, 4) == true end)
+    pcall(function() ok0 = request_griffin_action(leaf, 0) == true end)
+    return ok4 or ok0, string.format("%s p4=%s p0=%s", leaf, tostring(ok4), tostring(ok0))
+end
+
+function route3_drake_attack_start(node, label, secs, end_node, end_after)
+    if C.route3_drake_attacks == false or not route3_drake_mounted() then return false end
+    if type(S.route3_drake_attack) == "table" then return false end
+    local now = os.clock()
+    if now < (tonumber(S.route3_drake_attack_cooldown_until) or 0.0) then return false end
+    local busy = false
+    pcall(function() busy = griffin_node_lockout_active() == true end)
+    if busy or S.route3_node_exit_until ~= nil or S.route3_live_window ~= nil
+        or griffin_grab_active() or griffin_divebomb_active() or griffin_dogfight_active() then
+        S.route3_drake_attack_status = "blocked: another mounted move owns the body"
+        return false
+    end
+    node = tostring(node or ""):gsub("%s+", "")
+    if node == "" or not griffin_fsm_node_exists(node) then
+        S.route3_drake_attack_status = "NODE NOT FOUND: " .. node
+        return false
+    end
+    local leaf = node:match("([^%.]+)$") or node
+    local dur = math.max(1.0, tonumber(secs) or tonumber(C.route3_drake_attack_secs) or 3.5)
+    pcall(function() griffin_node_lockout_begin(leaf, now, "drake_attack") end)
+    S.route3_rise_recalm_at = now + dur + 0.5
+    local fired, fire_note = route3_drake_attack_request_node(node)
+    S.route3_drake_attack = {
+        node = node, leaf = leaf, label = tostring(label or leaf),
+        t0 = now, until_clock = now + dur,
+        end_node = end_node,
+        end_at = end_node and (now + math.max(0.25, tonumber(end_after) or dur * 0.65)) or nil,
+        phase = 1,
+    }
+    S.base_owner = { name = "drake_attack", until_clock = now + 1.0 }
+    S.audition_until_clock = now + 0.5
+    S.route3_drake_attack_cooldown_until = now
+        + math.max(0.1, tonumber(C.route3_drake_attack_cooldown) or 0.35)
+    S.route3_drake_attack_status = string.format("%s fired (%s; %s)",
+        tostring(label or leaf), node, tostring(fire_note))
+    status(tostring(C.route3_griffin_name or "Drake") .. ": " .. tostring(label or leaf))
+    return fired == true
+end
+
+function route3_drake_breath_shell()
+    -- Ch257_HoverBreath is animation-only when requested from the parked mount FSM. Bestiary's
+    -- authored Drake sequence supplies shell 0 and follows Breath_VFX; use that exact machinery.
+    local ch = reacquire_griffin()
+    if not ch then return false, "no Drake" end
+    local ok, result = pcall(function()
+        local shells = require("Bestiary/ShellHandler")
+        return shells.cast_shell(ch, "AppSystem/ch/ch257/userdata/ch257shellparamdata.user", 0,
+            { attachJoint = "Breath_VFX" })
+    end)
+    return ok and result ~= nil, ok and "shell 0 @ Breath_VFX" or tostring(result)
+end
+
+function route3_drake_attack_tick()
+    local active = route3_drake_mounted()
+    if not active or C.route3_drake_attacks == false then
+        if type(S.route3_drake_attack) == "table" then route3_drake_attack_end("ride ended") end
+        S.route3_drake_attack_buttons = nil
+        return
+    end
+    local now = os.clock()
+    local st = S.route3_drake_attack
+    if st and st.payload == "breath_shell" and st.payload_fired ~= true
+        and now >= (tonumber(st.payload_at) or math.huge) then
+        st.payload_fired = true
+        local ok, note = route3_drake_breath_shell()
+        st.payload_note = note
+        S.route3_drake_attack_status = string.format("%s payload=%s (%s)",
+            tostring(st.label), tostring(ok), tostring(note))
+    end
+    if st and st.phase == 1 and st.end_node and now >= (tonumber(st.end_at) or math.huge) then
+        local ok, note = route3_drake_attack_request_node(st.end_node)
+        st.phase = 2
+        st.phase_note = note
+        S.route3_drake_attack_status = string.format("%s finishing (%s)", tostring(st.label), tostring(note))
+    end
+    if st and now >= (tonumber(st.until_clock) or 0.0) then
+        route3_drake_attack_end("window complete")
+        st = nil
+    end
+
+    local down = {
+        X = raw_gamepad_button_down("west,square") == true,
+        Y = raw_gamepad_button_down("north,triangle") == true,
+        L2 = raw_gamepad_button_down("l2") == true,
+        R2 = raw_gamepad_button_down("r2") == true,
+    }
+    local prev = S.route3_drake_attack_buttons or {}
+    local pressed = {}
+    for k, v in pairs(down) do pressed[k] = v and prev[k] ~= true end
+    S.route3_drake_attack_buttons = down
+
+    if st then
+        S.base_owner = { name = "drake_attack", until_clock = now + 1.0 }
+        S.audition_until_clock = now + 0.3
+        pcall(function() read_griffin_fsm_node() end)
+        S.route3_drake_attack_status = string.format("%s p%d | fsm=%s | %.1fs",
+            tostring(st.label), tonumber(st.phase) or 1, tostring(S.last_fsm_node or "?"),
+            math.max(0.0, (tonumber(st.until_clock) or now) - now))
+        return
+    end
+
+    local airborne = S.airborne == true
+    if pressed.X then
+        if airborne then
+            route3_drake_attack_start(C.route3_drake_air_x_node, "Forward Breath", 5.2,
+                "Fly.HoverAttack.Ch257_HoverBreathF_End", 3.5)
+        else
+            route3_drake_attack_start(C.route3_drake_ground_x_node, "Flame Cleave", 4.5)
+        end
+    elseif pressed.L2 then
+        S.route3_drake_attack_status = "Levin unassigned: native cast needs target/cast setup"
+    elseif pressed.R2 then
+        if airborne then
+            S.route3_drake_attack_status = "Fireball Mines unassigned: native cast needs target/cast setup"
+        else
+            route3_drake_attack_start(C.route3_drake_ground_r2_node, "Tail Cleave", 4.0)
+        end
+    elseif pressed.Y then
+        local fired = route3_drake_attack_start(airborne and C.route3_drake_air_y_node
+            or C.route3_drake_ground_y_node, airborne and "Spinning Breath" or "Bite Combo",
+            airborne and 6.5 or 3.5)
+        if fired and airborne and type(S.route3_drake_attack) == "table" then
+            S.route3_drake_attack.payload = "breath_shell"
+            S.route3_drake_attack.payload_at = now + 0.35
+        end
+    end
+end
+
 -- ============================ MOUNTED SWOOP ATTACK ============================
 -- Player-driven dive-strike while flying + mounted. This SIDESTEPS the autonomous
 -- combat ceiling entirely: her AI never has to commit to a target -- WE trigger the
@@ -15965,7 +16321,7 @@ function griffin_swoop_active()
     return type(S.route3_swoop) == "table"
 end
 
-function griffin_apply_attack_damage(ench, dmg)
+function griffin_apply_attack_damage(ench, dmg, safe_direct, attacker_go, attack_kind)
     local hc = griffin_target_hit_controller(ench)
     if not hc then S.route3_swoop_last_dmg = "no HitController"; return false end
     dmg = tonumber(dmg) or 250.0
@@ -15977,10 +16333,19 @@ function griffin_apply_attack_damage(ench, dmg)
     -- thunder tape showed 300 -> 600), that can leave large enemies held in the first reaction
     -- action until another hit wakes them.  Pipeline is proven; update/direct HP are fallbacks only.
     local ran = false
-    pcall(function() if griffin_damage_via_pipeline(hc, dmg) then ran = true end end)
-    local after = griffin_hp_from_component(hc)
-    if before and after and after >= before then
-        pcall(function() if griffin_damage_via_update(hc, dmg) then ran = true end end)
+    local native_di = nil
+    if safe_direct ~= true then
+        pcall(function()
+            local ok, di = griffin_damage_via_pipeline(hc, dmg, attacker_go, attack_kind)
+            if ok then ran, native_di = true, di end
+        end)
+    end
+    local after = safe_direct == true and before or griffin_hp_from_component(hc)
+    if safe_direct ~= true and before and after and after >= before then
+        pcall(function()
+            local ok, di = griffin_damage_via_update(hc, dmg, attacker_go, attack_kind)
+            if ok then ran, native_di = true, di end
+        end)
         after = griffin_hp_from_component(hc)
     end
     -- if the real methods didn't move HP, force it down directly on the component we read
@@ -15999,8 +16364,25 @@ function griffin_apply_attack_damage(ench, dmg)
         after = griffin_hp_from_component(hc)
         raw_fallback = after and after < before
     end
+    -- Explicitly deliver the native reaction packet once.  damageProc calculates
+    -- the damage, while updateDamageReaction/HateSystem make the victim visibly
+    -- acknowledge the contact and remember the actual attacker.  This wakes the
+    -- VICTIM only; ridden-wyrm ownership continues to park the mount's own AI.
+    if native_di and safe_direct ~= true then
+        pcall(function() hc:call("updateDamageReaction(app.HitController.DamageInfo)", native_di) end)
+        pcall(function()
+            local hs = character_hate_system(ench, char_go(ench))
+            if hs then hs:call("onDamageReaction(app.HitController.DamageInfo)", native_di) end
+        end)
+    end
     -- Native pipeline/update already owns reaction.  Only a raw HP fallback needs a visual nudge.
-    if raw_fallback then pcall(function() hc:call("setDamageReaction") end) end
+    -- Ridden wolf/cat strikes deliberately use HP-only contact.  A native
+    -- DamageInfo/reaction attributes the attack to the companion, wakes its
+    -- combat graph and can create a persistent relationship/hate storm.  The
+    -- animation and hit sound provide feedback without handing control back.
+    if raw_fallback then
+        pcall(function() hc:call("setDamageReaction") end)
+    end
     local dealt = (before and after) and (before - after) or nil
     if dealt and dealt > 0.0 then
         local mx = (hc and griffin_hp_max_from_component(hc)) or math.max(tonumber(before) or 1.0, tonumber(after) or 1.0, 1.0)
@@ -16296,6 +16678,7 @@ function route3_divebomb_tick(ch, go, now)
 end
 
 function route3_divebomb_hotkey_tick()
+    if route3_drake_mounted and route3_drake_mounted() then S.route3_divebomb_btn_prev = false; return end
     if C.route3_divebomb_enabled ~= true or S.mounted ~= true then S.route3_divebomb_btn_prev = false; return end
     local down = false
     local names = tostring(C.route3_divebomb_buttons or ""):gsub("%s+", "")
@@ -16701,6 +17084,12 @@ function griffin_find_aerial_foe(go)
     local gpos = go and transform_pos(go)
     if not gpos then return nil end
     local search = math.max(10.0, tonumber(C.route3_dogfight_search) or 60.0)
+    -- EnemyManager already maintains the live hostile list.  It is dramatically
+    -- cheaper than walking every Character in the scene and covers normal mounted
+    -- combat.  Keep the scene sweep below only as the wildlife fallback.
+    local hostile = nil
+    pcall(function() hostile = griffin_find_enemy(search) end)
+    if hostile then return hostile end
     local bands = tostring(C.route3_dogfight_target_bands or "ch253")
     local gch = reacquire_griffin()   -- MY griffin (exclude by instance, NOT by name -- all ch253 share the go-name)
     local best, best_d = nil, search * search
@@ -16767,12 +17156,12 @@ function griffin_find_aerial_foe(go)
         local comps = scene and scene:call("findComponents(System.Type)", sdk.typeof("app.Character"))
         for _, ch in ipairs(system_array_to_table(comps) or {}) do pcall(function() consider(ch) end) end
     end)
-    pcall(function()
+    if C.dogfight_diag == true then pcall(function()
         table.sort(nearby, function(a, b) return a.d < b.d end)
         local s = ""
         for i = 1, math.min(8, #nearby) do s = s .. string.format(" %s(%.0fm)", tostring(nearby[i].nm), nearby[i].d) end
         log.info("[dogfight] find band=" .. bands .. " found=" .. tostring(best ~= nil) .. " nearest:" .. s)
-    end)
+    end) end
     return best
 end
 
@@ -17960,7 +18349,9 @@ function route3_dogfight_marker_tick()
     end
     local nowc = os.clock()
     if nowc >= (tonumber(S.route3_df_preview_at) or 0.0) then
-        S.route3_df_preview_at = nowc + 0.7      -- the finder walks every scene character: throttle
+        -- EnemyManager is cheap for ordinary foes; the wildlife fallback still
+        -- walks the scene, so two seconds is ample for a preview marker.
+        S.route3_df_preview_at = nowc + 2.0
         local _, go = reacquire_griffin()
         local foe = nil
         pcall(function() foe = go and griffin_find_aerial_foe(go) end)
@@ -17994,6 +18385,11 @@ function route3_dogfight_marker_tick()
 end
 
 function route3_dogfight_hotkey_tick()
+    if route3_drake_mounted and route3_drake_mounted() then
+        S.route3_dogfight_btn_prev = false
+        S.route3_dogfight_queued_until = nil
+        return
+    end
     if C.route3_dogfight_enabled ~= true or S.mounted ~= true then
         S.route3_dogfight_btn_prev = false
         S.route3_dogfight_queued_until = nil
@@ -20040,6 +20436,7 @@ function route3_gustair_end(reason)
 end
 
 function route3_gustair_tick()
+    if route3_drake_mounted and route3_drake_mounted() then S.route3_gustair_btn = false; return end
     -- ONE press = ONE native gale: fire her real FSM attack node (the wake-code's proven
     -- trigger trio -- "she plays her real gale attack animation, we only decide WHEN"),
     -- add our blowback+damage at the impact moment, then hand flight back.
@@ -20188,7 +20585,8 @@ function griffin_efx_reaper_tick()
             -- GENERAL: grounded but stuck in ANY air node (Fly.*) or attack node = stuck (covers the
             -- WingThunder gust AND any rise/dive node like Fly.Hovering.HoverUpward). A grounded griffin
             -- belongs in Locomotion.* -- a Fly./Attack node while grounded is always a stuck-node float.
-            if not (griffin_gustair_active() or griffin_gatk_active() or griffin_grab_active())
+            if not (griffin_gustair_active() or griffin_gatk_active() or griffin_grab_active()
+                or type(S.route3_drake_attack) == "table")
                 and (node:find("^Fly%.") or node:find("Attack", 1, true) or node:find("SubUnique", 1, true)) then
                 local nfull = tostring(C.native_climb_calm_fsm_node or "Locomotion.Wait")
                 local nleaf = nfull:match("([^%.]+)$") or "Wait"
@@ -21950,6 +22348,7 @@ function route3_gust_flap_damage(st, bank)
 end
 
 function route3_gust_tick()
+    if route3_drake_mounted and route3_drake_mounted() then S.route3_gust = nil; return end
     if C.route3_gust_enabled ~= true then return end
     local down = false
     local names = tostring(C.route3_gust_buttons or ""):gsub("%s+", "")
@@ -22203,6 +22602,7 @@ function route3_gatk_contact_effects(st, fresh, hit_ct, now)
 end
 
 function route3_gatk_tick()
+    if route3_drake_mounted and route3_drake_mounted() then S.route3_gatk = nil; S.route3_gatk_btn = false; return end
     if C.route3_gatk_enabled ~= true then return end
     local down = false
     local names = tostring(C.route3_gatk_buttons or ""):gsub("%s+", "")
@@ -22430,7 +22830,9 @@ function griffin_saddle_frame(gtf)
     if fl < 0.05 then return nil end
     fx, fy, fz = fx / fl, fy / fl, fz / fl
     local rx, ry, rz, mode = nil, nil, nil, "no-roll"
-    for _, pair in ipairs({ { "L_Leg_Upper", "R_Leg_Upper", "legs" },
+    for _, pair in ipairs({ { "L_FrontLeg_Clavicle", "R_FrontLeg_Clavicle", "drake-chest" },
+                            { "L_Wing_Clavicle", "R_Wing_Clavicle", "drake-shoulders" },
+                            { "L_Leg_Upper", "R_Leg_Upper", "legs" },
                             { "L_Arm_Upper", "R_Arm_Upper", "wings" } }) do
         local jl = managed_call(gtf, "getJointByName", pair[1])
         local jr = managed_call(gtf, "getJointByName", pair[2])
@@ -24253,6 +24655,7 @@ function griffin_rider_mount_still_tick()
         or type(S.route3_gustair) == "table"
         or type(S.route3_dogfight) == "table"
         or type(S.route3_divebomb) == "table"
+        or type(S.route3_drake_attack) == "table"
         or type(S.route3_quick_burst) == "table"
         or S.route3_node_lock_at ~= nil
         or S.route3_node_exit_until ~= nil
@@ -24713,7 +25116,23 @@ function griffin_rider_seat_hold_tick()
     local ox = tonumber(C.route3_seat_hold_x) or 0.0
     local oy = tonumber(C.route3_seat_hold_y) or 1.35
     local oz = tonumber(C.route3_seat_hold_z) or -0.4
-    local target = {
+    local target = nil
+    if S.route3_air_seat_on == true and route3_drake_mounted and route3_drake_mounted() then
+        -- v24: this PrepareRendering pass used to overwrite the transform pin with its own
+        -- ROOT-relative target. That second target is exactly where Aurora appeared: upright
+        -- beneath the Drake's chest. Share ONE saddle target with the transform pin instead.
+        local universal_seat = route3_air_seat_position(ggo)
+        local gup = transform_pos(ggo)
+        local grp = transform_render_pos(ggo)
+        if universal_seat and gup and grp then
+            target = {
+                x = (tonumber(universal_seat.x) or 0.0) - (tonumber(gup.x) or 0.0) + (tonumber(grp.x) or 0.0),
+                y = (tonumber(universal_seat.y) or 0.0) - (tonumber(gup.y) or 0.0) + (tonumber(grp.y) or 0.0),
+                z = (tonumber(universal_seat.z) or 0.0) - (tonumber(gup.z) or 0.0) + (tonumber(grp.z) or 0.0),
+            }
+        end
+    end
+    target = target or {
         x = (tonumber(groot.x) or 0.0) + right.x * ox + fwd.x * oz,
         y = (tonumber(groot.y) or 0.0) + oy,
         z = (tonumber(groot.z) or 0.0) + right.z * ox + fwd.z * oz,
@@ -25321,6 +25740,29 @@ function griffin_ride_hud_tick()
     end
     local labels = {}
     for _, b in ipairs({ "Y", "X", "A", "B", "L1", "L2", "R1", "R2" }) do labels[b] = pick(b) end
+    -- Same HUD machinery, truthful Drake verbs. The underlying bindings are handled by
+    -- route3_drake_attack_tick; Y remains Grab in the air and becomes Bite on the ground.
+    if route3_drake_mounted and route3_drake_mounted() then
+        if airborne then
+            labels.Y = "Spinning Breath"
+            labels.X = "Forward Breath"
+            labels.A = "Quick Rise"
+            labels.B = "Soar"
+            labels.L1 = "Descend"
+            labels.L2 = " "
+            labels.R1 = "Ascend"
+            labels.R2 = " "
+        else
+            labels.Y = "Bite"
+            labels.X = "Flame Cleave"
+            labels.A = "Jump"
+            labels.B = "Sprint"
+            labels.L1 = ""
+            labels.L2 = " "
+            labels.R1 = " " -- actively erase the old false RB Take Off text; R3 line owns takeoff
+            labels.R2 = "Tail Cleave"
+        end
+    end
     -- Ground attack is contextual: while actually sprinting forwards the same Y/Attack press
     -- starts the LandDash charge. Change the visible label before the carrying override below.
     local charge_ready = not airborne and C.route3_charge_enabled ~= false
@@ -25387,21 +25829,60 @@ function griffin_ride_hud_tick()
                 local o = getobj:call(root, path)
                 -- ⛔ re-assert EVERY frame: the game rewrites these labels itself whenever the
                 -- prompt set changes, so a one-shot write is visibly overwritten a moment later.
-                if o then pcall(function() o:call("set_Message", txt); wrote = wrote + 1 end) end
+                if o then
+                    local is_text = false
+                    pcall(function()
+                        local td = o:get_type_definition()
+                        while td do
+                            if td:get_full_name() == "via.gui.Text" then is_text = true; return end
+                            td = td:get_parent_type()
+                        end
+                    end)
+                    if is_text then
+                        pcall(function() o:call("set_Message", txt); wrote = wrote + 1 end)
+                    end
+                end
                 -- ⭐ FORCE THE SLOT VISIBLE (Aurora: "soar/sprint on B isn't showing unless L1 is
                 -- held"). Setting the text is not enough -- the game also decides which prompt
                 -- PANELS are shown for the current context, and B only joins the set while L1 is
                 -- held. Un-hide the owning panel so a label we have written is actually readable.
-                if C.route3_ride_hud_force_show ~= false then
+                -- ⛔⛔⛔ FORCE-SHOW IS DEAD -- IT IS THE MOUNT CTD (field-proven 2026-08-13).
+                -- Aurora: "game crashes whenever I mount anything -- wolf, griffin, horse". Six
+                -- wrong suspects were chased (UDD2P's damageProc hook, creature vocals, the Wwise
+                -- trigger hooks, the scale easer, a full code rollback to 08-12) and NONE of them
+                -- stopped it. What stopped it was setting route3_ride_hud_force_show = false.
+                -- The tell was Aurora's own: L1/L2/R1/R2 went BLANK a moment before each death --
+                -- those are exactly the four panels this block reaches for.
+                --
+                -- WHY IT KILLS, and why "Chop" on X/Y is perfectly safe:
+                --   set_Message on a via.gui.Text node = writing TEXT. Safe. IrisPromptBar does
+                --   only this, all day, with no incident.
+                --   set_Visible on the owning PANEL = writing the game's own show/hide STATE
+                --   MACHINE, every frame, against what the game decided for this context. That is
+                --   the same lever as set_PlayState -- see the ⛔⛔⛔ law ~180 lines above, which
+                --   records TWO CTDs from it, one of them AT MOUNT. I rebuilt the same mistake
+                --   with a different setter and the same result.
+                -- ⇒ Labels stay (set_Message above). The B slot only joining the prompt set while
+                --   L1 is held is GAME BEHAVIOUR WE ACCEPT -- the fake drawn prompts below exist
+                --   precisely so we never have to fight the panel for it.
+                -- ⚠ Hard-disabled in CODE, not left to config: the config JSON is not covered by a
+                -- code rollback (that hole is why my rollback tests read as false negatives all
+                -- evening), so a stale profile must not be able to re-arm this.
+                -- ⭐ THE READ SURVIVES, THE WRITE DOES NOT. This block still resolves the panel and
+                -- READS its PlayState -- that is pure observation and has never hurt anything. It
+                -- MUST keep running: the fake drawn prompts below gate on
+                -- `S.route3_hud_diag[btn].playstate` containing "DISABLE" to decide whether the
+                -- game is withholding that slot. Kill the read and route3_hud_diag stays empty,
+                -- every slot reads as "not suppressed", and the fakes stop drawing -- which loses
+                -- the labels a second way instead of fixing them. (I did exactly that for one
+                -- round; this comment is the receipt.)
+                do
                     local panel_path = path:gsub("/PNL_txt/mtx_00$", "")
                     local pnl = getobj:call(root, panel_path)
-                    -- ⭐ MEASURE, don't guess. Two blind attempts at un-hiding B have failed, so
-                    -- record what actually happens: does the panel object even resolve, what is
-                    -- its Visible state, and does our write stick? Written to disk per button.
                     local rec = { path = panel_path, resolved = (pnl ~= nil) }
                     if pnl then
-                        pcall(function() pnl:call("set_Visible", true) end)
-                        -- READ-ONLY from here on -- see the ⛔⛔⛔ law above: set_PlayState = CTD ×2
+                        -- ⛔⛔⛔ set_Visible(true) LIVED HERE AND IT IS THE MOUNT CTD. Do not put
+                        -- it back. Nothing in this block may WRITE to the panel, ever.
                         pcall(function() rec.playstate = tostring(pnl:call("get_PlayState")) end)
                     end
                     S.route3_hud_diag = S.route3_hud_diag or {}
@@ -26536,12 +27017,11 @@ function iris_air_seat_levitate_tick()
     end
 end
 
--- ⭐⭐ v21 SEAT-POINT FORENSICS. The recorder settled the position question: micro-jumps froze
--- (237, then flat), i.e. she sits EXACTLY where we write her -- nothing is dragging her any more,
--- the seat POINT is simply in the wrong place. We anchor to the joint named "root" and add
--- +2.3m; on the griffin that lands on the back because its root sits at ground level, and the
--- drake's evidently does not. Dump every joint with its height above the root ONCE per engage:
--- the joint whose offset matches the saddle is the anchor this seat should have used all along.
+-- ⭐⭐ v21/v22 SEAT-POINT FORENSICS. The recorder settled the position question: micro-jumps
+-- froze, so nothing was dragging her; the written point was wrong. The resulting rig dump then
+-- disproved the first theory: ch257 root IS ground-level. Its real saddle line is Spine_2/Spine_3
+-- at roughly +4.5m. The air seat now uses that visible spine anchor and a pitched local offset.
+-- Keep the dump: it is the evidence behind the selected joint and remains useful for variants.
 function iris_air_seat_dump_joints()
     local _, go = reacquire_griffin()
     local gtf = go and transform_of(go)
@@ -26626,7 +27106,7 @@ function iris_air_seat_engage()
     end
     -- v14b pose modes: "cling" (default -- the authentic b20:100 grab-on grip, painted by the
     -- neutral pin, no rs_anim_lab needed) or "wilds" (the MH Wilds riding loop via NB_Pose).
-    if tostring(C.route3_air_seat_pose_mode or "cling") == "wilds" then
+    if tostring(C.route3_air_seat_pose_mode or "wilds") == "wilds" then
         pcall(function()
             local pose = _G.NB_Pose
             if type(pose) == "table" and type(pose.play) == "function" then
@@ -26636,13 +27116,21 @@ function iris_air_seat_engage()
             end
         end)
     end
-    S.route3_air_seat_status = "AIR SEAT: climb released, root seat live"
-    status("air seat engaged (flight)")
+    S.route3_air_seat_status = "CUSTOM SEAT: climb released, animated saddle frame live"
+    status("custom Drake seat engaged")
     return true
 end
 
 function iris_air_seat_release(reason)
     if S.route3_air_seat_on ~= true then return end
+    -- Seal the current rider coordinate into the recorder BEFORE the seat/rollback guards drop.
+    -- Otherwise the first ordinary update can restore the last pre-flight safe point (the
+    -- 70-100m dismount teleport) even though the visible body was beside the Drake.
+    pcall(function()
+        local pgo = char_go(get_player())
+        local here = pgo and transform_pos(pgo)
+        if here then griffin_seat_feed_recorder(here.x, here.y, here.z, true) end
+    end)
     S.route3_air_seat_on = false
     S.route3_air_seat_air_since = nil
     S.route3_air_ground_since = nil
@@ -26760,6 +27248,8 @@ function iris_air_seat_tick()
             -- flag has stayed down 2s (genuinely grounded some other way).
             if S.route3_air_ground_since == nil then S.route3_air_ground_since = now end
             local touched = (tonumber(S.route3_touchdown_at) or 0.0) >= (tonumber(S.route3_air_seat_t0) or 0.0)
+            -- Drake uses the skeleton seat for the WHOLE ride. Native climb is what put the
+            -- Arisen under its chest on the ground, and ignores every slider after latching.
             if touched and now - S.route3_air_ground_since >= 0.3 then
                 iris_air_seat_release("touchdown")
             elseif now - S.route3_air_ground_since >= 2.0 then
@@ -26918,7 +27408,7 @@ function iris_air_seat_tick()
         -- native follow controller re-posing our camera each frame; the 30m spikes inside
         -- geometry are the "fades"). The cinematic holds at steal 0.00 because it PARKS the
         -- controller (switchCamera(2)) before writing -- same law here: park, then write.
-        if C.route3_air_seat_cam ~= false
+        if S.airborne == true and C.route3_air_seat_cam ~= false
             and (tonumber(S.route3_loopcam_clip_until) or 0.0) <= now then
             if S.route3_loopcam_cam_ct == nil then
                 pcall(function()
@@ -26969,7 +27459,8 @@ function iris_air_seat_tick()
                     az - math.cos(cyaw) * horiz,
                     ax, ay, az)
             end)
-        elseif C.route3_air_seat_cam == false and S.route3_airseat_cam_parked == true then
+        elseif (S.airborne ~= true or C.route3_air_seat_cam == false)
+            and S.route3_airseat_cam_parked == true then
             -- camera checkbox unticked mid-flight: hand the controller back immediately
             S.route3_airseat_cam_parked = nil
             pcall(function()
@@ -27532,23 +28023,7 @@ function route3_rider_pin_late()
         -- mover). The root joint tracks the mesh; offsets stay her tuned saddle numbers.
         if S.route3_air_seat_on == true then
             pcall(function()
-                local gtf = transform_of(go)
-                local rj = gtf and managed_call(gtf, "getJointByName", "root")
-                local jp = rj and managed_call(rj, "get_Position")
-                local gup, grp = transform_pos(go), transform_render_pos(go)
-                if jp and gup and grp and sane_position(jp) then
-                    local bx2 = (tonumber(jp.x) or 0.0) + (tonumber(gup.x) or 0.0) - (tonumber(grp.x) or 0.0)
-                    local by2 = (tonumber(jp.y) or 0.0) + (tonumber(gup.y) or 0.0) - (tonumber(grp.y) or 0.0)
-                    local bz2 = (tonumber(jp.z) or 0.0) + (tonumber(gup.z) or 0.0) - (tonumber(grp.z) or 0.0)
-                    local yw2 = yaw_from_transform(go) or yaw
-                    local fx2, fz2 = math.sin(yw2), math.cos(yw2)
-                    local rxx, rzz = math.cos(yw2), -math.sin(yw2)
-                    seat_pos = make_position(
-                        bx2 + rxx * base_x + fx2 * base_z,
-                        by2 + base_y,
-                        bz2 + rzz * base_x + fz2 * base_z)
-                    anchor_name = "mesh root (air seat)"
-                end
+                seat_pos, anchor_name = route3_air_seat_position(go)
             end)
         end
         -- AIR SEAT rides the mesh-root seat above, never the joint weld: the spine joints are
@@ -27732,6 +28207,44 @@ function route3_rider_pin_late()
                 base_x + fine_x, base_y + fine_y, base_z + fine_z)
         end
         if not seat_pos then S.route3_rider_lock_status = "seat position unavailable"; return end
+        -- v24: route3_air_seat_position is the desired SADDLE/HIP point, not the player's
+        -- transform root. A levitate pose places Hip several metres from its transform origin;
+        -- writing the root directly to the saddle therefore left the visible Arisen hanging
+        -- below it. Close the loop on what actually renders: measure Hip in render space and
+        -- shift the current universal root by Hip->saddle. Render/universal differ only by the
+        -- streaming-cell translation, so the delta is valid in both spaces.
+        if S.route3_air_seat_on == true then
+            local ptf = transform_of(pgo)
+            local hip = ptf and managed_call(ptf, "getJointByName", "Hip")
+            local hp = hip and managed_call(hip, "get_Position")
+            local cur = ptf and managed_call(ptf, "get_UniversalPosition")
+            if not cur then cur = transform_pos(pgo) end
+            local gup, grp = transform_pos(go), transform_render_pos(go)
+            if hp and cur and gup and grp then
+                local sr = {
+                    x = (tonumber(seat_pos.x) or 0.0) - (tonumber(gup.x) or 0.0) + (tonumber(grp.x) or 0.0),
+                    y = (tonumber(seat_pos.y) or 0.0) - (tonumber(gup.y) or 0.0) + (tonumber(grp.y) or 0.0),
+                    z = (tonumber(seat_pos.z) or 0.0) - (tonumber(gup.z) or 0.0) + (tonumber(grp.z) or 0.0),
+                }
+                local dx = sr.x - (tonumber(hp.x) or 0.0)
+                local dy = sr.y - (tonumber(hp.y) or 0.0)
+                local dz = sr.z - (tonumber(hp.z) or 0.0)
+                local gap = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if gap <= 15.0 then
+                    seat_pos = make_position(
+                        (tonumber(cur.x) or 0.0) + dx,
+                        (tonumber(cur.y) or 0.0) + dy,
+                        (tonumber(cur.z) or 0.0) + dz)
+                    anchor_name = anchor_name .. string.format(" hip-feedback %.2fm", gap)
+                else
+                    S.route3_rider_lock_status = string.format("HIP FEEDBACK REFUSED %.1fm", gap)
+                    return
+                end
+            else
+                S.route3_rider_lock_status = "HIP FEEDBACK unavailable"
+                return
+            end
+        end
         -- measure her RENDERED facing + uprightness every pass, from joint POSITIONS
         -- (the truth channel): shoulder line -> body yaw; head-above-hip -> pitch proxy
         pcall(function()
@@ -31794,6 +32307,26 @@ _G.IrisGriffinBridge = {
         end)
         return g
     end,
+    body_record_id = function(go_or_addr)
+        -- Persistent soul identity for once-per-day systems.  A transform/grid key
+        -- describes where a creature happens to stand; this ID describes the creature.
+        local addr = tonumber(go_or_addr)
+        if addr == nil then pcall(function() addr = go_or_addr and go_or_addr:get_address() end) end
+        if addr == nil then return nil end
+        local active_addr = nil
+        pcall(function()
+            local go9 = S.griffin and char_go(S.griffin) or nil
+            active_addr = go9 and go9:get_address() or nil
+        end)
+        if active_addr == addr then return S.live_rec_id end
+        local rid = nil
+        pcall(function()
+            local hb = rawget(_G, "IrisHomesteadBox")
+            rid = hb and hb.resident_id and hb.resident_id(addr)
+                or (hb and hb.addrs and hb.addrs[addr]) or nil
+        end)
+        return rid
+    end,
     -- ── HOMESTEAD BOX data layer (08-11, slice 1: records only -- the resident
     -- SPAWNER arrives in its own arc; a "home" soul is parked at the plot, not
     -- summonable-at-your-side until called back). home.hs = homestead index, so a
@@ -35345,6 +35878,7 @@ function route3_grab_tick(ch, go, now)
 end
 
 function route3_grab_hotkey_tick()
+    if route3_drake_mounted and route3_drake_mounted() then S.route3_grab_btn_prev = false; return end
     if C.route3_grab_enabled ~= true or S.mounted ~= true then S.route3_grab_btn_prev = false; return end
     local down = false
     local names = tostring(C.route3_grab_buttons or ""):gsub("%s+", "")
@@ -35926,11 +36460,8 @@ function griffin_hud_init_d2d()
 end
 pcall(griffin_hud_init_d2d)
 
--- ⭐ HUD EASING (07-24, Aurora: "sometimes it jumps from 50% to 95%... I want it going up 1% at a
--- time, like a loading bar"). It was never a rendering delay -- the NUMBERS genuinely step: the duel
--- integrates grip on the ox-tame's 0.7s scene tick, so a 0.45/s recovery arrives as one ~0.3 jump.
--- Moving the duel to a per-frame tick would re-tune its whole balance, so instead the BAR eases
--- toward the true value at a fixed rate: always honest, never teleports, and readable mid-ride.
+-- ⭐ HUD EASING. Rodeo input is now integrated every game frame in IrisTaming; this small display
+-- ease removes the last pixel-level jitter without concealing a genuine grip change.
 -- Shared by both renderers (d2d + the draw.* fallback) so they can never disagree.
 function iris_rodeo_hud_ease(gf, bf)
     local now = os.clock()
@@ -35946,6 +36477,23 @@ function iris_rodeo_hud_ease(gf, bf)
     S.rodeo_grip_shown = ease(tonumber(S.rodeo_grip_shown), gf)
     S.rodeo_brk_shown = ease(tonumber(S.rodeo_brk_shown), bf)
     return S.rodeo_grip_shown, S.rodeo_brk_shown
+end
+
+function iris_progress_hud_ease(key, target, dt)
+    S.prog_hud_shown = S.prog_hud_shown or {}
+    target = math.max(0.0, math.min(1.0, tonumber(target) or 0.0))
+    local shown = tonumber(S.prog_hud_shown[key])
+    if shown == nil then
+        shown = target
+    else
+        -- Exponential response is independent of refresh rate and removes the stair-step caused
+        -- by gameplay systems that publish progress less often than D2D renders it.
+        local a = 1.0 - math.exp(-10.0 * math.max(0.0, math.min(0.10, tonumber(dt) or 0.0)))
+        shown = shown + (target - shown) * a
+        if math.abs(target - shown) < 0.0005 then shown = target end
+    end
+    S.prog_hud_shown[key] = shown
+    return shown
 end
 
 function iris_companion_hp_tick()
@@ -36085,7 +36633,10 @@ function iris_mount_hp_d2d_draw()
     fd.a = math.max(0.0, math.min(1.0, (tonumber(fd.a) or 0.0)
         + (live and (dtf / 0.25) or -(dtf / 0.35))))
     if live then S.mount_hp_last = hud else hud = S.mount_hp_last end
-    if fd.a <= 0.02 or type(hud) ~= "table" then return end
+    if fd.a <= 0.02 or type(hud) ~= "table" then
+        S.prog_hud_shown = nil
+        return
+    end
     -- ⛔ r83: no gauges over the pause menu / map / photo mode (Aurora: "it needs
     -- to disappear when the game is paused"). Same oracle the progress bar uses.
     local paused = false
@@ -36268,13 +36819,15 @@ function iris_progress_bar_d2d_draw()
         for i, b in ipairs(hud.bars) do
             iris_hud_bar(d, S.griffin_hud_font_rodeo or S.griffin_hud_font,
                 sw * 0.5 - bw * 0.5, sh * 0.66 + (i - 1) * (bh + 16.0), bw, bh, fd.a,
-                tonumber(b.frac) or 0.0, tostring(b.label or ""), true,
+                iris_progress_hud_ease("multi:" .. tostring(i) .. ":" .. tostring(b.label or ""),
+                    tonumber(b.frac) or 0.0, dtf), tostring(b.label or ""), true,
                 214, 168, 74, 255, 236, 180)
         end
     else
         iris_hud_bar(d, S.griffin_hud_font_rodeo or S.griffin_hud_font,
             sw * 0.5 - bw * 0.5, sh * 0.66, bw, bh, fd.a,
-            tonumber(hud.frac) or 0.0, tostring(hud.label or ""), true,
+            iris_progress_hud_ease("single:" .. tostring(hud.label or ""),
+                tonumber(hud.frac) or 0.0, dtf), tostring(hud.label or ""), true,
             214, 168, 74, 255, 236, 180)   -- the bond amber
     end
 end
@@ -36532,6 +37085,7 @@ re.on_frame(function()
     safe_run("griffin_camtrace_tick", griffin_camtrace_tick)
     safe_run("route3_adopt_hotkey_tick", route3_adopt_hotkey_tick)
     safe_run("route3_flight_hotkey_tick", route3_flight_hotkey_tick)
+    safe_run("route3_drake_attack_tick", route3_drake_attack_tick)
     safe_run("route3_divebomb_hotkey_tick", route3_divebomb_hotkey_tick)
     safe_run("route3_dogfight_hotkey_tick", route3_dogfight_hotkey_tick)
     safe_run("route3_dogfight_marker_tick", route3_dogfight_marker_tick)
@@ -36741,10 +37295,10 @@ re.on_draw_ui(function()
         -- Everything the close-cam/knocking bisect needs, in one box. Both checkboxes are
         -- the SAME variables as the ones buried in the loop-camera tree, just surfaced.
         if imgui.tree_node("🐉 DRAKE TESTING (camera/knocking bisect)##c_drktest") then
-            imgui.text_colored("AIR SEAT: in flight you are not a climber -- the cling mode can't engage.", 0xFF80D0FF)
+            imgui.text_colored("DRAKE SEAT: native ground latch; custom animated saddle in flight.", 0xFF80D0FF)
             local dkas
             dkas, C.route3_air_seat = imgui.checkbox(
-                "AIR SEAT (the drake flight fix)##c_drk_airseat", C.route3_air_seat == true)
+                "CUSTOM DRAKE AIR SEAT##c_drk_airseat", C.route3_air_seat == true)
             if dkas then save_config() end
             local dklv
             dklv, C.route3_air_seat_levitate = imgui.checkbox(
@@ -36765,23 +37319,32 @@ re.on_draw_ui(function()
                 .. " | action: " .. tostring(_G.IrisPlayerActionNode or "-"), 0xFF80FFD0)
             imgui.text("anchor: " .. tostring(S.route3_rider_lock_status or "-"))
             imgui.text("rig: " .. tostring(S.route3_air_joint_note or "(no dump yet)"))
-            local dks1, dks2
-            -- ⛔ v21: the floor was 0.0, so if the seat point sat ABOVE the back this slider
-            -- could not reach the fix at all -- "tune it with the sliders" was never possible.
-            -- The drake's "root" joint is NOT at ground level like the griffin's, so the same
-            -- +2.3 that seats a griffin puts her metres over a drake.
-            dks1, C.route3_seat_offset_y = imgui.drag_float(
-                "seat height on her back (can go negative)##c_drk_seaty",
-                tonumber(C.route3_seat_offset_y) or 2.3, 0.05, -12.0, 12.0)
-            if dks1 then save_config() end
-            dks2, C.route3_seat_offset_z = imgui.drag_float(
-                "seat forward/back (+ = toward the head)##c_drk_seatz",
-                tonumber(C.route3_seat_offset_z) or 1.6, 0.05, -8.0, 8.0)
-            if dks2 then save_config() end
+            imgui.text("seat joint: " .. tostring(C.route3_air_seat_joint or "Spine_2")
+                .. " (offsets follow the animated spine + chest frame)")
+            local dksx, dksy, dksz
+            dksx, C.route3_air_seat_offset_x = imgui.drag_float(
+                "air seat left/right##c_drk_airseatx",
+                tonumber(C.route3_air_seat_offset_x) or 0.0, 0.03, -4.0, 4.0)
+            if dksx then save_config() end
+            dksy, C.route3_air_seat_offset_y = imgui.drag_float(
+                "air seat height##c_drk_airseaty",
+                tonumber(C.route3_air_seat_offset_y) or 1.0, 0.03, -4.0, 4.0)
+            if dksy then save_config() end
+            dksz, C.route3_air_seat_offset_z = imgui.drag_float(
+                "air seat forward/back (+ = toward head)##c_drk_airseatz",
+                tonumber(C.route3_air_seat_offset_z) or 0.0, 0.03, -4.0, 4.0)
+            if dksz then save_config() end
+            local dkat
+            dkat, C.route3_drake_attacks = imgui.checkbox(
+                "Drake native mounted attacks##c_drk_attacks", C.route3_drake_attacks ~= false)
+            if dkat then save_config() end
+            imgui.text("ground: Y Bite | X Flame Breath | LT Magic | RT Tail Cleave")
+            imgui.text("air: Y Breath Below | X Hover Breath | LT Hover Magic | RT Back Breath")
+            imgui.text("attack: " .. tostring(S.route3_drake_attack_status or "ready"))
             local dkcd
             dkcd, C.route3_drake_cam_dist = imgui.drag_float(
                 "camera distance (native camera, stick works)##c_drk_camdist",
-                tonumber(C.route3_drake_cam_dist) or 15.0, 0.25, 4.0, 80.0)
+                tonumber(C.route3_drake_cam_dist) or 22.0, 0.25, 4.0, 80.0)
             if dkcd then save_config() end
             imgui.text("   cam fields: " .. tostring(S.route3_camfield_note or "(not mounted yet)"))
             local dkpm

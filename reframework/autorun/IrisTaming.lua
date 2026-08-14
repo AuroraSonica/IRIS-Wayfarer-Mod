@@ -51,8 +51,7 @@ local C = {
     perch_scale = 0.85,           -- ⛔ DEAD since 08-13: shoulder riding no longer changes size at
                                   -- all (Aurora: "Only the IVs should affect the size"). Kept only so
                                   -- saved configs load without a nil; nothing reads it.
-    perch_idle_clips = "0,0,0,0,1,2",   -- shoulder idle variety (weighted): mostly idle_loop, sometimes
-                                  -- 1 cry / 2 grooming (picked at RANDOM each cycle, not in sequence)
+    perch_idle_clips = "0",       -- compact shoulder idle; cry/groom clips spread the wings and mimic a scale jump
     perch_bathe_chance = 0.0,     -- chance per idle cycle to bathe (60:0/60:10) ON THE SHOULDER; off (odd up there)
     ground_bathe_chance = 0.15,   -- chance per idle cycle to bathe while idle ON THE GROUND (a cute touch)
     perch_joint = "R_Arm_Clavicle,Spine_2",   -- the shoulder rides a REAL joint (first found wins)
@@ -440,6 +439,30 @@ local C = {
     -- approach path
     approach_range = 18.0,        -- it becomes aware of you inside this
     peace_range = 30.0,           -- ritual peace engages the moment it is targeted (spawn-safe)
+    -- ⛔⛔ 08-13: THE PER-SPECIES OFFER GATE (reach / cone / hold tiers) WAS REMOVED, DELIBERATELY.
+    -- It was a pile of heuristics all trying to GUESS whether a B press meant "tame this" or "ring
+    -- that bell" -- and every one of them had an edge case (a 12m reach excluded perched birds
+    -- because dist() counts height; a tight cone fought the in-rite hand; the hold latch collided
+    -- across three rites). TAMING MODE replaces the entire guess: the player declares intent in the
+    -- Stable UI, taming prompts exist only while it is on, and no inference is needed at all.
+    -- ⇒ If you are tempted to re-add an intent heuristic here, the mode is the answer instead.
+    arm_ttl           = 3.0,      -- a BARE arm (nothing started) lapses after this many hands-free seconds
+    -- ⭐⭐⭐ 08-13 TAMING MODE. Persisted CONFIG (the checkbox), never the live mode itself --
+    -- S.tame_mode boots false on every load by design: a mode you do not remember enabling is
+    -- worse than no mode, because your bell silently stops answering B and nothing says why.
+    tame_mode_stay    = false,    -- false = leave taming mode automatically after a successful tame
+    tame_mode_marker  = true,     -- the on-screen indicator while the mode is on
+    tame_mode_px      = 23.0,     -- its type size (was 17 and far too small to notice -- Aurora)
+    tame_mode_dx      = 395.0,    -- 1080p px in from the RIGHT edge
+    tame_mode_y       = 0.45,     -- fraction of screen height: clear of the pawn command wheel
+    tame_stable_hint  = true,     -- the fake "Hold [Back] for Stable" line above the button plaque
+    tame_hint_px      = 19.0,     -- the plaque's shoulder rows use smaller type than face buttons
+    tame_hint_dx      = 380.0,    -- 08-13: nudged right twice by eye; slider in the panel now
+    tame_hint_dy      = 212.0,
+    cancel_key        = 0x42,     -- keyboard B: break a live courtship. ⛔ NEVER a pad button --
+                                  -- the pad tame mask 0x40080 IS circle/B, so a pad cancel cannot
+                                  -- be told apart from the tame hand itself. Pad players exit via
+                                  -- the arm TTL and the walk-away, which is why both exist.
     pressure_fast = 22.0,         -- pressure/sec added when moving fast toward it
     pressure_close = 10.0,        -- pressure/sec when closing distance while it's wary
     calm_rate = 14.0,             -- pressure/sec removed when still/crouched/backing off
@@ -1033,6 +1056,8 @@ local function pin_crow_shoulder(go, pgo)
         ox = ox + sp0.x
         oy = oy + sp0.y
         oz = oz + sp0.z
+        -- (08-13: the shoulder-comfort publisher lived here for one round and is
+        -- REVERTED - Aurora's spec: the IV size is the only size, shoulder included)
         local pos = ValueType.new(sdk.find_type_definition("via.Position"))
         pos.x = bx + cy * ox + sy * oz
         pos.y = by + oy
@@ -1051,8 +1076,8 @@ local function pin_crow_shoulder(go, pgo)
     end)
 end
 
--- per-band shoulder tuning (GLOBAL: read by the pin + the perch scale + the sliders).
--- Keys live in the saved config as sp_<band>_px/py/pz/prot/psc; absent = neutral.
+-- Per-band shoulder placement (GLOBAL: read by the pin + sliders). Scale is deliberately
+-- absent: the bloodline IV remains the sole size owner on ground and shoulder alike.
 function iris_species_perch(band9)
     band9 = tostring(band9 or "")
     return {
@@ -1060,7 +1085,6 @@ function iris_species_perch(band9)
         y = tonumber(C["sp_" .. band9 .. "_py"]) or 0.0,
         z = tonumber(C["sp_" .. band9 .. "_pz"]) or 0.0,
         rot = tonumber(C["sp_" .. band9 .. "_prot"]) or 0.0,
-        scale = tonumber(C["sp_" .. band9 .. "_psc"]) or 1.0,
     }
 end
 
@@ -1934,6 +1958,139 @@ local function iris_prog_hud(frac, label)
         frac = math.max(0.0, math.min(1.0, tonumber(frac) or 0.0)), label = tostring(label or "") }
 end
 
+-- ⭐⭐ THE TAMING-MODE HUD. Two pieces in IRIS's shared Stable face:
+--   1) "-- Taming Mode Active --" on the right, clear of the pawn command wheel.
+--   2) a fake "Hold [Back] for Stable" line above the button plaque -- the same trick the griffin
+--      ride uses for the prompts DD2 withholds (IrisFont.text's per-call face override exists
+--      precisely for that job, see its comment).
+-- ⛔ THIS IS NOT COSMETIC. While the mode is on, taming outranks IRIS's own prompts, so your bell
+-- and cookpot stop answering B. Without a visible marker that reads as a fresh bug.
+local function iris_tame_face_text(str, x, y, argb, px)
+    local F = _G.IrisFont
+    -- Use the already-shared Stable face. A per-call face override caused new DirectWrite
+    -- objects to be born during mount transitions; this surface has no reason to own a font.
+    if F and F.text and F.text(str, x, y, argb, px) then return end
+    iris_screen_text(str, x, y, argb, px)          -- d2d down: the plain fallback still says it
+end
+
+-- Mount-safe rebuild: the game thread resolves one boolean from PauseManager + ui010201;
+-- the render callback never touches scene objects and only queues text in the shared font.
+-- It is therefore absent from Start/pause/loading screens and from every mount transition.
+local TAME_HUD_ENABLED = true
+local function iris_tame_mode_hud()
+    if not TAME_HUD_ENABLED then return end
+    -- This flag is resolved on LateUpdateBehavior, where scene/UI managed objects are safe.
+    -- The render callback below only consumes a boolean and queues text.
+    if S.tame_hud_world_visible ~= true then return end
+    local w, h = 1920.0, 1080.0
+    pcall(function()
+        local ds = imgui.get_display_size()
+        if ds then w = tonumber(ds.x) or w; h = tonumber(ds.y) or h end
+    end)
+    local sc = h / 1080.0
+    -- ⛔ NEITHER PIECE DRAWS OVER A MENU OR A MOUNT. The Stable screen would cover its own hint,
+    -- and while riding, the griffin's own fake-prompt cluster owns that corner of the plaque --
+    -- stacking a second line into it is how you get two overlapping prompts arguing.
+    if rawget(_G, "IrisStableUIOpen") == true or rawget(_G, "IrisFurnishUIOpen") == true
+        or rawget(_G, "IrisCustomizeOpen") == true or S.name_pending
+        or rawget(_G, "IrisRiddenNow") or rawget(_G, "IrisGriffinMounted") then return end
+
+    -- ── 1. the mode banner -- ONLY while the mode is on ──
+    if S.tame_mode == true and C.tame_mode_marker ~= false then
+        -- a slow breath so it reads as live state rather than a static HUD element you stop seeing
+        local a = 0.62 + 0.22 * math.sin(os.clock() * 2.0)
+        local col = 0x00E8D8B0 | (math.floor(math.max(0.0, math.min(1.0, a)) * 255.0) << 24)
+        local px = math.max(14.0, tonumber(C.tame_mode_px) or 23.0)
+        iris_tame_face_text("-- Taming Mode Active --",
+            w - (tonumber(C.tame_mode_dx) or 395.0) * sc,
+            h * (tonumber(C.tame_mode_y) or 0.45), col, px)
+    end
+
+    -- ── 2. the fake "Hold [Back] for Stable" prompt, above the game's button plaque ──
+    -- ⭐ 08-13 (Aurora): ALWAYS UP, not just in taming mode. It is the discoverability line for the
+    -- whole Stable screen -- companions, taming, cancel -- and a hint that only appears once you
+    -- are already in the mode cannot teach you how to reach the mode.
+    if C.tame_stable_hint == false then return end
+    local ppx = math.max(12.0, tonumber(C.tame_hint_px) or 19.0)
+    local bx = w - (tonumber(C.tame_hint_dx) or 520.0) * sc
+    local by = h - (tonumber(C.tame_hint_dy) or 212.0) * sc
+    -- Last-used-device wins. Any pad button/axis marks gamepad; any gameplay keyboard
+    -- key marks keyboard. This follows DD2's own live plaque switching instead of the
+    -- old 20-second pad latch, which lied long after Aurora had gone back to keys.
+    local input_now = os.clock()
+    if input_now >= (tonumber(S.stable_input_probe_at) or 0.0) then
+        S.stable_input_probe_at = input_now + 0.08
+        pcall(function()
+            local gp = sdk.get_native_singleton("via.hid.GamePad")
+            local td = sdk.find_type_definition("via.hid.GamePad")
+            local dv = gp and td and sdk.call_native_func(gp, td, "get_MergedDevice")
+            if dv then
+                local bits = math.floor(tonumber(dv:call("get_Button")) or 0)
+                local ax = dv:call("get_AxisL")
+                if bits ~= 0 or (ax and (math.abs(tonumber(ax.x) or 0) > 0.22
+                    or math.abs(tonumber(ax.y) or 0) > 0.22)) then
+                    S.stable_input_device = "pad"
+                end
+            end
+        end)
+        pcall(function()
+            -- This project uses Windows virtual-key values. via.hid.Keyboard::getDown expects
+            -- the engine key enum on this build, so VK_W/VK_O never registered there.
+            for _, vk in ipairs({ 0x57, 0x41, 0x53, 0x44, 0x4F, 0x45, 0x20,
+                0x25, 0x26, 0x27, 0x28 }) do
+                if reframework:is_key_down(vk) == true then
+                    S.stable_input_device = "keyboard"
+                    break
+                end
+            end
+        end)
+    end
+    local on_pad = S.stable_input_device ~= "keyboard"
+    local keyname = on_pad and "Back" or "O"
+    -- the game boxes its keyboard glyphs (Ctrl / Shift / Space in the plaque), so we box ours:
+    -- a dim well with the key name in cream, then the words in the plaque's own muted grey
+    local kw = (ppx * 0.62) * #keyname + 12.0 * sc
+    local kh = ppx * 1.25
+    -- ⛔ draw.filled_rect EATS ABGR, NOT ARGB (imgui drawlist packing -- IrisStableUI keeps an rc()
+    -- converter for exactly this). Authored gold ARGB 0x50C8A050 pasted straight in comes out
+    -- BLUE, because R and B swap. These two constants are already byte-swapped:
+    --   well   ARGB 0x70101014 -> ABGR 0x70141010
+    --   border ARGB 0x50C8A050 -> ABGR 0x5050A0C8
+    -- ⚠ IrisFont.text on the other hand takes ARGB as authored -- do not swap those.
+    pcall(function()
+        draw.filled_rect(bx, by - 2.0 * sc, kw, kh, 0x70141010)
+        draw.filled_rect(bx, by - 2.0 * sc, kw, 1.0, 0x5050A0C8)
+        draw.filled_rect(bx, by - 2.0 * sc + kh, kw, 1.0, 0x5050A0C8)
+    end)
+    iris_tame_face_text(keyname, bx + 6.0 * sc, by, 0xFFE8E0CC, ppx)
+    iris_tame_face_text(on_pad and "Hold for Stable" or "for Stable",
+        bx + kw + 8.0 * sc, by, 0xFFA8A49C, ppx)
+end
+
+-- Resolve whether normal gameplay HUD is genuinely visible on the game thread. ui010201's
+-- DrawSelf is the field-proven menu/loading signal used by the ride HUD: it is hidden in Start,
+-- pause and loading screens. Never walk the scene from re.on_frame.
+S.tame_hud_world_visible = false
+re.on_application_entry("LateUpdateBehavior", function()
+    pcall(function()
+        local now9 = os.clock()
+        if now9 < (tonumber(S.tame_hud_probe_at) or 0.0) then return end
+        S.tame_hud_probe_at = now9 + 0.15
+        S.tame_hud_world_visible = false
+        if is_game_paused() or rawget(_G, "IrisStableUIOpen") == true
+            or rawget(_G, "IrisFurnishUIOpen") == true or rawget(_G, "IrisCustomizeOpen") == true
+            or S.name_pending or rawget(_G, "IrisRiddenNow") or rawget(_G, "IrisGriffinMounted") then return end
+        local cm9 = sdk.get_managed_singleton("app.CharacterManager")
+        local pl9 = cm9 and cm9:call("get_ManualPlayer")
+        if not (pl9 and pl9:call("get_GameObject")) then return end
+        local sm9 = sdk.get_native_singleton("via.SceneManager")
+        local smt9 = sdk.find_type_definition("via.SceneManager")
+        local scene9 = sm9 and smt9 and sdk.call_native_func(sm9, smt9, "get_CurrentScene")
+        local ui9 = scene9 and scene9:call("findGameObject(System.String)", "ui010201")
+        S.tame_hud_world_visible = ui9 and ui9:call("get_DrawSelf") == true or false
+    end)
+end)
+
 local function iris_ox_is_tamed(ch0)
     -- ⭐ is this ox FAMILY? (07-21, the yoke rite's non-interference law): a tamed ox is invisible
     -- to the griffin's offering machinery -- never watched, never a corpse-offering, never cleaned
@@ -1966,7 +2123,10 @@ local function release_creature(ch)
         local c = comp(go2, tn)
         if c then pcall(function() c:call("set_Enabled", true) end) end
     end
-    pcall(function() ch:call("resetActionAndAI") end)
+    -- Do not call Character.resetActionAndAI here.  On this build the bare
+    -- overload is not valid; the old out-of-range path invoked it every frame,
+    -- flooding the native bridge while a pawn was being carried.  Restoring
+    -- think/nav/AI/FSM above is the complete, safer hand-back.
     S.lie_cue = nil
     if S.call_anim_live and _G.NB_Pose then pcall(function() _G.NB_Pose.stop() end); S.call_anim_live = nil end
     -- drop the arm trim so other lab clips (the pet etc.) don't inherit a bent arm; it re-pushes
@@ -2201,7 +2361,7 @@ local function shield_party_off(target_ch)
     local chaddr = nil
     pcall(function() chaddr = target_ch:get_address() end)
     _G.IrisTamingHoldWolf = { addr = waddr, ch_addr = chaddr, until_t = os.clock() + 0.5 }
-    for _, member in ipairs(party_characters()) do
+    local function stand_down(member)
         local maddr = nil
         pcall(function() maddr = member:get_address() end)
         if maddr and maddr ~= paddr then          -- never touch the PLAYER (keeps the lock-on alive)
@@ -2223,6 +2383,34 @@ local function shield_party_off(target_ch)
                 end
             end)
         end
+    end
+    for _, member in ipairs(party_characters()) do
+        stand_down(member)
+    end
+    -- Stray pawns are not returned by the player's party list, but they can
+    -- still acquire and repeatedly attack the courted animal.  Sweep them at
+    -- 4 Hz and remove only this one target; their ability to fight goblins or
+    -- anything else remains untouched.
+    local now = os.clock()
+    if now >= (tonumber(S.stray_shield_at) or 0.0) then
+        S.stray_shield_at = now + 0.25
+        pcall(function()
+            local sm = sdk.get_native_singleton("via.SceneManager")
+            local smt = sdk.find_type_definition("via.SceneManager")
+            local scene = sm and sdk.call_native_func(sm, smt, "get_CurrentScene")
+            local chars = scene and scene:call(
+                "findComponents(System.Type)", sdk.typeof("app.Character"))
+            local wp = wgo and upos(wgo)
+            for _, member in ipairs(chars and chars:get_elements() or {}) do
+                pcall(function()
+                    local id = tostring(member:call("get_CharaIDString") or "")
+                    if not id:match("^ch100") then return end
+                    local mgo = char_go(member)
+                    local mp = mgo and upos(mgo)
+                    if wp and mp and dist(wp, mp) <= 55.0 then stand_down(member) end
+                end)
+            end
+        end)
     end
 end
 
@@ -3163,22 +3351,43 @@ TB.pad_ok = function()
     local subj = TB.subject()
     if subj == nil then return false end
     if (tonumber(S.player_spd) or 0.0) > 2.5 then return false end
-    local ok_face = false
+    -- ⛔ 0.35 IS DELIBERATELY LOOSE AND MUST STAY THAT WAY. This is the IN-RITE hand: every live
+    -- courtship reads it through TB.held(). The wolf CIRCLE stage ORBITS you by design (TB.face
+    -- refuses there for exactly that reason), so a tight cone here would drop the palm mid-trial
+    -- and fail the rite. Intent is declared by TAMING MODE now, never inferred from aim.
+    return TB.aimed(subj, 0.35)
+end
+
+-- ⭐ ONE CAMERA-CONE ANSWER (08-13). Extracted from pad_ok so there is a single dot-product in the
+-- file rather than two copies drifting apart. cone: 1.0 = dead ahead, 0.0 = 90deg off to the side.
+TB.aimed = function(go, cone)
+    local ok = false
     pcall(function()
         local cam = sdk.get_primary_camera()
         local crot = cam:call("get_GameObject"):call("get_Transform"):call("get_Rotation")
         local fx = -(2.0 * (crot.x * crot.z + crot.w * crot.y))
         local fz = -(1.0 - 2.0 * (crot.x * crot.x + crot.y * crot.y))
         local fl = math.max(0.05, math.sqrt(fx * fx + fz * fz))
-        local sp2 = upos(subj)
+        local sp2 = upos(go)
         local pu2 = upos(char_go(get_player()))
         if not (sp2 and pu2) then return end
         local dx, dz = sp2.x - pu2.x, sp2.z - pu2.z
         local dl = math.max(0.05, math.sqrt(dx * dx + dz * dz))
-        ok_face = ((dx / dl) * (fx / fl) + (dz / dl) * (fz / fl)) > 0.35
+        ok = ((dx / dl) * (fx / fl) + (dz / dl) * (fz / fl)) > (tonumber(cone) or 0.9)
     end)
-    return ok_face
+    return ok
 end
+
+-- ⛔⛔ 08-13: TB.commit / TB.tier / the per-owner commit latches WERE REMOVED HERE ON PURPOSE.
+-- They were hold-to-commit: a heuristic that tried to INFER, from press duration plus species
+-- reach plus camera cone, whether a B press meant "tame" or "ring that bell". It cost three
+-- separate field failures in one session -- a 12m reach that excluded perched birds (dist() counts
+-- height), and twice a shared edge-latch consumed by whichever of the three rites ticked first, so
+-- no tame could start anywhere. TAMING MODE replaces the whole idea: the player declares intent in
+-- the Stable UI, taming prompts exist only while it is on, and nothing has to be guessed.
+-- ⇒ Do not re-introduce an intent heuristic here. The mode is the answer.
+_G.IrisTamingTB = _G.IrisTamingTB or {}
+_G.IrisTamingTB.held = function() return TB.held() end
 TB.held = function()
     if _G.IrisStableUIOpen == true then return false end   -- B is the stable screen's close there
     if type(iris_input_blocked) == "function" and iris_input_blocked() then return false end
@@ -3218,6 +3427,16 @@ end
 -- ⭐ It does NOT break taming at range: when nothing else is publishing, the tame IS the
 -- winner at any distance. It only stands down when something nearer wants the same button.
 TB.may_start = function(owner)
+    -- ⛔⛔ 08-13 THE BLANKING INVERSION. IrisPromptBar's set() DELETES every publisher's slot while
+    -- IrisStableUIOpen / IrisFurnishUIOpen / IrisFurnishFootprint / IrisFurnishPlacing / IrisRiddenNow
+    -- is set. An empty registry makes winner() return nil, which this function read as "nobody else
+    -- wants this button" -- so the suppressor was acting as a taming AMPLIFIER: taming's gate swung
+    -- OPEN exactly while a menu or a mount owned the screen. Refuse outright instead of inferring.
+    if rawget(_G, "IrisStableUIOpen") == true or rawget(_G, "IrisFurnishUIOpen") == true
+        or rawget(_G, "IrisFurnishFootprint") == true or rawget(_G, "IrisFurnishPlacing") == true
+        or rawget(_G, "IrisRiddenNow") then
+        return false
+    end
     local P = rawget(_G, "IrisPrompt")
     if not P then return true end            -- no arbiter loaded: behave exactly as before
     local refuse_why = nil
@@ -3227,7 +3446,26 @@ TB.may_start = function(owner)
             return
         end
         local w = P.winner and P.winner() or nil
-        if w and w ~= owner then refuse_why = "'" .. tostring(w) .. "' is nearer" end
+        -- ⛔ 08-13 TAMING OWNERS ARE ALIASES OF ONE ANOTHER. The rites publish under several owner
+        -- keys (tame_begin, tame_ox, tame_horse) but they are ONE feature competing for ONE button,
+        -- so a strict w ~= owner made taming stand down against ITSELF -- e.g. IrisTaming publishes
+        -- the horse's prompt as "tame_begin" while IrisHorseRodeo starts the rite under its own key,
+        -- which would refuse forever. Only a NON-taming winner (a bed, a cookpot, a farm animal)
+        -- may take the button away from a tame.
+        local tame_w = w and tostring(w):find("^tame_") ~= nil
+        local tame_o = tostring(owner):find("^tame_") ~= nil
+        -- ⭐⭐ 08-13: IN TAMING MODE THE TAME WINS THE BUTTON outright over IRIS's own publishers
+        -- (bed, cookpot, farm animal, weapon mount). The player has DECLARED intent, so a nearer
+        -- cookpot no longer gets to speak for them -- that inference is exactly what the mode
+        -- exists to abolish.
+        -- ⛔ BUT NATIVE STILL WINS (the native_busy check above is untouched). If taming outranked
+        -- the game's own interacts you could not open a door, climb a ladder or take a quest item
+        -- while the mode was on, and the only cure would be to notice the mode and turn it off.
+        if S.tame_mode == true and tame_o then
+            -- nothing: only native_busy may refuse us here
+        elseif w and w ~= owner and not (tame_w and tame_o) then
+            refuse_why = "'" .. tostring(w) .. "' is nearer"
+        end
     end)
     if not refuse_why then return true end
     -- throttled receipt: a silent refusal is indistinguishable from a dead feature
@@ -3313,11 +3551,18 @@ local function find_candidate(pgo)
                     and not (S.lockouts and ca and (tonumber(S.lockouts[tostring(ca)]) or 0.0) > os.clock()) then
                     local p6 = upos(go)
                     local d = p6 and dist(p6, pp) or 1e9
+                    -- ⭐⭐⭐ 08-13 PER-SPECIES REACH AND AIM (Aurora: far-off birds hijacking the
+                    -- press meant for a sign or a bell). This was a flat 30m at dot > 0.5 (~60deg)
+                    -- for EVERYTHING -- which is precisely how a crow 25m away and well off-centre
+                    -- became a legitimate candidate while she stood at a bell. A crow now has to be
+                    -- close and roughly under the crosshair; an ox may still be spotted at 30m.
+                    -- ⛔ This screens the MARKER too, not just the start -- a prompt you never
+                    -- meant to see is the same bug one step earlier.
                     if d < 30.0 and cfx and p6 then
                         local dx6, dz6 = p6.x - pp.x, p6.z - pp.z
                         local dl6 = math.max(0.05, math.sqrt(dx6 * dx6 + dz6 * dz6))
                         local dot6 = (dx6 / dl6) * cfx + (dz6 / dl6) * cfz
-                        -- inside the ~60deg cone AND nearest AND actually visible (08-12:
+                        -- inside the species cone AND nearest AND actually visible (08-12:
                         -- the cellar rat -- no courting through floors and bridge decks)
                         if dot6 > 0.5 and d < best_d and LOS.clear(pgo, go) then best_d = d; best = ch end
                     end
@@ -3442,6 +3687,13 @@ local function load_state()
         -- inward off the shoulder tip, a touch higher and forward off the backpack line
         if tonumber(C.bat_perch_x) == 0.08 and tonumber(C.bat_perch_y) == 0.18 and tonumber(C.bat_perch_z) == 0.0 then
             C.bat_perch_x = 0.01; C.bat_perch_y = 0.21; C.bat_perch_z = 0.03
+        end
+        -- The apparent shoulder "growth" in the receipts is a silhouette change: clips
+        -- 1/2 spread the crow's wings while clip 0 keeps them folded. The saved default
+        -- kept reviving the wide clips after the code had declared the shoulder scale-
+        -- neutral. Migrate that exact old default; deliberate custom lists remain intact.
+        if tostring(C.perch_idle_clips or "") == "0,0,0,0,1,2" then
+            C.perch_idle_clips = "0"
         end
         -- migration: bespoke bat/rabbit shoulder keys fold into the per-band table
         -- (sp_<band>_*) -- every species tunes the same way now (Aurora 07-15)
@@ -3639,6 +3891,51 @@ local function feed_item_held(player, csv)
         end
     end
     return nil
+end
+
+local function feed_count_snapshot(player, csv)
+    -- Ground drops can merge into an existing world stack, retaining the same
+    -- GameObject address.  Address-only "new drop" detection therefore misses a
+    -- perfectly real second Greenwarish.  Keep the relevant bag counts as the
+    -- authoritative proof that the player performed a fresh drop.
+    local out = {}
+    local mgr = item_mgr()
+    if not (mgr and player) then return out end
+    for idstr in tostring(csv or C.critter_feed_items or ""):gmatch("[^,%s]+") do
+        local id = tonumber(idstr)
+        if id then
+            local n = nil
+            pcall(function()
+                n = tonumber(mgr:call(
+                    "getHaveNum(System.Int32, app.Character)", id, player))
+            end)
+            if n ~= nil then out[id] = n end
+        end
+    end
+    return out
+end
+
+local function feed_count_dropped(player, csv, before)
+    if type(before) ~= "table" then return nil end
+    local mgr = item_mgr()
+    if not (mgr and player) then return nil end
+    local dropped = nil
+    for idstr in tostring(csv or C.critter_feed_items or ""):gmatch("[^,%s]+") do
+        local id = tonumber(idstr)
+        if id then
+            local n = nil
+            pcall(function()
+                n = tonumber(mgr:call(
+                    "getHaveNum(System.Int32, app.Character)", id, player))
+            end)
+            local old = tonumber(before[id])
+            if n ~= nil then
+                if old ~= nil and n < old then dropped = dropped or id end
+                before[id] = n
+            end
+        end
+    end
+    return dropped
 end
 
 local function consume_item(player, id)
@@ -4053,6 +4350,38 @@ local function find_new_drop(mgr, player, seen)
     return best
 end
 
+local function find_feed_drop_near(mgr, player, csv, radius)
+    -- Used only after the bag count proves that a feed item was just dropped.
+    -- Unlike find_new_drop this deliberately permits an old address because DD2
+    -- merges matching ground stacks in place.
+    local allowed = {}
+    for idstr in tostring(csv or C.critter_feed_items or ""):gmatch("[^,%s]+") do
+        local id = tonumber(idstr)
+        if id then allowed[id] = true end
+    end
+    local best, bd = nil, tonumber(radius) or 8.0
+    pcall(function()
+        local prp = char_go(player):call("get_Transform"):call("get_Position")
+        local dl = mgr:call("get_DropItemList")
+        local n = dl and (tonumber(dl:call("get_Count")) or 0) or 0
+        for i = 0, n - 1 do
+            pcall(function()
+                local dr = dl:call("get_Item", i)
+                local ip = dr and dr:call("get_ItemParam")
+                local iid = tonumber(ip and ip:call("get_ItemId"))
+                local dgo = dr and dr:call("get_GameObject")
+                local rp = dgo and dgo:call("get_Transform"):call("get_Position")
+                if allowed[iid] and rp and prp then
+                    local dx, dz = rp.x - prp.x, rp.z - prp.z
+                    local dd = math.sqrt(dx * dx + dz * dz)
+                    if dd < bd then bd = dd; best = dr end
+                end
+            end)
+        end
+    end)
+    return best
+end
+
 local function ground_scan_snapshot(pgo0)
     -- addresses of every mesh-bearing GameObject near the player. The offering fallback: player
     -- DISCARDS may never enter get_DropItemList (it read as loot-bags-only in the field), but the
@@ -4108,6 +4437,43 @@ local function ground_scan_new(pgo0, seen)
                             pcall(function() log.info(string.format("[IrisTaming] new ground object: %s at %.1fm", gn, dd)) end)
                         end
                     end
+                end
+            end)
+        end
+    end)
+    return best
+end
+
+local function ground_scan_nearest_drop(pgo0, radius)
+    -- Last-resort locator after an inventory decrement proves a drop occurred but
+    -- ItemManager exposes no corresponding DropItem entry.  Restrict this to the
+    -- engine naming families observed for actual discarded items; the count edge,
+    -- not the mesh name, is what authorises it as food.
+    local best, bd = nil, tonumber(radius) or 6.0
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene = sm and sdk.call_native_func(sm, smt, "get_CurrentScene")
+        local comps = scene and scene:call(
+            "findComponents(System.Type)", sdk.typeof("via.render.Mesh"))
+        local prp = pgo0:call("get_Transform"):call("get_Position")
+        local n = 0
+        pcall(function() n = comps:call("get_Length") or 0 end)
+        if n == 0 then pcall(function() n = comps:get_size() or 0 end) end
+        for i = 0, (tonumber(n) or 0) - 1 do
+            pcall(function()
+                local m = comps:call("get_Item", i) or comps[i]
+                local g = m:call("get_GameObject")
+                local gn = tostring(go_name(g) or "")
+                local itemish = gn:find("^gm%d") or gn:find("^eqit")
+                    or gn:find("^it%d") or gn:find("^sm%d")
+                local junk = gn:find("Plane") or gn:find("Trim")
+                    or gn:find("__") or gn:find("^ch%d")
+                if itemish and not junk then
+                    local rp = g:call("get_Transform"):call("get_Position")
+                    local dx, dz = rp.x - prp.x, rp.z - prp.z
+                    local dd = math.sqrt(dx * dx + dz * dz)
+                    if dd < bd then bd = dd; best = g end
                 end
             end)
         end
@@ -4282,8 +4648,8 @@ end
 -- id!) -- feeding a bird on crow globals would put it to sleep mid-meal. The BAT ch299400 has
 -- no 5100 flight at all (it HOVERS at 5000/5140) and no walk bank.
 local SPECIES_CLIPS = {
-    ch299410 = { eat_bank = 60, eat_start = 20, eat_loop = 20, bathe = { 0, 10 } },   -- crow: liv_idle_scavenge; bathe_01/02
-    ch299430 = { eat_bank = 60, eat_start = 0, eat_loop = 1, bathe = { 10, 11 },      -- bird: eat 0->1; bathe 10/11 (⛔ its 60:20 = SLEEP)
+    ch299410 = { eat_bank = 60, eat_start = 20, eat_loop = 20, bathe = { 0, 10 }, perch_cycle = "0" },   -- crow: folded-wing shoulder idle
+    ch299430 = { eat_bank = 60, eat_start = 0, eat_loop = 1, bathe = { 10, 11 }, perch_cycle = "0",      -- bird: compact shoulder idle; 60:20 = SLEEP
         -- 08-05 (Aurora: fly-in jitter + the crotch sag): the bird's 5100 flight_loop drags
         -- baked root motion the crow's doesn't -- puppet flights ride the ARC for movement,
         -- so the in-place vertical flap is the right clip (atlas-verified 0:415)
@@ -4298,7 +4664,7 @@ local SPECIES_CLIPS = {
         perch_cycle = "0", perch_flip = true,
         hover_h = 1.2,
         arm_hover = true, arm_clip = 5000 },
-    ch299420 = { eat_bank = 60, eat_start = 20, eat_loop = 20, bathe = { 0, 0 } },    -- seabird: NO eat clips (grooming stands in); bathe_01
+    ch299420 = { eat_bank = 60, eat_start = 20, eat_loop = 20, bathe = { 0, 0 }, perch_cycle = "0" },    -- seabird: folded-wing shoulder idle
     -- RAT (2026-07-15): the SECOND ground critter. An OMNIVORE (Aurora: rotten-only "seems
     -- mean") -- fresh fruit like the bat PLUS the whole Rotten decay chain (fruits/berries/
     -- meat/fish/harspuds/egg 302); only-rotten was the rat eating like a stereotype. No
@@ -4320,6 +4686,11 @@ local SPECIES_CLIPS = {
     ch299200 = { eat_bank = 60, eat_start = 0, eat_loop = 1, bathe = { 3, 4 },        -- "bathe" slot = grooming (cutest available)
         walk = 100, idle = 0, idle_cycle = "0,0,0,1,2,3,4,5",                          -- mostly still; shake/yawn/grooming surface
         ground = true, burrow = true,   -- the burrow is the RABBIT's -- other ground critters dash
+        -- The rabbit is meant to COME to the Greenwarish.  The old global 8m
+        -- gate rejected Aurora's valid drop at 12.2m before the approach driver
+        -- could even start.  Give this skittish ground rite a proper lure radius
+        -- and enough speed/time to visibly cross it.
+        offer_reach = 24.0, offer_speed = 1.5, offer_timeout = 35.0,
         -- per-species HUD hint (Aurora: ground critters will DIFFER -- rat/spider get their own)
         hud = "Left stick run   R1/Space = HOP   B = burrow (toggle)   X ambush (burrowed)   A collect   Y ping   J/R3 return" },
     -- CHICKEN (atlas 2026-08-12): GROUND critter -- "chickens can't fly xD" (Aurora,
@@ -4855,8 +5226,16 @@ end
         local player = get_player()
         local pgo = player and char_go(player)
         if pgo then pin_crow_shoulder(pa.go, pgo) end
-        -- ⛔ NO SCALE WRITE HERE EITHER (08-13). This is where I had the pin; it is gone. The perch
-        -- owns POSITION only (pin_crow_shoulder above). Size belongs to the size gene, full stop.
+        -- 08-13 EOD, Quoth receipt: ground and shoulder do NOT share the same native
+        -- scale environment. ScaleMediator is active on the grounded character and goes
+        -- quiet when the perch disables its character systems; the stable easer's larger
+        -- IV target then becomes visible. The contract is visual continuity, so L3-up
+        -- captures the ground body's ACTUAL LocalScale and this late hook reasserts that
+        -- exact value after every other writer. This is not a shoulder multiplier.
+        local hold = tonumber(pa.scale)
+        if hold and hold > 0.05 and hold <= 3.0 then
+            pa.go:call("get_Transform"):call("set_LocalScale", Vector3f.new(hold, hold, hold))
+        end
     end)
     -- (08-08: the PALM/CALL posture block moved to PrepareRendering
     -- below -- Aurora: "the palm-out hand was shaking". Written here at
@@ -7098,7 +7477,9 @@ re.on_application_entry("UpdateBehavior", function()
         pcall(function()
             in_town0 = sdk.find_type_definition("app.PawnUtil"):get_method("isPlayerInTownArea"):call(nil) == true
         end)
-        if C.oxtame_soar_hint == true and C.oxtame_court ~= false and wgo0 and not S.oxtame and not in_town0 and not iris_griffin_resting(wgo0) and nowO >= (tonumber(S.oxtame_soar_at) or 0.0) then
+        if S.tame_mode == true and C.oxtame_soar_hint == true and C.oxtame_court ~= false
+            and wgo0 and not S.oxtame and not in_town0 and not iris_griffin_resting(wgo0)
+            and nowO >= (tonumber(S.oxtame_soar_at) or 0.0) then
             local ox_about0 = false
             pcall(function()
                 for _, W1 in pairs(S.ox_watch or {}) do
@@ -7108,7 +7489,7 @@ re.on_application_entry("UpdateBehavior", function()
             end)
             local wu1 = upos(wgo0)
             if ox_about0 and wu1 and dist(wu1, pu0) < 500.0 then
-                S.oxtame_soar_at = nowO + 90.0   -- at most once every 90s
+                S.oxtame_soar_at = nowO + 180.0   -- taming mode only; at most once every three minutes
                 -- ⭐ SAY WHAT SHE IS DOING (07-25, Aurora: "'a griffin soars near' when the griffin
                 -- is sitting in its nest"). This fired on PROXIMITY alone. Ask her posture instead --
                 -- and the roosting line quietly teaches the thing players most need to know: a
@@ -9535,7 +9916,6 @@ re.on_application_entry("UpdateBehavior", function()
                     st0.duel_until = nowO + (tonumber(C.oxtame_pause_secs) or 3.0)
                 end
             end
-            local dtd = math.max(0.1, math.min(1.5, nowO - (tonumber(st0.duel_last) or nowO)))
             st0.duel_last = nowO
             local braced0 = false
             pcall(function() braced0 = (iris_kb(0x4E) == true) or iris_lt_down() end)   -- HOLD N / B (keyboard) OR LT (controller)
@@ -9549,18 +9929,14 @@ re.on_application_entry("UpdateBehavior", function()
                 -- ⭐ ONE message per colour (07-21, Aurora: "plain language, one message each"): every
                 -- red moment reads BRACE, every green moment reads ATTACK -- no variants to parse mid-ride
                 if braced0 then
-                    st0.grip = (tonumber(st0.grip) or 1.0) - (tonumber(C.oxtame_grip_buck_drain) or 0.14) * dtd
                     set_prompt("BRACE!", "Keep holding N or LT!", 1.0, 0xFF4040FF)
                 else
-                    st0.grip = (tonumber(st0.grip) or 1.0) - (tonumber(C.oxtame_grip_slip_drain) or 0.40) * dtd
                     set_prompt("BRACE!", "Hold N / B or LT NOW -- you're slipping!", 1.0, 0xFF4040FF)
                 end
             else
                 -- ATTACK WINDOW (pause + the tell rear-up): STRIKE her (rate-based) to fill the BREAK bar;
                 -- recover grip while resting. A continuous "buck in X" countdown says how long you have.
                 if striking0 then
-                    st0.tame_stam = math.max(0.0, (tonumber(st0.tame_stam) or tsmax) - (tonumber(C.oxtame_break_rate) or 1.0) * dtd)
-                    st0.grip = (tonumber(st0.grip) or 1.0) - (tonumber(C.oxtame_strike_grip_rate) or 0.12) * dtd
                 else
                     -- ⭐ 07-24 REVERT (Aurora: "I've realised I don't actually like that -- LT needs to
                     -- be let go before grip starts restoring, but it needs to be quick to rise after
@@ -9568,9 +9944,8 @@ re.on_application_entry("UpdateBehavior", function()
                     -- removed the only reason to ever release: you could white-knuckle the brace and
                     -- still refill. Recovery is the REWARD for letting go -- so it is gated on the
                     -- brace being OFF again, and the rate is raised so releasing pays off fast.
-                    if not braced0 then
-                        st0.grip = math.min(1.0, (tonumber(st0.grip) or 1.0) + (tonumber(C.oxtame_grip_recover) or 0.25) * dtd)
-                    end
+                    -- Numeric recovery is integrated every game frame below. This branch
+                    -- deliberately owns only the prompt/cadence presentation.
                 end
                 local to_buck = (tonumber(st0.duel_until) or nowO) - nowO
                 if st0.duel_phase == "pause" then to_buck = to_buck + (tonumber(C.oxtame_tell_secs) or 1.5) end
@@ -10087,6 +10462,52 @@ re.on_application_entry("UpdateBehavior", function()
         S.oxtame_err = true
         pcall(function() log.info("[OxTame] TICK ERROR: " .. tostring(errT9)) end)
     end
+end)
+
+-- RODEO INPUT INTEGRATOR. The courtship tick above is intentionally throttled because it
+-- performs expensive native/scene probes. Grip used to inherit that 0.7-second throttle:
+-- one sampled frame of LT or attack was billed as though it lasted the whole interval.
+-- Account the controls every game frame; the slow tick keeps phase changes and outcomes.
+re.on_application_entry("UpdateBehavior", function()
+    pcall(function()
+        local st = S.oxtame
+        local now = os.clock()
+        if not (st and st.stage == "rodeo" and st.duel_init) then
+            S.oxtame_input_last = now
+            return
+        end
+        if is_game_paused() then
+            S.oxtame_input_last = now
+            return
+        end
+        local dt = math.max(0.0,
+            math.min(0.10, now - (tonumber(S.oxtame_input_last) or now)))
+        S.oxtame_input_last = now
+        if dt <= 0.0 then return end
+        local braced, striking = false, false
+        pcall(function() braced = (iris_kb(0x4E) == true) or iris_lt_down() end)
+        pcall(function() striking = iris_player_is_attacking() == true end)
+        local grip = tonumber(st.grip) or 1.0
+        local tsmax = math.max(0.1, tonumber(C.oxtame_tame_stam) or 5.0)
+        local tame_stam = tonumber(st.tame_stam) or tsmax
+        if st.duel_phase == "buck" then
+            local rate = braced and (tonumber(C.oxtame_grip_buck_drain) or 0.14)
+                or (tonumber(C.oxtame_grip_slip_drain) or 0.40)
+            grip = grip - rate * dt
+        elseif striking then
+            tame_stam = tame_stam - (tonumber(C.oxtame_break_rate) or 1.0) * dt
+            grip = grip - (tonumber(C.oxtame_strike_grip_rate) or 0.12) * dt
+        elseif not braced then
+            grip = grip + (tonumber(C.oxtame_grip_recover) or 0.25) * dt
+        end
+        st.grip = math.max(0.0, math.min(1.0, grip))
+        st.tame_stam = math.max(0.0, math.min(tsmax, tame_stam))
+        _G.IrisRodeoHUD = {
+            active = true, t = now, grip = st.grip,
+            brk = math.max(0.0, math.min(1.0, 1.0 - st.tame_stam / tsmax)),
+            phase = tostring(st.duel_phase), striking = striking,
+        }
+    end)
 end)
 
 -- ============== THE SHATTER ENGINE (4 shell fragments from the IRIS pak; pooled + scripted ballistics) ==============
@@ -11500,6 +11921,14 @@ re.on_application_entry("UpdateBehavior", function()
                 or S.name_pending or S.combat_tame or S.yield_down or S.iris_carry then
                 S.ox_arm_t0 = nil; return
             end
+            -- ⭐ 08-13 TAMING MODE: no mark, no prompt, no arm while it is off (see the generic
+            -- path). S.ox_rite is nil here, so a yoke already under way is never affected.
+            if S.tame_mode ~= true then
+                S.ox_arm_t0 = nil
+                S.ox_mark = nil; S.ox_mark_go = nil
+                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_ox", "") end end)
+                return
+            end
             -- round 13 (B on oxen was dead): the scan runs ALWAYS (throttled 0.3s) and
             -- MARKS its candidate -- the pad hand needs a subject BEFORE the rite exists,
             -- and the ox deserves the same begin-marker as every other tameable
@@ -11577,6 +12006,11 @@ re.on_application_entry("UpdateBehavior", function()
             else
                 S.ox_mark_go = nil
                 pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_ox", "") end end)
+            end
+            if found0 and nheld and player_sheathed(player) == false then
+                S.ox_arm_t0 = nil
+                set_prompt("LOWER YOUR WEAPON", "The ox will not accept an armed approach.", 3.0, 0xFF5050FF)
+                return
             end
             -- ⭐ 08-13: ask the arbiter before the offer hold may begin (see TB.may_start)
             if not (nheld and TB.may_start("tame_ox")) then S.ox_arm_t0 = nil; return end
@@ -11706,6 +12140,10 @@ re.on_application_entry("UpdateBehavior", function()
             S.ox_rite = nil
             set_prompt("IT WANTS NONE OF THIS", msg9, 7.0, 0xFF5050FF)
             pcall(function() log.info("[OxRite] stand-down: " .. tostring(msg9)) end)
+        end
+        if player_sheathed(player) == false then
+            yoke_stand_down("You drew steel. The ox shies and leaves.")
+            return
         end
         -- round 10 (Aurora: "and face the player too"): a slow, heavy turn toward you while
         -- it holds -- ~70 degrees/s, never a snap. Direction from universal deltas (they are
@@ -12107,6 +12545,40 @@ function iris_name_make_fonts(sh)
     return ft
 end
 
+-- Controller edges for the naming card. Resolve enum names instead of baking Xbox masks;
+-- PlayStation/Nintendo layouts still report their semantic Decide/Cancel fields here.
+function iris_name_pad_edges()
+    if not S.name_pad_bits then
+        local bits = { a = 0, b = 0 }
+        pcall(function()
+            local td = sdk.find_type_definition("via.hid.GamePadButton")
+            local names = {}
+            for _, f in ipairs(td:get_fields()) do pcall(function() names[f:get_name()] = f:get_data() end) end
+            local function pick(...)
+                for _, n in ipairs({ ... }) do if tonumber(names[n]) then return math.floor(names[n]) end end
+                return 0
+            end
+            bits.a = pick("Decide", "A", "RDown", "Cross", "South")
+            bits.b = pick("Cancel", "B", "RRight", "Circle", "East")
+        end)
+        S.name_pad_bits = bits
+    end
+    local mask = 0
+    pcall(function()
+        local gp = sdk.get_native_singleton("via.hid.GamePad")
+        local td = sdk.find_type_definition("via.hid.GamePad")
+        local dv = gp and td and sdk.call_native_func(gp, td, "get_MergedDevice")
+        if not dv then dv = gp and td and sdk.call_native_func(gp, td, "getMergedDevice(System.UInt32)", 0) end
+        mask = math.floor(tonumber(dv and dv:call("get_Button")) or 0)
+    end)
+    if S.name_pad_prev == nil then S.name_pad_prev = mask; return false, false end
+    local edge9 = mask & (~math.floor(tonumber(S.name_pad_prev) or 0))
+    S.name_pad_prev = mask
+    local bits = S.name_pad_bits or { a = 0, b = 0 }
+    return bits.a ~= 0 and (edge9 & bits.a) ~= 0,
+        bits.b ~= 0 and (edge9 & bits.b) ~= 0
+end
+
 function iris_name_draw_card()
     if not S.name_pending then return end
     if not (_G.d2d and d2d.fill_rect and d2d.text) then return end
@@ -12122,19 +12594,20 @@ function iris_name_draw_card()
         if ok2 and mw and mw > 0 then mw2 = mw end
         return mw2
     end
-    -- PRIMAL palette: bark-dark panel, ember-rust accent, bone text
-    local C_SHADOW, C_ACCENT, C_PANEL = 0x000000, 0xB4552A, 0x140E0A
-    local C_TITLE, C_NAME, C_DIM = 0xEAD8B0, 0xF0C88A, 0x8A7A5E
+    -- Stable/decoration palette: smoke panel, gold hairlines, cream hierarchy.
+    local C_SHADOW, C_ACCENT, C_PANEL = 0x000000, 0xC8A050, 0x14141A
+    local C_TITLE, C_NAME, C_DIM = 0xE8D8A8, 0xFFF0C8, 0x8E8A82
     pcall(d2d.fill_rect, 0, 0, sw, sh, argb(0.72, C_SHADOW))
     local pad = math.floor(34 * scale)
-    local accent_h = math.max(4, math.floor(6 * scale))
+    local accent_h = math.max(2, math.floor(2 * scale))
     local cw = math.max(620 * scale, math.min(sw * 0.5, 900 * scale))
-    local chh = accent_h + pad + (ft.title_px or 44) + math.floor(22 * scale) + (ft.name_px or 40) + math.floor(18 * scale) + (ft.body_px or 24) + pad
+    local chh = accent_h + pad + (ft.title_px or 44) + math.floor(22 * scale)
+        + (ft.body_px or 24) + math.floor(8 * scale) + (ft.name_px or 40)
+        + math.floor(18 * scale) + (ft.body_px or 24) + pad
     local cx = math.floor((sw - cw) * 0.5)
     local cy = math.floor((sh - chh) * 0.5)
     local b = math.max(2, math.floor(2.5 * scale))
     pcall(d2d.fill_rect, cx + b * 3, cy + b * 3, cw, chh, argb(0.45, C_SHADOW))
-    pcall(d2d.fill_rect, cx - b, cy - b, cw + b * 2, chh + b * 2, argb(0.9, C_ACCENT))
     pcall(d2d.fill_rect, cx, cy, cw, chh, argb(0.96, C_PANEL))
     pcall(d2d.fill_rect, cx, cy, cw, accent_h, argb(1.0, C_ACCENT))
     pcall(d2d.fill_rect, cx, cy + chh - accent_h, cw, accent_h, argb(1.0, C_ACCENT))
@@ -12147,12 +12620,14 @@ function iris_name_draw_card()
     -- gender rides the christening: "Name the female Bat who chose you"
     local who = S.name_pending.label or "one"
     if S.name_pending.gender then who = tostring(S.name_pending.gender) .. " " .. who end
-    center(ft.title_f, "Name the " .. who .. " who chose you", y, C_TITLE)
+    center(ft.title_f, "THE STABLE  /  RENAME", y, C_TITLE)
     y = y + (ft.title_px or 44) + math.floor(22 * scale)
+    center(ft.body_f, "Name the " .. who .. " who chose you", y, C_DIM)
+    y = y + (ft.body_px or 24) + math.floor(8 * scale)
     local blink = (math.floor(now * 2) % 2 == 0) and "_" or " "
     center(ft.name_f, tostring(S.name_buf or "") .. blink, y, C_NAME)
     y = y + (ft.name_px or 40) + math.floor(18 * scale)
-    center(ft.body_f, "type a name    -    Enter seals    -    Esc cancels", y, C_DIM)
+    center(ft.body_f, "Type a name    [Enter / A] Confirm    [Esc / B] Cancel", y, C_DIM)
 end
 
 -- external open-rename hook: the main mod's stable Rename buttons pop THIS name card
@@ -12165,6 +12640,7 @@ end
 _G.IrisTaming.open_rename = function(stable_id, current_name)
     S.name_pending = { kind = "stable_id", stable_id = stable_id }
     S.name_buf = tostring(current_name or "")
+    S.name_pad_prev = nil
 end
 -- external CHRISTENING hook (07-24, the horse tame): another mod just
 -- sealed a creature into the stable via the bridge — pop the full
@@ -12173,6 +12649,24 @@ _G.IrisTaming.open_christening = function(label, gender)
     S.name_pending = { kind = "stable", label = tostring(label or "one"),
         gender = gender }
     S.name_buf = ""
+    S.name_pad_prev = nil
+    -- ⭐⭐ 08-13 AUTO-LEAVE TAMING MODE ON A SUCCESSFUL TAME (Aurora's default, with the checkbox
+    -- to override). This is THE universal success hook -- every rite routes its seal through the
+    -- christening, the horse rodeo included -- so one place covers all of them.
+    -- ⛔ ALWAYS ANNOUNCE IT. A mode that switches itself off silently is the same usability trap
+    -- as one that switches itself on silently: the next time B does not offer a tame, the player
+    -- has no way to know why. The card is the receipt.
+    if S.tame_mode == true and C.tame_mode_stay ~= true then
+        S.tame_mode = false
+        S.tame_mark = nil; S.ox_mark = nil; S.ox_mark_go = nil
+        pcall(function()
+            if _G.IrisPrompt then
+                _G.IrisPrompt.set("tame_begin", ""); _G.IrisPrompt.set("tame_ox", "")
+            end
+        end)
+        set_prompt("TAMING MODE ENDED", "The bond is made. (Keep it on in the Stable screen's Taming page.)", 4.0, 0xFF80D0FF)
+        pcall(function() log.info("[IrisTaming] taming mode -> OFF (auto, tame sealed)") end)
+    end
 end
 -- the probe's companion nameplate defers to ours: bodies in the local roster (critters)
 -- already carry a plate here -- without this check the active critter wore two
@@ -12228,6 +12722,60 @@ end
 -- hotkey get/set for the centralized Hotkeys UI (main mod panel)
 _G.IrisTaming.get_tame_key = function() return math.floor(tonumber(C.tame_key) or 0x4E) end
 _G.IrisTaming.set_tame_key = function(vk) C.tame_key = math.floor(tonumber(vk) or 0x4E); pcall(save_state) end
+-- ⭐⭐⭐ 08-13 TAMING MODE API (Aurora's design, and it replaces an entire failed approach).
+-- The problem this solves: B is the tame hand AND dodge AND every interact in the game, so the mod
+-- was forever GUESSING whether a press meant "tame this crow" or "ring that bell". Reach, cone and
+-- hold-duration heuristics were all tried in one session and all failed in the field. A mode does
+-- not guess: the player DECLARES intent in the Stable screen, taming prompts exist only while it is
+-- on, and the ambiguity simply stops existing.
+-- Leaving the mode is an explicit cancel edge. The request is still consumed on a live game
+-- frame (never from the paused Stable screen), so the existing release path remains crash-safe.
+_G.IrisTaming.mode_on = function() return S.tame_mode == true end
+_G.IrisTaming.mode_set = function(v)
+    local want = (v == true)
+    if want == (S.tame_mode == true) then return want end
+    S.tame_mode = want
+    if not want then
+        pcall(function()
+            if _G.IrisTaming.cancel_rite then _G.IrisTaming.cancel_rite() end
+        end)
+        -- leaving: retract every offer immediately. A prompt that outlives the mode is exactly
+        -- the stale-advertisement bug the prompt bar's TTL was written to avoid.
+        S.tame_mark = nil; S.ox_mark = nil; S.ox_mark_go = nil
+        pcall(function()
+            if _G.IrisPrompt then
+                _G.IrisPrompt.set("tame_begin", ""); _G.IrisPrompt.set("tame_ox", "")
+            end
+        end)
+    end
+    pcall(function() log.info("[IrisTaming] taming mode -> " .. (want and "ON" or "OFF")) end)
+    return want
+end
+-- "is there anything a Cancel would actually act on?" -- every rite root, so the menu entry can
+-- dim itself honestly rather than pretending it did something.
+_G.IrisTaming.rite_active = function()
+    return (S.target ~= nil) or (S.trial ~= nil) or (S.armed == true) or (S.ox_rite ~= nil)
+        or (S.oxtame ~= nil)
+        or (S.combat_tame ~= nil) or (S.iris_carry ~= nil) or (S.feed_drop ~= nil)
+        or (S.camp_rite ~= nil) or (S.yield_down ~= nil)
+        or (rawget(_G, "__iris_horse_taming_rite_active") and true or false)
+end
+-- the checkbox behind "auto-leave after a tame". This one IS config, so it persists -- unlike the
+-- live mode, which must always boot off.
+_G.IrisTaming.mode_stay_on = function() return C.tame_mode_stay == true end
+_G.IrisTaming.mode_stay_set = function(v)
+    C.tame_mode_stay = (v == true)
+    pcall(save_state)
+    return C.tame_mode_stay
+end
+-- ⛔ RAISES A REQUEST, DOES NOT ACT. The Stable screen calls this from a PAUSED frame, and
+-- touching creature bodies on a paused frame is this project's documented crash class. The main
+-- tick consumes S.cancel_req on the next LIVE frame and runs the one shared cleanup there.
+_G.IrisTaming.cancel_rite = function()
+    if not _G.IrisTaming.rite_active() then return false end
+    S.cancel_req = true
+    return true
+end
 _G.IrisTaming.get_sense_key = function() return math.floor(tonumber(C.sense_key) or 0x4B) end
 _G.IrisTaming.set_sense_key = function(vk) C.sense_key = math.floor(tonumber(vk) or 0x4B); pcall(save_state) end
 
@@ -12432,7 +12980,20 @@ re.on_frame(function()
                 local nm = go_name(go)
                 local companion_name = (companion_addr and ach and ach == companion_addr) and companion_nm or nil
                 local tier, rgb, sense_name = nil, nil, nil
-                if companion_name then tier, rgb = "your companion", 0x66FF66   -- already tamed: GREEN + pet name, not a target
+                local resident_name = nil
+                pcall(function()
+                    local hb9 = rawget(_G, "IrisHomesteadBox")
+                    local ga9 = go:get_address()
+                    if hb9 and hb9.is_resident and hb9.is_resident(ga9) then
+                        resident_name = (hb9.resident_name and hb9.resident_name(ga9)) or "Homestead animal"
+                    end
+                end)
+                if resident_name then
+                    -- A resident is already family.  Mark it as such before the species
+                    -- ladder, otherwise the shared cow/hen/rabbit chassis advertises a tame
+                    -- which every actual rite should refuse.
+                    companion_name, tier, rgb = resident_name, "lives at the homestead", 0x66FF66
+                elseif companion_name then tier, rgb = "your companion", 0x66FF66   -- already tamed: GREEN + pet name, not a target
                 elseif name_in_csv(nm, C.critter_bands) then tier, rgb = "tameable pet", 0xFF9020
                 elseif name_in_csv(nm, C.target_bands) then tier, rgb = "tameable", 0xFF9020
                 elseif nm:find("ch299003", 1, true) then
@@ -12586,9 +13147,12 @@ re.on_frame(function()
                     S.name_d2d_reg = true
                 end)
             end
-            local sealed = name_capture()
+            local pad_accept, pad_cancel = iris_name_pad_edges()
+            local sealed = name_capture() or pad_accept
             local esc = false; pcall(function() esc = (rawget(_G, "iris_kb_raw") or iris_kb)(0x1B) end)
-            if esc then name_pause(false); S.name_pending = nil; S.name_buf = ""; return end
+            if esc or pad_cancel then
+                name_pause(false); S.name_pending = nil; S.name_buf = ""; S.name_pad_prev = nil; return
+            end
             -- imgui FALLBACK card only when the D2D card isn't drawing
             if not S.name_d2d_reg then
                 local ds = nil
@@ -12601,7 +13165,7 @@ re.on_frame(function()
                     if S.font_big then pcall(imgui.push_font, S.font_big) end
                     pcall(imgui.text_colored, tostring(S.name_buf or "") .. "_", 0xFF80D0FF)
                     if S.font_big then pcall(imgui.pop_font) end
-                    imgui.text("type the name -- Enter seals, Esc cancels")
+                    imgui.text("type the name -- Enter / A seals, Esc / B cancels")
                     if imgui.button("Seal the name (Enter)##tame_name_ok") then sealed = true end
                     pcall(imgui.end_window)
                 end
@@ -12627,9 +13191,11 @@ re.on_frame(function()
                 name_pause(false)
                 S.name_pending = nil
                 S.name_buf = ""
+                S.name_pad_prev = nil
             end
         elseif S.name_paused then
             name_pause(false)   -- safety: never leave our pause behind
+            S.name_pad_prev = nil
         end
     end)
     -- markers: never lose the wolf or the quarry again
@@ -13792,7 +14358,8 @@ re.on_frame(function()
                     end)
                     pcall(function() log.info("[IrisTaming] shoulder transition TIMED OUT -- body restored whole") end)
                 end
-                if rec0 then rec0.follow = true; rec0.perch = nil end
+                if rec0 then rec0.follow = true; rec0.perch = nil; rec0.perch_ground_scale = nil end
+                rawset(_G, "IrisTamingPerchScaleHold", nil)
             end)
             S.perch_trans = nil
         end
@@ -14957,7 +15524,16 @@ re.on_frame(function()
                     -- on previous frames -- leaving them latched would keep the
                     -- mount invincible for the whole ride after a single frame
                     -- of the shield.
-                    set_immunity(ch, false)
+                    -- Wolf/cat rides use scripted contact while the native
+                    -- decision/FSM stack is parked.  Letting hostile hit
+                    -- reactions wake that stack created a relationship/hate
+                    -- storm and left the whole game at 15 fps.  Keep ridden
+                    -- wyrms shielded; horse/griffin mortality remains unchanged.
+                    if rawget(_G, "IrisWyrmMounted") == true then
+                        set_immunity(ch, true)
+                    else
+                        set_immunity(ch, false)
+                    end
                 end
                 if perch_edge and not S.perch_trans and name_in_csv(go_name(go), C.critter_bands) then
                     local cp0 = upos(go)
@@ -15006,11 +15582,31 @@ re.on_frame(function()
                         -- (think-stop, FSM off) rides through it -- restored when it lands
                         local cs0 = upos(go)
                         local climb0 = (species_clips(go) or {}).climb_on == true
-                        S.perch_trans = { ch = ch, dir = "down", t0 = now,
+                        S.perch_trans = { ch = ch, dir = "down", t0 = now, scale = rec.perch_ground_scale,
                             style = climb0 and "climb" or nil, dur = climb0 and 1.3 or 0.5,
                             fx = (cs0 and cs0.x) or pp.x, fy = (cs0 and cs0.y) or (pp.y + 1.3), fz = (cs0 and cs0.z) or pp.z }
                     elseif (not rec.carry_native) and (d0 <= 2.5 or catch_active(player)) then
                         -- TO THE SHOULDER (works from the ground or straight out of an RT carry)
+                        -- Capture BEFORE disabling FSM/controller/ragdoll: this is the
+                        -- rendered ground size the player has asked us to preserve.
+                        rec.perch_ground_scale = nil
+                        pcall(function()
+                            local s0 = go:call("get_Transform"):call("get_LocalScale")
+                            local x0 = tonumber(s0 and s0.x)
+                            local obs = rawget(_G, "IrisGroundObservedScale")
+                            if type(obs) == "table"
+                                and tostring(obs.addr) == tostring(go:get_address())
+                                and now - (tonumber(obs.at) or 0.0) < 0.25 then
+                                x0 = tonumber(obs.scale) or x0
+                            end
+                            if x0 and x0 > 0.05 and x0 <= 3.0 then
+                                rec.perch_ground_scale = x0
+                                rawset(_G, "IrisTamingPerchScaleHold", {
+                                    addr = tostring(go:get_address()), scale = x0,
+                                })
+                                log.info(string.format("[IrisTaming] shoulder scale captured from ground: %.3f", x0))
+                            end
+                        end)
                         if catch_active(player) then
                             pcall(function()   -- end the native carry cleanly before the perch takes the body
                                 local cc = player:call("get_CatchController")
@@ -15077,6 +15673,12 @@ re.on_frame(function()
                     local k9 = (now - (tonumber(tr9.t0) or now)) / (tonumber(tr9.dur) or 0.5)
                     local spT = species_clips(go)
                     local grd9 = spT and spT.ground
+                    -- Keep the same captured scale through both arcs. Without this the
+                    -- body visibly expands during the last half-second before rec.perch.
+                    local hs9 = tonumber(rec.perch_ground_scale or tr9.scale)
+                    if hs9 and hs9 > 0.05 and hs9 <= 3.0 then
+                        pcall(function() go:call("get_Transform"):call("set_LocalScale", Vector3f.new(hs9, hs9, hs9)) end)
+                    end
                     if k9 >= 1.0 then
                         S.perch_trans = nil
                         if tr9.dir == "up" then
@@ -15101,6 +15703,8 @@ re.on_frame(function()
                             set_think_stop(ch, false)
                             pcall(function() set_player_fsm(go, true) end)
                             pcall(function() ch:call("resetActionAndAI") end)
+                            rec.perch_ground_scale = nil
+                            rawset(_G, "IrisTamingPerchScaleHold", nil)
                             rec.follow = true
                         end
                     elseif tr9.style == "climb" then
@@ -15456,38 +16060,18 @@ re.on_frame(function()
                     pcall(function() ch:call("setCharacterControllerEnable", false) end)
                     pcall(function() ch:call("EnableRagdoll(System.Boolean)", false) end)   -- a ragdoll tumbles off the pin
                     set_ground_glue(go, false)
-                    -- ⭐⭐⭐ THE SHOULDER DOES NOT TOUCH SIZE (Aurora 08-13, and she is right):
-                    -- "When the IV sets the size of the creature, that's all. Then when it goes on
-                    -- the shoulder, stays the exact same as when it was not on the shoulder."
-                    -- The old 0.85 x species shrink is GONE. So is my compromise that folded the gene
-                    -- in at a strength -- that was solving a problem she never had.
-                    -- ⛔ BUT SKIPPING THE WRITE IS NOT ENOUGH, and that is the real finding: with the
-                    -- write already skipped she watched the crow get BIGGER than its IV size on the
-                    -- shoulder. So something else grows a perched body -- the likeliest culprit is
-                    -- that perching kills think-stop/FSM/controller/ragdoll, and whatever normally
-                    -- holds these little bodies in check stops holding while the stable easer keeps
-                    -- asserting. Rather than hunt every writer (the losing game), we PIN:
-                    -- capture the body's scale on the frame the perch BEGINS, and re-assert exactly
-                    -- that for as long as it rides. Whatever it looked like standing on the ground is
-                    -- what it looks like on the shoulder -- which is the spec, literally.
-                    -- ⚠ Self-healing lifetime: rec.perch_seen is stamped every perch frame and the
-                    -- capture re-arms if it goes stale, so we never need to find every set-down path.
-                    -- ⛔⛔⛔ THE PERCH TOUCHES SCALE ZERO TIMES (Aurora 08-13, and she had to say it
-                    -- four times): "there will be code that adjusts the scale when I press L3 to
-                    -- mount the shoulder. Just turn that off. The creature gets scaled by the size
-                    -- IV. It doesn't need any other alteration."
-                    -- Gone from here: the original 0.85 x species shrink, then my gene-compression
-                    -- compromise, then my capture-and-pin. That last one was the mistake worth
-                    -- naming -- I removed the shrink and then immediately wrote a DIFFERENT value on
-                    -- the same property, so scale-on-perch was still being altered by this code, by
-                    -- me, while I told her it wasn't. There is now no scale write on this path at all.
-                    -- ⇒ THE SIZE GENE IS THE ONLY AUTHOR, on the ground and on the shoulder alike.
-                    -- The easer in IrisGriffin/stable.lua owns it and keeps owning it while perched.
-                    -- the pin is written ONLY in the LATE hook: the shoulder joint is posed by
-                    -- then; writing here (pre-pose) would place it on a stale bone = the float
-                    -- scale0 rides along so the LATE hook can re-assert it as the LAST writer of the
-                    -- frame (see the pin block). Writing it here loses to whoever runs after us.
-                    S.perch_active = { go = go }
+                    -- The shoulder changes native scale conditions: disabling the character
+                    -- systems silences ScaleMediator and exposes the stable easer's raw IV
+                    -- target. Preserve the exact ground LocalScale captured on L3 instead.
+                    -- No arbitrary shoulder factor is introduced; visual size is copied 1:1.
+                    S.perch_active = { go = go, scale = rec.perch_ground_scale }
+                    if rec.perch_ground_scale then
+                        pcall(function()
+                            rawset(_G, "IrisTamingPerchScaleHold", {
+                                addr = tostring(go:get_address()), scale = rec.perch_ground_scale,
+                            })
+                        end)
+                    end
                     -- ⛔⛔ PUBLISH THE PERCH *HERE*, IN THE MAIN TICK, NOT ONLY IN THE LATE HOOK
                     -- (08-13). The griffin easer reads this flag to stand down, and it runs in its
                     -- own hook -- publishing only from the late hook meant the easer could read a
@@ -15502,9 +16086,9 @@ re.on_frame(function()
                         -- the SHOULDER repertoire is its own list: wing-spread idles clip into the
                         -- player's head at this range (default = the plain idle only); species with
                         -- an idle_cycle override it (the bat's 0 = the upside-down hang)
-                        for s2 in tostring((sp9 and (sp9.perch_cycle or sp9.idle_cycle)) or C.perch_idle_clips or "0,0,0,0,1,2"):gmatch("%d+") do ids[#ids + 1] = tonumber(s2) end
-                        -- RANDOM pick (not a fixed cycle) so cry/grooming surface unpredictably; the
-                        -- weighted list biases toward the plain idle. Bathe pair is per-species
+                        for s2 in tostring((sp9 and (sp9.perch_cycle or sp9.idle_cycle)) or C.perch_idle_clips or "0"):gmatch("%d+") do ids[#ids + 1] = tonumber(s2) end
+                        -- Species may provide a shoulder-safe list; birds use folded-wing clip 0.
+                        -- Bathe pair is per-species
                         -- (the bat has NONE -- its 60:0 is EAT; the rat's slot = stand-on-two-legs)
                         local bt9 = sp9 and sp9.bathe
                         local bathe = (tonumber(C.perch_bathe_chance) or 0.0)
@@ -15548,12 +16132,31 @@ re.on_frame(function()
                     -- -- guarding only the puppet_step would have left the teleport live.
                     local cp = upos(go)
                     local d2p = (cp and pp) and dist(cp, pp) or 0.0
-                    if name_in_csv(go_name(go), C.critter_bands) then
+                    local mount_puppet = false
+                    pcall(function()
+                        local ma = rawget(_G, "IrisMountPuppetAddrs")
+                        local ga = go:get_address()
+                        mount_puppet = type(ma) == "table" and ga ~= nil
+                            and ma[ga] == true
+                    end)
+                    if name_in_csv(go_name(go), C.critter_bands) or mount_puppet then
                         -- CRITTER FOLLOW = PUPPET (the child-follow recipe): no native command
                         -- answers a crow, and raw nav slid a brainless body in one frozen pose
                         -- (the ice skate). Think-stop + FSM off + a REAL walk clip + stepped drive.
                         set_think_stop(ch, true)
                         pcall(function() set_player_fsm(go, false) end)
+                        if mount_puppet then
+                            -- Reassert the dismount contract. Streaming/action rebuilds
+                            -- may re-enable components after HorseRodeo parks them; a
+                            -- single native NavigationAI tick on this driven ch223 body
+                            -- is the exact NavigationAI.navigationRequest crash trace.
+                            pcall(function()
+                                local dm = comp(go, "app.AIDecisionMaker")
+                                if dm then dm:call("set_Enabled", false) end
+                                local nav = comp(go, "app.NavigationAI")
+                                if nav then nav:call("set_Enabled", false) end
+                            end)
+                        end
                         local sph = species_clips(go)
                         if sph and sph.hover_h then
                             -- the BAT never stands: glue off, held hover_h above the terrain
@@ -15625,9 +16228,13 @@ re.on_frame(function()
                             if rec.fmode ~= "walk" then
                                 rec.fmode = "walk"
                                 local sw9 = species_clips(go)
-                                play_motion(ch, 0, (sw9 and sw9.walk) or tonumber(C.crow_walk_clip) or 100)
+                                -- ch223 wolves/pumas released from a mount use their atlas
+                                -- locomotion, not the small-critter fallback.
+                                play_motion(ch, 0, mount_puppet and 200
+                                    or (sw9 and sw9.walk) or tonumber(C.crow_walk_clip) or 100)
                             end
-                            puppet_step(go, cp, pp.x, pp.z, tonumber(C.critter_follow_speed) or 2.4,
+                            puppet_step(go, cp, pp.x, pp.z,
+                                mount_puppet and 4.8 or tonumber(C.critter_follow_speed) or 2.4,
                                 tonumber(dt) or 0.016, (tonumber(C.follow_near) or 4.5) - 1.5)
                         else
                             if rec.fmode ~= "idle" then rec.fmode = "idle"; rec.fidle_at = 0.0 end
@@ -15714,8 +16321,20 @@ re.on_frame(function()
         -- skipped this whole block (see the `not horse_claim_addr` gate below) and therefore never
         -- wore a marker or a prompt. IrisTaming owns every tame marker, so the mark belongs here and
         -- the rodeo just publishes its candidate.
-        if not S.target and horse_claim_addr then
+        if not S.target and horse_claim_addr and S.tame_mode ~= true then
+            pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
+        elseif not S.target and horse_claim_addr then
+            -- ⭐ 08-13 (Aurora #2): a rite ALREADY RUNNING is not an invitation to start one. The
+            -- rodeo keeps its claim up for the whole rite (it needs it), so the flag below is the
+            -- only honest "is this offer still on the table?" signal. Retract explicitly rather
+            -- than just falling silent: IrisPrompt entries live 1s on TTL, and a second of a stale
+            -- "Tame the Unicorn" sitting over THE PALM card is exactly the bug being fixed.
+            local rite9 = rawget(_G, "__iris_horse_taming_rite_active") and true or false
+            if rite9 then
+                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
+            end
             pcall(function()
+                if rite9 then return end
                 local hgo = rawget(_G, "__iris_horse_taming_claim_go")
                 if not hgo then return end
                 -- 08-13: never offer to tame a horse you already own (Epona wore a B Tame prompt).
@@ -15731,7 +16350,18 @@ re.on_frame(function()
                 end
             end)
         end
-        if not S.target and not horse_claim_addr then
+        -- ⭐⭐⭐ 08-13 TAMING MODE GATES THE OFFER. With the mode off nothing is marked, nothing is
+        -- published and nothing can start -- which is the whole point: no crow prompt can ever
+        -- appear over the sign or bell you actually meant to use. find_candidate is skipped
+        -- outright rather than filtered afterwards, so the scene sweep does not even run.
+        -- ⛔ START-ONLY. This branch is already `not S.target`, so a live courtship is untouched by
+        -- the mode -- switching it off mid-rite must never strand a frozen animal in the world.
+        if not S.target and not horse_claim_addr and S.tame_mode ~= true then
+            S.tame_mark = nil
+            S.tame_mark_latch = TB.held()   -- keep eating the edge: a press made with the mode off
+                                            -- must not stay "new" and fire when you switch it on
+            pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
+        elseif not S.target and not horse_claim_addr then
             -- ⭐ 08-12 PAD+TARGETING slice A (Aurora: "the tame direction feels very random"):
             -- the candidate is MARKED, never auto-courted. The looked-at creature wears the
             -- begin-marker + the NATIVE B prompt (IrisPrompt shared service, the wyrm's own
@@ -15750,22 +16380,27 @@ re.on_frame(function()
                         if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "Tame the " .. lbl9, 20, dd9, TB.prompt_pos(mgo), mgo) end
                     end)
                 end
-                local down9 = TB.held()
-                -- ⭐ 08-13: the arbiter decides. ⚠ the LATCH below still consumes this edge
-                -- even when we stand down -- otherwise the press stays "new" and would fire
-                -- the instant taming became the winner (the queued-interact-after-the-menu bug
-                -- IrisWeaponMount documents).
-                if down9 and not S.tame_mark_latch and TB.may_start("tame_begin") then
+            else
+                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
+            end
+            local down9 = TB.held()
+            -- ⭐ 08-13: the arbiter decides. ⚠ the LATCH below still consumes this edge
+            -- even when we stand down -- otherwise the press stays "new" and would fire
+            -- the instant taming became the winner (the queued-interact-after-the-menu bug
+            -- IrisWeaponMount documents).
+            if S.tame_mark and down9 and not S.tame_mark_latch and TB.may_start("tame_begin") then
+                local mgo9 = char_go(S.tame_mark)
+                local passive9 = mgo9 and name_in_csv(go_name(mgo9), C.critter_bands)
+                if passive9 and player_sheathed(player) == false then
+                    set_prompt("LOWER YOUR WEAPON", "A peaceful creature will not approach drawn steel.", 3.0, 0xFF5050FF)
+                else
                     S.target = S.tame_mark
                     S.tame_mark = nil
                     pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
                     S.mode = "idle"; S.armed = nil; S.combat_tame = nil; S.caught_dumped = nil; S.carry_dbg = nil
                 end
-                S.tame_mark_latch = down9
-            else
-                S.tame_mark_latch = TB.held()
-                pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_begin", "") end end)
             end
+            S.tame_mark_latch = down9
         end
         -- ⭐ 08-12 slice A -- UNIVERSAL ABANDON (Aurora: "every taming instance... outside a
         -- certain distance ends it"): any live courtship ends cleanly at 40m held 1s (the
@@ -15799,13 +16434,93 @@ re.on_frame(function()
             S.abandon_t = nil
         end
 
+        -- ⭐⭐⭐ 08-13 THE ARM DECAYS, AND THE RITE CAN BE CANCELLED OUTRIGHT.
+        -- S.armed was LEVEL-set and never expired. The rite's per-frame body re-engages on
+        -- `S.armed and d <= gate_range` with NO button, so any arm left behind -- by walking off,
+        -- or by trial_fail forgetting it -- silently re-armed the next creature you passed.
+        -- ⛔ THE FIX BELONGS HERE, NOT ON THAT GATE. That gate is not a "re-engage" line; it is the
+        -- whole courtship's per-frame body (full_pacify, think-stop, nav-stop, the trials). Gating
+        -- it on recent input would wake the creature's brain mid-rite during every hands-free stage.
+        -- ⛔ EXEMPT EVERY PROGRESSED RITE. Whole stages are legitimately hands-free: c_call waits on
+        -- its OWN key (H), the hunt/rush stages want you moving, feeding and carrying take both
+        -- hands. ONLY A BARE ARM -- offered, nothing started -- is allowed to lapse.
+        do
+            local nowA = os.clock()
+            local progressed = S.trial or S.combat_tame or S.ox_rite or S.oxtame or S.camp_rite
+                or S.iris_carry or S.feed_drop or S.camp_tend or S.yield_down or S.finish_pending
+                or S.name_pending or S.mode == "context" or S.mode == "yielded"
+            if progressed or down then
+                S.armed_at = nowA                       -- heartbeat: a hand up, or a rite underway
+            elseif S.armed and (nowA - (tonumber(S.armed_at) or nowA)) > (tonumber(C.arm_ttl) or 3.0) then
+                pcall(function() if S.target then release_creature(S.target) end end)
+                restore_pack()
+                S.armed = nil; S.armed_at = nil
+                S.target = nil; S.mode = "idle"; S.pressure = 0.0
+                _G.IrisTamingWatchAddr = nil; _G.IrisTamingWatchGoAddr = nil
+                S.status = "(the hand lowered - the offer lapsed)"
+            end
+            -- THE EXPLICIT CANCEL. Reachable two ways, both routed through ONE implementation:
+            --   * the keyboard cancel key (C.cancel_key), and
+            --   * ⭐ "Cancel Current Tame" in the Stable screen's Taming page (Aurora 08-13) --
+            --     which is what finally gives PAD players an exit. A pad cancel on the tame button
+            --     is impossible: the tame mask 0x40080 IS circle/B, so the press cannot be told
+            --     apart from the tame hand itself. A menu entry sidesteps that entirely, and it
+            --     works on the rites that have no exit of their own (the c_give bird-on-arm trap).
+            -- ⛔ THE FLAG IS CONSUMED HERE, NOT ACTED ON AT THE MENU. The Stable screen runs on a
+            -- PAUSED frame, and touching creature bodies while paused is this project's documented
+            -- crash class -- so the menu only raises a request and the work happens on a live frame.
+            if (S.armed or S.target or S.cancel_req) and not S.name_pending then
+                local cx = S.cancel_req == true
+                S.cancel_req = nil
+                if not cx then
+                    pcall(function() cx = iris_kb(math.floor(tonumber(C.cancel_key) or 0x42)) == true end)
+                end
+                if cx then
+                    pcall(function()
+                        local hc = rawget(_G, "IrisHorseTamingCancel")
+                        if hc then hc("taming mode left") end
+                    end)
+                    -- Let the griffin rite run its own release/flee reset. Clearing its state
+                    -- directly can strand the player climbing or leave flight overrides behind.
+                    if S.oxtame then
+                        S.oxtame.stage = "flee"
+                        S.oxtame.flee_t0 = S.oxtame.flee_t0 or os.clock()
+                    end
+                    pcall(function() if S.target then release_creature(S.target) end end)
+                    restore_pack()
+                    -- ⚠ the critter rites park the bird ON THE ARM (c_give / c_palm). No extra
+                    -- unparent is needed here: release_creature already calls unparent_critter
+                    -- ("never leave a body riding the player's hand"). Doing it twice would just
+                    -- be a second set_Parent on a body that no longer has one.
+                    -- the YOKE is a rite root too -- rite_active() reports it, so the cancel that
+                    -- claims to end "the current tame" has to actually end it
+                    if S.ox_rite then
+                        pcall(function() if S.ox_rite.ch then release_creature(S.ox_rite.ch) end end)
+                        S.ox_rite = nil; S.ox_arm_t0 = nil
+                        S.ox_mark = nil; S.ox_mark_go = nil
+                        pcall(function() if _G.IrisPrompt then _G.IrisPrompt.set("tame_ox", "") end end)
+                    end
+                    S.trial = nil; S.armed = nil; S.armed_at = nil
+                    S.combat_tame = nil; S.camp_tend = nil; S.yield_down = nil
+                    S.iris_carry = nil; S.feed_drop = nil; S.camp_rite = nil
+                    S.held_ground = nil; S.abandon_t = nil
+                    _G.IrisTamingWatchAddr = nil; _G.IrisTamingWatchGoAddr = nil; _G.IrisTamingPlayerStruckWolf = nil
+                    S.target = nil; S.mode = "idle"; S.pressure = 0.0
+                    set_prompt("YOU LOWER YOUR HAND", "The courtship is set aside. (Its trust is kept.)", 3.0, 0xFFFFD080)
+                    S.status = "(cancelled)"
+                end
+            end
+        end
+
         -- ===== TAMING MUSIC (ask #2): a chosen in-game theme plays while a tame is active =====
         -- Placed BEFORE the no-target return so the stop-edge still fires when the wolf is lost.
         do
             -- 08-12: the YOKE RITE sings too (Aurora: "all the other ones do") -- same
             -- theme, same central stop-edge when the rite ends however it ends
+            local griffin_rodeo = S.oxtame and S.oxtame.stage == "rodeo"
+            local ordinary_rite = ((S.armed == true) and (S.target ~= nil)) or (S.ox_rite ~= nil)
             local want = (C.music_enabled == true)
-                and (((S.armed == true) and (S.target ~= nil)) or (S.ox_rite ~= nil))
+                and ((griffin_rodeo == true) or (S.oxtame == nil and ordinary_rite))
             if want and not S.music_playing then
                 local g = math.floor(tonumber(C.music_group) or 23)
                 local p = math.floor(tonumber(C.music_phase) or 10)
@@ -15899,7 +16614,7 @@ re.on_frame(function()
                                      -- jank (bat #3 was bulldozed into a fence by its eat clip and died)
             local fdx, fdz = fd.x - gp.x, fd.z - gp.z
             local fdd = math.sqrt(fdx * fdx + fdz * fdz)
-            if now - (tonumber(fd.t0) or now) > 25.0 then
+            if now - (tonumber(fd.t0) or now) > (tonumber(fd.timeout) or 25.0) then
                 S.feed_drop = nil                 -- stall-escape: the meal stays; the rite re-arms
                 if S.yield_down then S.yield_down.shown = nil end
             elseif fd.stage == "swoop" then
@@ -16007,8 +16722,19 @@ re.on_frame(function()
                 S.status = nm .. " - it eats..."
                 if now >= (tonumber(fd.done_at) or 0.0) then
                     pcall(function()   -- the meal is eaten: the ground item goes with it
-                        local dgo = (fd.obj and fd.obj:call("get_GameObject")) or fd.go
-                        if dgo then dgo:call("destroy", dgo) end
+                        local dr = fd.obj
+                        -- DD2 can merge a fresh drop into an existing ground stack, leaving
+                        -- the first-frame wrapper nil. Re-resolve it when the meal finishes.
+                        if not dr and fd.feed_csv then
+                            dr = find_feed_drop_near(item_mgr(), player, fd.feed_csv, 10.0)
+                        end
+                        local dgo = (dr and dr:call("get_GameObject")) or fd.go
+                        if dgo then
+                            local ok = pcall(function()
+                                dgo:call("destroy(via.GameObject)", dgo)
+                            end)
+                            if not ok then pcall(function() dgo:call("destroy", dgo) end) end
+                        end
                     end)
                     feed_prop_clear()   -- and the offering prop vanishes down its throat
                     S.feed_drop = nil
@@ -16249,8 +16975,8 @@ re.on_frame(function()
                         set_think_stop(ch, true)
                         local feed_id = feed_item_held(player)
                         if feed_id then
-                            set_prompt("GIVE IT THE MEAL", "Press N to lay the meat down for it.", 0.6, 0xFF80D0FF)
-                            S.status = nm .. ": press N to lay the meat down"
+                            set_prompt("GIVE IT THE MEAL", "Press N / B to lay the meat down for it.", 0.6, 0xFF80D0FF)
+                            S.status = nm .. ": press N / B to lay the meat down"
                             if pressed then
                                 consume_item(player, feed_id)
                                 -- lay it a step IN FRONT of the player (dropped at the feet, the
@@ -16333,6 +17059,21 @@ re.on_frame(function()
             end
 
             local left = math.max(0.0, S.yield_until - now)
+            -- ⭐ 08-13 THE WALK-AWAY CANCEL (Aurora: "no way to cancel a bird tame you
+            -- accidentally get - it won't let you leave"): leaving IS the cancel.
+            -- 12 continuous seconds away from the beaten creature ends the rite NOW
+            -- (the full release below: immunity off, AI back, familiarity kept)
+            -- instead of binding you for the whole 120s window. Stepping back inside
+            -- clears the away-timer, so a normal tame is never rushed.
+            if near then
+                S.away_since = nil
+            else
+                S.away_since = S.away_since or now
+                if now - S.away_since > 12.0 then
+                    left = 0.0
+                    S.away_since = nil
+                end
+            end
             if S.iris_carry then
                 -- status already set by the carry branch
             elseif near then
@@ -16386,18 +17127,30 @@ re.on_frame(function()
         -- griffin ox-tame scene is live (S.oxtame) -- it owns the N key for the palm, and a nearby
         -- rabbit armed off the same hold and hijacked it. The other direction is gated at the ox-tame
         -- scene creation. Either tame in progress => the other cannot start.
+        -- ⛔ 08-13: THE LOCKOUT WAS MISSING HERE. Every other gate in this rite honours
+        -- `now >= lockout_until` (the status line below, and the trusting gate) but the ARM did
+        -- not -- so a player holding the hand through a 30s lockout re-armed on every frame and
+        -- the rite fired the instant the lockout lapsed. The TTL cannot save that case either,
+        -- because the hand IS held, so it never expires.
         if down and not horse_claim_addr and not S.name_pending
-            and not S.oxtame and d <= (tonumber(C.peace_range) or 30.0) then
+            and not S.oxtame and now >= lockout_until
+            and d <= (tonumber(C.peace_range) or 30.0) then
             if now < (tonumber(S.tame_cd_until) or 0.0) then
                 S.status = string.format("(the bond settles - %.0fs before another courtship)", (tonumber(S.tame_cd_until) or 0.0) - now)
-            else
+            -- ⛔ ARBITRATE ONLY THE *FRESH* ARM. This block is LEVEL-triggered and re-runs every
+            -- frame of a live courtship, so an unconditional TB.may_start here would strand a rite
+            -- the moment you courted a wolf within reach of a bed or a cookpot -- the exact
+            -- stranding TB.may_start's own header warns against. An arm already up is maintained;
+            -- only a NEW one has to win the button.
+            elseif S.armed or TB.may_start("tame_begin") then
                 if not S.armed then S.wolf_clip = nil end   -- fresh clip state on every re-arm
                 S.armed = true
+                S.armed_at = now                           -- the TTL's heartbeat (see below)
             end
         end
         if not S.armed and S.mode ~= "context" and d <= (tonumber(C.peace_range) or 30.0) and now >= lockout_until then
             -- no banner until the hand is offered (proximity alone should stay silent)
-            S.status = "(wild - press N within range to offer the hand)"
+            S.status = "(wild - press N / B within range to offer the hand)"
         end
         -- THE HUNT EXTENDS THE LEASH: chasing the doe took the player past the 30m walk-away
         -- rule and the ritual self-destructed mid-errand -- the sitting wolf WAITS instead
@@ -16449,7 +17202,14 @@ re.on_frame(function()
                 end
             end)
             -- the HOWL answers on its OWN key (H) with the Bellow roar; every other hand stage = N + 6200
-            local perform_held, perf_clip, perf_bank, perf_start = hand, tonumber(C.player_hand_clip) or 6200, 60, 0.0
+            -- B/N only owns the palm animation in stages which explicitly ask for a hand.
+            -- Holding B during hunts, feeding, backing off or a rush must leave the player's
+            -- body alone; previously the universal input reader played 6200 in every stage.
+            local ritual_palm_stage = stage_now == "meet" or stage_now == "circle"
+                or stage_now == "laststeps" or stage_now == "stare"
+                or stage_now == "c_meet" or stage_now == "c_call" or stage_now == "c_palm"
+            local perform_held, perf_clip, perf_bank, perf_start = hand and ritual_palm_stage,
+                tonumber(C.player_hand_clip) or 6200, 60, 0.0
             if stage_now == "c_call" or stage_now == "c_give" then
                 if S.call_anim_live then
                     -- the Wilds call sequence (whistle -> arm up -> loop) OWNS the body: the stance
@@ -16520,12 +17280,9 @@ re.on_frame(function()
                             if ef and ef > 4.0 and layer:call("get_Frame") >= ef - 2.0 then S.kneel_loop = true end
                         end)
                     end
-                    -- ⚠ never restart 1103 on the 8s re-assert: the sink runs ~8.5s itself and a
-                    -- restart just before its floor reads as the player bobbing back upright
-                    if now - (tonumber(S.pclip_t0) or 0.0) >= 8.0 and S.pclip ~= 1103 then
-                        S.pclip_t0 = now
-                        play_player_motion(player, pc, perf_bank, perf_start)
-                    end
+                    -- Do not periodically replay a held pose. The layer is parked on its final
+                    -- frame already; replaying it every eight seconds layered a second palm raise
+                    -- over the first and looked like input spam.
                 else
                     if now - (tonumber(S.pclip_t0) or 0.0) >= (tonumber(C.gesture_loop_secs) or 4.5) then
                         S.pclip_t0 = now
@@ -16795,6 +17552,12 @@ re.on_frame(function()
                     S.status = "FAILED (" .. why_txt .. ") - it loses faith and leaves. (familiarity mostly kept)"
                     set_prompt("IT LOSES FAITH", why_txt .. " - it leaves. (it will remember most of your patience)", 3.5, 0xFF5050FF)
                 end
+                -- ⭐⭐⭐ 08-13 THE ZOMBIE ARM (Aurora: "when I try and leave the vicinity it keeps
+                -- pulling me back in"). This function cleared S.trial, S.mode and S.target and
+                -- FORGOT S.armed -- so a FAILED tame left the arm latched, and the next creature
+                -- you walked near inherited it: the rite's per-frame body re-engages on
+                -- `S.armed and d <= gate_range` with no button press at all. That is the bug.
+                S.armed = nil; S.armed_at = nil
                 S.mode = "idle"; S.target = nil
                 save_state()
             end
@@ -16804,14 +17567,12 @@ re.on_frame(function()
             if is_critter and T.stage ~= "c_meet" and T.stage ~= "c_call" and T.stage ~= "c_give" and T.stage ~= "c_palm" then
                 T.stage = "c_meet"; T.t0 = now; T.cmeet = 0.0
             end
-            if is_critter and (T.stage == "c_call" or T.stage == "c_give" or T.stage == "c_palm")
-                and player_sheathed(player) == false then
-                -- no steel during the courtship: the weapon is forced away (the proven Human
-                -- caller) -- combat would knock a perched bird flying
-                pcall(function()
-                    local h9 = player:call("get_Human")
-                    if h9 then h9:call("forceChangeDrawingWeapon", false) end
-                end)
+            if is_critter and player_sheathed(player) == false then
+                -- Peaceful creatures are never forcibly disarmed for the player's convenience.
+                -- Drawing steel after the offer uses the normal failure path, which restores the
+                -- body and sends small creatures fleeing. Combat tames never enter this branch.
+                trial_fail("you drew steel - it spooked")
+                return true
             end
             -- a courted critter cannot die to jank (bat #1 slid into water and drowned; bat #2
             -- bulldozed into a fence and died). Re-asserted every rite frame; release_creature
@@ -16917,20 +17678,33 @@ re.on_frame(function()
                             -- the patience earned, it goes straight to the offering
                             T.stage = "c_give"; T.t0 = now; S.wolf_clip = nil
                             T.on_arm = nil; T.parented = nil; T.call_anim = nil
+                            -- Snapshot BEFORE displaying the drop instruction. Initialising the
+                            -- watch on the next frame swallowed a promptly dropped Greenwarish as
+                            -- pre-existing, so rabbits stood still forever.
+                            local mgrG = item_mgr()
+                            if mgrG then T.give_seen = drop_list_snapshot(mgrG) end
+                            T.give_gseen = ground_scan_snapshot(pgo)
+                            T.give_gscan_at = now + 0.2
+                            T.give_counts = feed_count_snapshot(player,
+                                (seaG and seaG.feed_items) or C.critter_feed_items)
                             set_prompt("IT TRUSTS YOU ENOUGH", "Open your pouch and DROP an herb on the ground.", 4.0, 0xFF80D0FF)
                         else
                             T.stage = "c_call"; T.t0 = now; S.wolf_clip = nil
                             T.call_anim = nil; T.on_arm = nil; T.parented = nil   -- a FRESH call every time (stale state skipped the whistle)
-                            T.call_started = nil   -- the whistle waits for ITS OWN key (H)
+                            T.call_started = nil
+                            T.call_pad_latch = TB.pad_down() -- require a fresh B press after the patience hold
                         end
                     end
                 end
                 return true
             elseif T.stage == "c_call" and not T.call_started then
-                -- THE CALL waits for H (its own key, like the wolf's howl-back): the whistle is a
-                -- deliberate act, not more N-holding. Sound + gesture both begin on the press.
+                -- THE CALL accepts H or a fresh controller B press. The latch prevents the B held
+                -- through THE PATIENCE from skipping straight over this deliberate beat.
                 local call_held9 = false
                 pcall(function() call_held9 = iris_kb(math.floor(tonumber(C.call_key) or 0x48)) end)
+                local call_pad9 = TB.pad_down()
+                call_held9 = call_held9 or (call_pad9 and T.call_pad_latch ~= true)
+                T.call_pad_latch = call_pad9
                 if call_held9 then
                     T.call_started = true
                     -- the whistle SOUND rings as the call begins. Best route = the invisible
@@ -16988,7 +17762,7 @@ re.on_frame(function()
                         end
                 else
                     wolf_clip(species_idle_clip(go))   -- it waits, watching you (the bat FLAPS: its 0 = the hang)
-                    set_prompt("THE CALL", "PRESS H - whistle for it.", 0.6)
+                    set_prompt("THE CALL", "PRESS H / B - whistle for it.", 0.6)
                 end
                 return true
             elseif T.stage == "c_call" then
@@ -17168,26 +17942,22 @@ re.on_frame(function()
                         -- while it flies, her head follows it (locks to the slider pose on arrival)
                         head_look_at(pgo, pp, gp.x, gp.y, gp.z, true)
                         if k >= 1.0 then
-                            -- touchdown: NOW the hand joint takes it (the joint-parented perch is
-                            -- the one that rides the painted glove when the player moves -- proven
-                            -- in the field). The arc already ended at the tuned glove spot, so the
-                            -- attach correction is a whisker, not a yank.
-                            pcall(function()
-                                local sea2 = species_clips(go)
-                                if sea2 and sea2.arm_hover then return end   -- the bat never lands: it stays
-                                                                             -- root-parented, hovering at the spot
-                                local ctf = go:call("get_Transform")
-                                local jok = pcall(function() ctf:call("set_ParentJoint", tostring(C.call_perch_joint or "L_Arm_Hand")) end)
-                                if not jok then ctf:call("setParentJoint", tostring(C.call_perch_joint or "L_Arm_Hand")) end
-                                -- attach at the HOVER height the arc just delivered; the perch
-                                -- block eases it down onto the wrist from here (no punch-through)
-                                ctf:call("set_LocalPosition", Vector3f.new(0.0,
-                                    ((sea2 and sea2.arm_up) or tonumber(C.call_perch_up) or 0.06)
-                                    + (tonumber(C.critter_land_hover) or 0.12), 0.0))
-                                T.arm_settle_t0 = now
-                            end)
+                            -- Keep the landing in the same root-local frame as the flight. The
+                            -- falconry arm is a render-time bone pose: querying L_Arm_Hand returns
+                            -- the unpainted hand by the leg, so switching parent at touchdown made
+                            -- the bird miss the visible arm completely. The tuned local glove spot
+                            -- is stable and already is the exact endpoint of this arc.
+                            T.root_perch = true
+                            T.arm_settle_t0 = now
                             T.on_arm = true
                             T.stage = "c_give"; T.t0 = now; S.wolf_clip = nil
+                            local mgrA = item_mgr()
+                            if mgrA then T.give_seen = drop_list_snapshot(mgrA) end
+                            T.give_gseen = ground_scan_snapshot(pgo)
+                            T.give_gscan_at = now + 0.2
+                            local seaA = species_clips(go)
+                            T.give_counts = feed_count_snapshot(player,
+                                (seaA and seaA.feed_items) or C.critter_feed_items)
                             play_motion(ch, 0, 0)   -- settle on the glove
                             set_prompt("IT ANSWERS", "It settles on your arm. Now: DROP an herb for it.", 3.0, 0xFF80FFB0)
                         else
@@ -17238,7 +18008,26 @@ re.on_frame(function()
                     local stand3 = sea3 and sea3.arm_hover and C.bat_arm_stand ~= false
                     local aclip3 = stand3 and 0 or (sea3 and sea3.arm_clip)
                     if aclip3 and S.wolf_clip ~= aclip3 then wolf_clip(aclip3) end
-                    if not (sea3 and sea3.arm_hover) then
+                    if T.root_perch or (sea3 and sea3.arm_hover) then
+                        -- Root-local glove pin: cancel flight/eat root motion without ever
+                        -- transferring to the skeleton's unpainted hand joint.
+                        local hov9 = tonumber(C.critter_land_hover) or 0.12
+                        local ks9 = 1.0
+                        if T.arm_settle_t0 then ks9 = math.min(1.0, (now - (tonumber(T.arm_settle_t0) or now)) / 0.35) end
+                        pcall(function()
+                            local ctf3 = go:call("get_Transform")
+                            ctf3:call("set_LocalPosition", Vector3f.new(
+                                (tonumber(C.call_land_x) or 0.45) + ((sea3 and sea3.arm_dx) or 0.0),
+                                (tonumber(C.call_land_y) or 1.30) + ((sea3 and sea3.arm_dy) or 0.0) + hov9 * (1.0 - ks9),
+                                (tonumber(C.call_land_z) or 0.35) + ((sea3 and sea3.arm_dz) or 0.0)))
+                            if stand3 then
+                                local qv3 = ValueType.new(sdk.find_type_definition("via.Quaternion"))
+                                qv3.x = 1.0; qv3.y = 0.0; qv3.z = 0.0; qv3.w = 0.0
+                                ctf3:call("set_LocalRotation", qv3)
+                            end
+                        end)
+                        if ks9 >= 1.0 then T.arm_settle_t0 = nil end
+                    elseif not (sea3 and sea3.arm_hover) then
                         -- THE GLOVE PIN, per-frame for the whole perch (08-05, Aurora: the bird
                         -- slid off the arm and jittered while she walked -- its clips carry root
                         -- motion the crow's don't; the bat's per-frame local-pin law, generalized).
@@ -17252,7 +18041,7 @@ re.on_frame(function()
                         end)
                         if ks9 >= 1.0 then T.arm_settle_t0 = nil end
                     end
-                    if sea3 and sea3.arm_hover and T.parented then
+                    if not T.root_perch and sea3 and sea3.arm_hover and T.parented then
                         -- root-parented at the aimed landing spot (body space -- rides the player
                         -- without any joint, so no phantom-hand, no root-motion fights, no spazz);
                         -- the per-frame local pin also cancels the hang clip's root motion
@@ -17269,11 +18058,11 @@ re.on_frame(function()
                                 ctf3:call("set_LocalRotation", qv3)
                             end
                         end)
-                    elseif T.parented then
+                    elseif not T.root_perch and T.parented then
                         pcall(function()
                             go:call("get_Transform"):call("set_LocalPosition", Vector3f.new(0.0, (sea3 and sea3.arm_up) or tonumber(C.call_perch_up) or 0.06, 0.0))
                         end)
-                    else
+                    elseif not T.root_perch then
                         -- parenting failed: the per-frame world pin carries it instead
                         pcall(function()
                             local tfp = pgo:call("get_Transform")
@@ -17294,27 +18083,54 @@ re.on_frame(function()
                     wolf_clip(species_idle_clip(go))   -- it waits, watching you (the bat FLAPS: its 0 = the hang)
                 end
                 local mgr9 = item_mgr()
+                local spf9 = species_clips(go)
+                local feed_csv9 = (spf9 and spf9.feed_items)
+                    or C.critter_feed_items
                 if not T.give_seen and mgr9 then
                     T.give_seen = drop_list_snapshot(mgr9)
                     T.give_gseen = ground_scan_snapshot(pgo)   -- fallback surface: new scene objects
                     T.give_gscan_at = now + 1.0
+                    T.give_counts = feed_count_snapshot(player, feed_csv9)
                 end
+                local dropped_id9 = feed_count_dropped(player, feed_csv9,
+                    T.give_counts)
                 local drop9 = (mgr9 and T.give_seen) and find_new_drop(mgr9, player, T.give_seen) or nil
                 local drop_go9 = nil   -- the fallback's find (a bare GameObject, no ItemParam)
                 if not drop9 and T.give_gseen and now >= (tonumber(T.give_gscan_at) or 0.0) then
                     T.give_gscan_at = now + 1.0   -- the scene sweep is heavy: once a second
                     drop_go9 = ground_scan_new(pgo, T.give_gseen)
                 end
-                if drop9 or drop_go9 then
+                -- A fresh bag decrement is stronger evidence than a fresh object
+                -- address.  Matching drops may merge into an existing world stack;
+                -- recover that tracked stack, or its nearest item mesh, even though
+                -- it was present in the stage snapshot.
+                if dropped_id9 and not drop9 then
+                    drop9 = mgr9 and find_feed_drop_near(mgr9, player,
+                        feed_csv9, 8.0) or nil
+                    if not drop9 and not drop_go9 then
+                        drop_go9 = ground_scan_nearest_drop(pgo, 6.0)
+                    end
+                    pcall(function() log.info(string.format(
+                        "[IrisTaming] fresh feed drop proved by bag count: id=%s world=%s",
+                        tostring(dropped_id9),
+                        (drop9 or drop_go9) and "located" or "using drop point")) end)
+                end
+                local count_proved9 = dropped_id9 ~= nil
+                if drop9 or drop_go9 or count_proved9 then
                     local ok_food, label9 = false, ""
-                    if drop9 then
+                    if count_proved9 and not (drop9 or drop_go9) then
+                        -- The real item exists but DD2 exposed neither of its world
+                        -- registries this frame.  Drive to the proven drop point at
+                        -- the player's feet; destruction is simply skipped later.
+                        ok_food = true
+                        label9 = "fresh offering"
+                    elseif drop9 then
                         pcall(function()
                             local ip9 = drop9:call("get_ItemParam")
                             pcall(function() label9 = tostring((ip9 and ip9:call("get_Name")) or "") end)
                             local iid9 = nil
                             pcall(function() iid9 = tonumber(ip9 and ip9:call("get_ItemId")) end)
                             -- species appetite override (the rat eats ROTTEN, not greens)
-                            local spf9 = species_clips(go)
                             local fi9 = (spf9 and spf9.feed_items) or C.critter_feed_items
                             local fn9 = (spf9 and spf9.feed_names) or C.critter_feed_names
                             if iid9 then
@@ -17349,19 +18165,38 @@ re.on_frame(function()
                             "[IrisTaming] ground-scan offering '%s' -> %s", l9,
                             ok_food and "accepted" or "REJECTED (scenery)")) end)
                     end
-                    -- round 13: THE OX LAW, PORTED -- the offering must lie BEFORE THE
-                    -- CREATURE (within 8m of it), never merely near the running player
+                    -- The count edge can only name an item from this species'
+                    -- configured feed list, so it remains authoritative if a
+                    -- DropItem wrapper omits ItemParam during its spawn frame.
+                    if count_proved9 then
+                        ok_food = true
+                        if label9 == "" then label9 = "fresh offering" end
+                    end
+                    -- The offering is already constrained to a fresh drop beside the
+                    -- player.  The creature-distance limit is a lure range, not a demand
+                    -- that the player somehow place food under a skittish animal's nose.
+                    -- Rabbits have a wider species profile because coming to the herb is
+                    -- the visible ritual beat.
                     if ok_food then
                         pcall(function()
                             local dgo0 = (drop9 and drop9:call("get_GameObject")) or drop_go9
-                            local rp0 = dgo0:call("get_Transform"):call("get_Position")
-                            local prp0 = pgo:call("get_Transform"):call("get_Position")
-                            local u0 = { x = pp.x + (rp0.x - prp0.x), y = pp.y + (rp0.y - prp0.y), z = pp.z + (rp0.z - prp0.z) }
+                            local u0 = { x = pp.x, y = pp.y, z = pp.z }
+                            if dgo0 then
+                                local rp0 = dgo0:call("get_Transform"):call("get_Position")
+                                local prp0 = pgo:call("get_Transform"):call("get_Position")
+                                u0 = { x = pp.x + (rp0.x - prp0.x),
+                                    y = pp.y + (rp0.y - prp0.y),
+                                    z = pp.z + (rp0.z - prp0.z) }
+                            end
                             local cg0 = upos(char_go(ch))
                             local dd0 = cg0 and dist(u0, cg0) or nil
-                            if dd0 and dd0 > 8.0 then
+                            local reach0 = tonumber(spf9 and spf9.offer_reach)
+                                or 8.0
+                            if dd0 and dd0 > reach0 then
                                 ok_food = false
-                                log.info(string.format("[IrisTaming] offering rejected: %.1fm from the creature (limit 8)", dd0))
+                                log.info(string.format(
+                                    "[IrisTaming] offering rejected: %.1fm from the creature (limit %.0f)",
+                                    dd0, reach0))
                             end
                         end)
                     end
@@ -17370,14 +18205,19 @@ re.on_frame(function()
                         local ux9, uy9, uz9 = pp.x, pp.y, pp.z
                         pcall(function()
                             local dgo9 = drop9 and drop9:call("get_GameObject") or drop_go9
-                            local rp9 = dgo9:call("get_Transform"):call("get_Position")
-                            local prp9 = pgo:call("get_Transform"):call("get_Position")
-                            ux9 = pp.x + (rp9.x - prp9.x); uy9 = pp.y + (rp9.y - prp9.y); uz9 = pp.z + (rp9.z - prp9.z)
+                            if dgo9 then
+                                local rp9 = dgo9:call("get_Transform"):call("get_Position")
+                                local prp9 = pgo:call("get_Transform"):call("get_Position")
+                                ux9 = pp.x + (rp9.x - prp9.x); uy9 = pp.y + (rp9.y - prp9.y); uz9 = pp.z + (rp9.z - prp9.z)
+                            end
                         end)
                         local se9 = species_clips(char_go(ch))
-                        S.feed_drop = { obj = drop9, go = drop_go9, x = ux9, y = uy9, z = uz9,
+                        S.feed_drop = { obj = drop9, go = drop_go9, feed_csv = feed_csv9,
+                            item_id = dropped_id9, x = ux9, y = uy9, z = uz9,
                             stage = T.on_arm and "swoop" or "approach", t0 = now,
-                            walk_clip = (se9 and se9.walk) or tonumber(C.crow_walk_clip) or 100, speed = 0.9,
+                            walk_clip = (se9 and se9.walk) or tonumber(C.crow_walk_clip) or 100,
+                            speed = (se9 and tonumber(se9.offer_speed)) or 0.9,
+                            timeout = (se9 and tonumber(se9.offer_timeout)) or 25.0,
                             eat_bank = (se9 and se9.eat_bank) or tonumber(C.crow_scavenge_bank) or 60,
                             eat_start = (se9 and se9.eat_start) or tonumber(C.crow_scavenge_clip) or 20,
                             eat_loop = (se9 and se9.eat_loop) or tonumber(C.crow_scavenge_clip) or 20,
@@ -17399,12 +18239,17 @@ re.on_frame(function()
                     else
                         -- something else hit the ground: remember THAT drop (never re-snapshot --
                         -- a full forget also swallowed the real herb if it was already lying there)
-                        pcall(function() T.give_seen[drop9:get_address()] = true end)
+                        pcall(function()
+                            if drop9 and T.give_seen then
+                                T.give_seen[drop9:get_address()] = true
+                            elseif drop_go9 and T.give_gseen then
+                                T.give_gseen[drop_go9:get_address()] = true
+                            end
+                        end)
                     end
                 else
                     -- species appetite: the table's feed list + prompt lines win (rat = ROTTEN);
                     -- the bat keeps its fruit branch, everyone else = greens
-                    local spf9 = species_clips(go)
                     local has = feed_item_held(player, (spf9 and spf9.feed_items) or C.critter_feed_items)
                     local bandp = tostring(go_name(go) or ""):match("ch%d+")
                     local is_bat = bandp == "ch299400" or bandp == "ch299440"
@@ -18506,13 +19351,12 @@ re.on_frame(function()
                 end
             end
         elseif S.mode == "trusting" then
-            -- you walked out of the moment: free it fully (no frozen statues left behind)
-            release_creature(ch)
-            restore_pack()
-            S.held_ground = nil
-            S.trial = nil
-            S.wolf_clip = nil
-            S.mode = "idle"; S.pressure = 0.0
+            -- Outside the 30m ritual-working radius, pause rather than running
+            -- a second, immediate teardown.  The universal abandon gate above
+            -- is the sole authority: >40m held for 1s, then one clean release.
+            -- The old duplicate path repeatedly entered release_creature after
+            -- a partial hand-back and spammed an invalid resetActionAndAI call.
+            S.status = "(too far to continue - return before the rite is abandoned)"
         end
     end)
         if IPPS then IPPS(nil) end
@@ -18529,6 +19373,24 @@ re.on_draw_ui(function()
         local tracker_chg
         tracker_chg, C.griffin_tracker = imgui.checkbox("WILD GRIFFIN TRACKER: mark wild griffins + flight trail (follow one home)##tame_gtrack", C.griffin_tracker == true)
         if tracker_chg then pcall(save_state) end
+        -- ⭐ 08-13 HUD PLACEMENT SLIDERS. Aurora nudged these by eye three times across three
+        -- reloads because only I could change them -- that is a loop that should not exist. Live
+        -- sliders end it: she drags, sees it move, and it saves. ⚠ dx/right are measured IN FROM
+        -- THE RIGHT EDGE, so SMALLER = FURTHER RIGHT.
+        if imgui.tree_node("Taming HUD placement##tame_hudpos") then
+            local c1, c2, c3, c4, c5, c6
+            imgui.text("\"-- Taming Mode Active --\" banner")
+            c1, C.tame_mode_px = imgui.slider_float("banner size##thp1", tonumber(C.tame_mode_px) or 23.0, 12.0, 48.0, "%.0f px")
+            c2, C.tame_mode_dx = imgui.slider_float("banner from right##thp2", tonumber(C.tame_mode_dx) or 395.0, 0.0, 1200.0, "%.0f")
+            c3, C.tame_mode_y  = imgui.slider_float("banner height##thp3", tonumber(C.tame_mode_y) or 0.45, 0.0, 1.0, "%.2f of screen")
+            imgui.separator()
+            imgui.text("\"Hold [Back] for Stable\" hint  (smaller = further RIGHT)")
+            c4, C.tame_hint_px = imgui.slider_float("hint size##thp4", tonumber(C.tame_hint_px) or 19.0, 10.0, 40.0, "%.0f px")
+            c5, C.tame_hint_dx = imgui.slider_float("hint from right##thp5", tonumber(C.tame_hint_dx) or 380.0, 0.0, 1000.0, "%.0f")
+            c6, C.tame_hint_dy = imgui.slider_float("hint from bottom##thp6", tonumber(C.tame_hint_dy) or 212.0, 0.0, 600.0, "%.0f")
+            if c1 or c2 or c3 or c4 or c5 or c6 then pcall(save_state) end
+            imgui.tree_pop()
+        end
         imgui.separator()
         local kc = math.floor(tonumber(C.tame_key) or 0x4E)
         imgui.text("hand key: " .. ((kc >= 0x41 and kc <= 0x5A) and string.char(kc) or string.format("0x%X", kc)))
@@ -18558,6 +19420,104 @@ re.on_draw_ui(function()
             despawn_doe()   -- clear any conjured quarry so a fresh start doesn't inherit the old kill
             save_state()
             S.status = "taming wiped - every wolf is a stranger again"
+        end
+        -- ⚡ DEV INSTANT TAME (Aurora 08-13): seal the pact with whatever is under the crosshair,
+        -- no courtship. It routes through the SAME try_finish -> do_handover -> do_commit chain the
+        -- real rite uses, so every settle/handover crash guard still runs (HP mend, seal clip,
+        -- pacify, the 0.5s settle before the stable registers). Only the range check, the
+        -- sheathe/food gates and the trial are bypassed.
+        -- ⛔ Deliberately restricted to the taming band lists: instant-taming an unsupported
+        -- chassis writes stable context onto a body the mod was never built to drive.
+        if imgui.button("DEV: TAME the creature I'm looking at (instant)##tame_devinstant") then
+            local player = get_player()
+            local pgo = player and char_go(player)
+            local ch = pgo and find_candidate(pgo)
+            -- WIDER SWEEP: find_candidate enforces PER-SPECIES reach/cone (a crow has to be
+            -- nearly nose-to-beak), which is pure friction for dev work. Fall back to a flat
+            -- 30m / ~60deg camera cone -- still inside the supported bands, still skipping the
+            -- active companion, residents, owned horses and anything already tamed.
+            if not ch and pgo then
+                pcall(function()
+                    local pp9 = upos(pgo)
+                    local cam9 = sdk.get_primary_camera()
+                    local cgo9 = cam9 and cam9:call("get_GameObject")
+                    local cr9 = cgo9 and cgo9:call("get_Transform"):call("get_Rotation")
+                    if not (pp9 and cr9) then return end
+                    local fx9 = -(2.0 * (cr9.x * cr9.z + cr9.w * cr9.y))
+                    local fz9 = -(1.0 - 2.0 * (cr9.x * cr9.x + cr9.y * cr9.y))
+                    local fl9 = math.max(0.05, math.sqrt(fx9 * fx9 + fz9 * fz9))
+                    local cfx9, cfz9 = fx9 / fl9, fz9 / fl9
+                    local comp_addr9 = nil
+                    pcall(function()
+                        local b9 = _G.IrisGriffinBridge
+                        local g9 = b9 and b9.griffin and b9.griffin()
+                        if g9 then comp_addr9 = g9:get_address() end
+                    end)
+                    local sm9 = sdk.get_native_singleton("via.SceneManager")
+                    local smt9 = sdk.find_type_definition("via.SceneManager")
+                    local scene9 = sm9 and sdk.call_native_func(sm9, smt9, "get_CurrentScene")
+                    local comps9 = scene9 and scene9:call("findComponents(System.Type)", sdk.typeof("app.Character"))
+                    if not comps9 then return end
+                    local n9 = 0
+                    pcall(function() n9 = comps9:call("get_Length") or 0 end)
+                    if n9 == 0 then pcall(function() n9 = comps9:get_size() or 0 end) end
+                    local bd9 = 30.0
+                    for i9 = 0, (tonumber(n9) or 0) - 1 do
+                        pcall(function()
+                            local c9 = comps9:call("get_Item", i9) or comps9[i9]
+                            local g9 = c9 and char_go(c9)
+                            if not g9 then return end
+                            local nm9 = go_name(g9) or ""
+                            local a9 = c9:get_address()
+                            local owned9 = false
+                            pcall(function()
+                                local api9 = rawget(_G, "__iris_wild_horses_api")
+                                owned9 = api9 and api9.is_horse and api9.is_horse(g9) == true
+                            end)
+                            local res9 = false
+                            pcall(function()
+                                local hb9 = rawget(_G, "IrisHomesteadBox")
+                                res9 = hb9 and hb9.is_resident and hb9.is_resident(g9:get_address()) or false
+                            end)
+                            if owned9 or res9 then return end
+                            if not (name_in_csv(nm9, C.target_bands) or name_in_csv(nm9, C.critter_bands)) then return end
+                            if name_in_csv(nm9, C.exclude_bands) then return end
+                            if S.tamed[c9] or is_dead(c9) then return end
+                            if comp_addr9 and a9 == comp_addr9 then return end
+                            if S.tamed_addrs and S.tamed_addrs[tostring(a9)] then return end
+                            local q9 = upos(g9)
+                            local d9 = q9 and dist(q9, pp9) or 1e9
+                            if d9 > bd9 then return end
+                            local dx9, dz9 = q9.x - pp9.x, q9.z - pp9.z
+                            local dl9 = math.max(0.05, math.sqrt(dx9 * dx9 + dz9 * dz9))
+                            if ((dx9 / dl9) * cfx9 + (dz9 / dl9) * cfz9) > 0.5 then bd9 = d9; ch = c9 end
+                        end)
+                    end
+                end)
+            end
+            if not ch then
+                S.status = "DEV tame: nothing tameable in front of me (riding? mid ox-rite? unsupported band?)"
+            else
+                local dgo9 = char_go(ch)
+                -- muzzle it BEFORE the seal: try_finish hands the body straight into the settle,
+                -- and a mid-attack body at the stable's register is the native handover crash
+                pcall(function() full_pacify(ch) end)
+                pcall(function() strip_hate(ch); clear_targets(ch) end)
+                for _, m9 in ipairs(party_characters()) do
+                    pcall(function() strip_hate(m9); clear_targets(m9) end)
+                end
+                pcall(function() if S.lockouts then S.lockouts[tostring(ch:get_address())] = nil end end)
+                -- dev press answers to nobody: drop the trust gates for this one call, then restore
+                local rs9, rf9 = C.require_sheathed, C.require_food
+                C.require_sheathed, C.require_food = false, false
+                local ok9 = try_finish(player, pgo, ch, dgo9, "dev button", true)
+                C.require_sheathed, C.require_food = rs9, rf9
+                if ok9 then
+                    S.status = "DEV tame sealed: " .. tostring(creature_label(dgo9)) .. " (" .. tostring(go_name(dgo9)) .. ")"
+                else
+                    S.status = "DEV tame REFUSED: " .. tostring(S.status)
+                end
+            end
         end
         -- OX-TAME TEST RESET (Aurora 07-18): a mid-rodeo griffin was left stuck, forcing a full
         -- game restart between tests. This frees the griffin back to native AI, drops the player
@@ -19492,9 +20452,8 @@ re.on_draw_ui(function()
                 c9, C["sp_" .. tb9 .. "_py"] = imgui.drag_float("perch Y (+up)##tame_sppy", tonumber(C["sp_" .. tb9 .. "_py"]) or 0.0, 0.01, -0.5, 0.5); chg = chg or c9
                 c9, C["sp_" .. tb9 .. "_pz"] = imgui.drag_float("perch Z (+forward)##tame_sppz", tonumber(C["sp_" .. tb9 .. "_pz"]) or 0.0, 0.01, -0.5, 0.5); chg = chg or c9
                 c9, C["sp_" .. tb9 .. "_prot"] = imgui.drag_float("perch rotate (deg)##tame_spprot", tonumber(C["sp_" .. tb9 .. "_prot"]) or 0.0, 1.0, -180.0, 180.0); chg = chg or c9
-                c9, C["sp_" .. tb9 .. "_psc"] = imgui.drag_float("perch scale (x global)##tame_sppsc", tonumber(C["sp_" .. tb9 .. "_psc"]) or 1.0, 0.01, 0.4, 1.5); chg = chg or c9
             else
-                imgui.text("(shoulder a creature -- its own X/Y/Z/rotate/scale sliders appear here)")
+                imgui.text("(shoulder a creature -- its own X/Y/Z/rotate sliders appear here)")
             end
             c9, C.companion_nameplate = imgui.checkbox("Floating nameplate (name + gender) over companions##tame_nameplate", C.companion_nameplate ~= false); chg = chg or c9
             imgui.text("Shoulder riding no longer changes size at all (08-13). The SIZE gene is the only")
@@ -21588,6 +22547,9 @@ end)
 
 re.on_script_reset(function()
     S.familiar = {}   -- every reset scripts starts fresh
+    rawset(_G, "IrisTamingPerchScaleHold", nil)
+    rawset(_G, "IrisTamingPerchGoAddr", nil)
+    rawset(_G, "IrisGroundObservedScale", nil)
 end)
 
 
@@ -21671,57 +22633,26 @@ end)
 -- death and reload path then tears the music down for free.
 re.on_frame(function()
     local music_mode = tostring(S.mode or "idle")
-    -- The Griffin/ox rite is a parallel state machine and never changes S.mode, so the music
-    -- watcher previously saw "idle" throughout a successful tame. Publish it as courting from the
-    -- offering's birth until every success/abort path clears S.oxtame; the existing watcher then
-    -- owns both start and teardown without another collection of fragile stop sites.
-    if S.oxtame and tostring(S.oxtame.stage or "idle") ~= "idle" then
+    -- Griffin courtship begins with the ox lure, but the ritual music begins only once the
+    -- player climbs onto the griffin. Approach, feeding and landing stay in the world's score.
+    if S.oxtame and tostring(S.oxtame.stage or "idle") == "rodeo" then
         music_mode = "context"
     end
     -- 08-12 (the silent yoke, round 4): the YOKE RITE is also a parallel machine that never
     -- touches S.mode -- the watcher heard "idle" through the whole tame. "trusting" is
     -- accepted by the watcher under EVERY start_mode config (context is not).
     if S.ox_rite then music_mode = "trusting" end
-    -- ── ⭐⭐ SHEATHE GATE (Aurora's #13, 2026-08-12) ────────────────────────────────────────
-    -- "During any taming rite the Arisen should sheathe their weapon": approaching a wolf sword-out
-    -- reads wrong, and pawns take a drawn blade as combat intent.
-    -- ⭐ THIS IS THE ONE PLACE WORTH HOOKING, and only because the three lines above already did the
-    -- hard part. Every rite is its own state machine -- the wolf circle moves S.mode, the griffin
-    -- bait rides S.oxtame, the yoke rides S.ox_rite -- and this block has ALREADY collapsed all of
-    -- them into one value. So a rising edge here covers wolf circle + ox yoke + critter give + bird
-    -- rite + griffin bait + camp rite at once, instead of patching six start sites and then having
-    -- to remember to patch the seventh rite somebody adds later.
-    -- ⛔⛔ THE COMBAT TAME IS EXEMPT AND THAT IS NOT OPTIONAL: that rite REQUIRES steel out. Its
-    -- release gate refuses while sheathed ("sheathed = peace, never released") and its back-out path
-    -- reads a sheathe as "you changed your mind" and drops the player to the peaceful shield. Firing
-    -- here would cancel the very tame they are winning, every single time.
-    -- ⚠ AND IT CANNOT BE FILTERED BY `music_mode`: the publisher maps the combat tame AND the
-    -- griffin bait rite to the SAME string, "context". S.combat_tame has to be tested directly.
-    -- ⛔ NOT the ActionManager "SheatheWeapon" route, even though IRIS ships that elsewhere (farming
-    -- uses it): a full-body pose hold turns the player's MotionFsm2 OFF, and a request onto a dead
-    -- FSM is swallowed silently -- IrisFarming has exactly that scar logged, "the request either
-    -- didn't take or the freeze caught the sheathe mid-animation". `forceChangeDrawingWeapon` writes
-    -- the controller state directly, needs no FSM, and also does the weapon-parent-joint bookkeeping
-    -- that a bare set_IsDraw(false) skips (flag says sheathed, blade stays in hand). It is the call
-    -- the critter branch of this same file already proved.
-    -- ⚠ FIRE ONCE, ON THE EDGE. Re-asserting every frame would hammer a native across a rite that
-    -- can run two minutes, and it would be wrong anyway: drawing steel mid-rite is already PUNISHED
-    -- by the trials ("you drew steel"), so re-forcing it would paper over a designed failure.
-    -- ⚠ Deliberately NOT gated on player_sheathed(): that reader returns nil when its getter fails,
-    -- and this file's own warning says nil slipped armed tames past every check. The call is harmless
-    -- when the weapon is already away, so fire unconditionally and let it be idempotent.
-    if music_mode ~= "idle" and tostring(S.sheathe_edge or "idle") == "idle" and not S.combat_tame then
-        local okS = false
-        pcall(function()
-            local p9 = get_player()
-            local h9 = p9 and p9:call("get_Human")
-            if h9 then h9:call("forceChangeDrawingWeapon", false); okS = true end
-        end)
-        pcall(function() log.info("[IrisTaming] sheathe requested at rite start (mode="
-            .. tostring(music_mode) .. " ok=" .. tostring(okS) .. ")") end)
-    end
-    -- set unconditionally, INCLUDING on the combat-tame path: otherwise the edge stays armed and
-    -- would fire mid-rite the moment S.combat_tame clears.
+    -- Weapon state is a condition, never something the rite mutates for the player.
+    -- Never force the player's weapon state. Passive rites now refuse a drawn-weapon start and
+    -- spook through their own restore/flee paths if steel appears later; combat rites deliberately
+    -- keep the weapon. Retain only the edge diagnostic for compatibility with the debug panel.
     S.sheathe_edge = music_mode
     rawset(_G, "IrisTamingMode", music_mode)
+end)
+
+-- ⭐ 08-13: the taming-mode indicator paints from a frame hook, not on_draw_ui -- on_draw_ui is
+-- REFramework's own imgui window, which the player does not have open while playing. iris_screen_text
+-- routes to IrisFont's d2d layer when it is up and falls back to draw.text's background drawlist.
+re.on_frame(function()
+    pcall(iris_tame_mode_hud)
 end)

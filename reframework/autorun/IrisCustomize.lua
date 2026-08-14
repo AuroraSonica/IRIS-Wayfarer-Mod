@@ -258,6 +258,10 @@ end
 
 local function input_tick()
     if edge(math.floor(tonumber(CU.key) or 0x43)) then
+        -- The Stable owns C while its list is open; it queues this screen only after the
+        -- paused menu has closed. Opening directly on the paused frame is unsafe.
+        if rawget(_G, "IrisStableUIOpen") == true or rawget(_G, "IrisFurnishUIOpen") == true
+            or rawget(_G, "IrisTypingActive") == true then return end
         if CU.open then if CU.dirty then CU.dialog = "revert" else close_screen() end else open_screen() end
         return
     end
@@ -359,30 +363,40 @@ function iris_cu_draw()
         pcall(d2d.text, font, s, x + 2, y + 2, argb((a or 1) * 0.7, 0x000000))
         pcall(d2d.text, font, s, x, y, argb(a or 1, col))
     end
-    local C_ACCENT, C_PANEL, C_TITLE, C_ROW, C_DIM, C_SEL = 0xB4552A, 0x140E0A, 0xEAD8B0, 0xD8C9A8, 0x8A7A5E, 0x2A1C12
-    local px = math.floor(40 * scale)
-    local pw = math.floor(math.min(sw * 0.36, 560 * scale))
-    local ph = math.floor(sh * 0.74)
+    -- Same visual grammar as the Stable and decoration screen: smoke glass, fine gold
+    -- rules, cream headings and a translucent gold selection. Customisation stays left
+    -- of centre so the framed creature remains visible while colours are previewed.
+    local C_ACCENT, C_PANEL, C_TITLE, C_ROW, C_DIM, C_SEL, C_INSET =
+        0xC8A050, 0x14141A, 0xE8D8A8, 0xD8D0BC, 0x8E8A82, 0xC8A050, 0x000000
+    local pw = math.floor(math.min(sw * 0.39, 640 * scale))
+    local px = math.floor(math.max(24 * scale, (sw - 960 * scale) * 0.5))
+    local ph = math.floor(math.min(sh * 0.78, 690 * scale))
     local py = math.floor((sh - ph) * 0.5)
-    local b = math.max(2, math.floor(2.5 * scale))
+    local b = math.max(2, math.floor(2 * scale))
     pcall(d2d.fill_rect, px + b * 2, py + b * 2, pw, ph, argb(0.4, 0x000000))
-    pcall(d2d.fill_rect, px - b, py - b, pw + b * 2, ph + b * 2, argb(0.9, C_ACCENT))
     pcall(d2d.fill_rect, px, py, pw, ph, argb(0.95, C_PANEL))
-    pcall(d2d.fill_rect, px, py, pw, math.max(4, math.floor(6 * scale)), argb(1.0, C_ACCENT))
-    local ix = px + math.floor(28 * scale)
-    local iw = pw - math.floor(56 * scale)
-    local y = py + math.floor(24 * scale)
+    pcall(d2d.fill_rect, px, py, pw, math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
+    pcall(d2d.fill_rect, px, py + ph - math.max(2, math.floor(2 * scale)), pw,
+        math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
+    local ix = px + math.floor(20 * scale)
+    local iw = pw - math.floor(40 * scale)
+    local y = py + math.floor(18 * scale)
     local cname = "Creature"
     pcall(function() local g = active_go(); if g then cname = type_name(g:call("get_Name")) end end)
-    txt(ft.title_f, "CUSTOMIZE  " .. cname, ix, y, C_TITLE, 1.0)
+    txt(ft.title_f, "THE STABLE  /  CUSTOMISE", ix, y, C_TITLE, 1.0)
     y = y + (ft.title_px or 34) + math.floor(16 * scale)
-    txt(ft.small_f, "PART", ix, y, C_DIM, 1.0); y = y + (ft.small_px or 18) + math.floor(6 * scale)
+    txt(ft.small_f, string.upper(cname) .. "  -  PART", ix, y, C_ACCENT, 1.0)
+    y = y + (ft.small_px or 18) + math.floor(8 * scale)
     local rowh = math.floor((ft.row_px or 24) * 1.45)
+    local parts_y = y
+    local parts_h = #CU.parts * rowh + math.floor(8 * scale)
+    pcall(d2d.fill_rect, ix - math.floor(8 * scale), parts_y - math.floor(4 * scale),
+        iw + math.floor(16 * scale), parts_h, argb(0.32, C_INSET))
     for i, part in ipairs(CU.parts) do
         local sel = (i == CU.part_i)
         if sel then
-            pcall(d2d.fill_rect, ix - math.floor(8 * scale), y - math.floor(2 * scale), iw + math.floor(16 * scale), rowh, argb(0.9, C_SEL))
-            pcall(d2d.fill_rect, ix - math.floor(8 * scale), y - math.floor(2 * scale), math.max(3, math.floor(4 * scale)), rowh, argb(1.0, C_ACCENT))
+            pcall(d2d.fill_rect, ix - math.floor(8 * scale), y - math.floor(2 * scale), iw + math.floor(16 * scale), rowh, argb(0.34, C_SEL))
+            pcall(d2d.fill_rect, ix - math.floor(8 * scale), y - math.floor(2 * scale), math.max(2, math.floor(3 * scale)), rowh, argb(1.0, C_ACCENT))
         end
         txt(ft.row_f, part.name .. (part.color and "  *" or ""), ix, y, sel and C_TITLE or C_ROW, sel and 1.0 or 0.8)
         if part.color then pcall(d2d.fill_rect, ix + iw - math.floor(34 * scale), y + math.floor(2 * scale), math.floor(30 * scale), (ft.row_px or 24) - math.floor(2 * scale), argb(1.0, swatch_hex(part.color))) end
@@ -390,7 +404,7 @@ function iris_cu_draw()
     end
     y = y + math.floor(14 * scale)
     if CU.mode == "parts" then
-        txt(ft.small_f, "COLOUR", ix, y, C_DIM, 1.0); y = y + (ft.small_px or 18) + math.floor(8 * scale)
+        txt(ft.small_f, "COLOUR", ix, y, C_ACCENT, 1.0); y = y + (ft.small_px or 18) + math.floor(8 * scale)
         local pr = PRESETS[CU.preset_i]
         if pr then
             pcall(d2d.fill_rect, ix, y, math.floor(48 * scale), math.floor(34 * scale), argb(1.0, swatch_hex(pr[2])))
@@ -408,7 +422,7 @@ function iris_cu_draw()
             if i == CU.preset_i then pcall(d2d.fill_rect, rx, ry, sww - math.floor(4 * scale), math.max(3, math.floor(3 * scale)), argb(1.0, C_TITLE)) end
         end
     else
-        txt(ft.small_f, "ADVANCED", ix, y, C_DIM, 1.0); y = y + (ft.small_px or 18) + math.floor(10 * scale)
+        txt(ft.small_f, "ADVANCED COLOUR", ix, y, C_ACCENT, 1.0); y = y + (ft.small_px or 18) + math.floor(10 * scale)
         local chans = { { "R", 0xC04030 }, { "G", 0x40A040 }, { "B", 0x4060C0 } }
         for ci, cc in ipairs(chans) do
             local val = CU.slider[ci] or 1.0
@@ -434,9 +448,10 @@ function iris_cu_draw()
         local dx = math.floor((sw - dw) * 0.5)
         local dy = math.floor((sh - dh) * 0.42)
         pcall(d2d.fill_rect, 0, 0, sw, sh, argb(0.45, 0x000000))
-        pcall(d2d.fill_rect, dx - b, dy - b, dw + b * 2, dh + b * 2, argb(0.95, C_ACCENT))
         pcall(d2d.fill_rect, dx, dy, dw, dh, argb(0.98, C_PANEL))
-        pcall(d2d.fill_rect, dx, dy, dw, math.max(4, math.floor(6 * scale)), argb(1.0, C_ACCENT))
+        pcall(d2d.fill_rect, dx, dy, dw, math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
+        pcall(d2d.fill_rect, dx, dy + dh - math.max(2, math.floor(2 * scale)), dw,
+            math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
         local q = (CU.dialog == "apply") and "Apply these changes?" or "Revert these changes?"
         local function cen(font, s, ty, col)
             local mw = #tostring(s) * 9; pcall(function() local ok2, m = pcall(d2d.measure_text, font, s); if ok2 and m and m > 0 then mw = m end end)
