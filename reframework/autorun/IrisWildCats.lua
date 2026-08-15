@@ -34,6 +34,32 @@ local PUMA_NAME = "ch223001_00"
 local PANTHER_NAME = "ch223001_01"
 local PUMA_PREFAB = "AppSystem/ch/ch223/prefab/ch223001_00.pfb"
 local PANTHER_PREFAB = "AppSystem/ch/ch223/prefab/ch223001_01.pfb"
+
+-- ⭐⭐⭐ THE PANTHER'S OWN MATERIAL, THE WAY THIS CODEBASE ACTUALLY DOES IT.
+-- Aurora: "why have we abandoned the separate panther mesh? there's no reason why it
+-- shouldn't work - we have horses and unicorns working." She was right, and the reason my
+-- version failed is that I invented a mechanism nobody here uses: byte-patching
+-- ch223001_01.pfb to point at ch23_002. That prefab never reached get_Ready across four
+-- builds. The UNICORN never patches a prefab -- IrisWildHorses ships the asset in a pak and
+-- swaps it onto the LIVE BODY at runtime (create_resource -> add_ref -> warm -> holder ->
+-- setMesh/set_Material). That route is field-proven on this install.
+--
+-- ⭐ AND WE ONLY NEED HALF OF IT: puma and panther share identical GEOMETRY, so there is
+-- nothing to setMesh. Swapping only the MATERIAL gives the panther its own charcoal coat
+-- (relative contrast 0.61 vs the 0.21 a BaseColor multiply can reach), its own eye atlas
+-- with the painted gold iris, and Emissive_Color1/2 baked yellow in the mdf2 itself.
+local PANTHER_MDF_PATH = "character/ch/ch23_002/ch23_002.mdf2"
+-- ⛔ COLD create_resource IS ASYNC (unicorn law, log-proven): a holder built and used
+-- immediately wraps a HOLLOW resource -- the first swap "succeeds" rendering nothing, and
+-- that holder then throws forever while valid() still reports true. Pin at arm, gate, and
+-- only then build the holder.
+-- ⭐ 5 s, not the unicorn's 15. That gate guarded a 1 MB MESH swap where a hollow
+-- resource AVs; ours is a 64 KB mdf2, it is warmed at arm step 5 (boot) so in practice
+-- the gate is long paid before any cat spawns, and a too-early holder is now SAFE anyway:
+-- set_Material throwing drops the holder and the next retry rebuilds it from the cached
+-- resource. Aurora's packs roll wolves, then pumas, and only then panthers -- by which
+-- point a 15 s gate is pure dead time.
+local PANTHER_MDF_GATE = 5.0
 local PACK_FRAME_WINDOW = 360
 local PACK_RADIUS = 70.0
 local PACK_RADIUS_SQ = PACK_RADIUS * PACK_RADIUS
@@ -41,14 +67,33 @@ local PACK_RADIUS_SQ = PACK_RADIUS * PACK_RADIUS
 -- in the same burst; without a cap, repeated manual spawns all inherit one decision.
 local PACK_MAX_MEMBERS = 6
 
+-- ⭐ RUNTIME RECOLOUR IS THE PANTHER'S ROUTE AGAIN (2026-08-15). The ch23_002 experiment
+-- -- giving the panther its own mesh/mdf2/textures via a redirected ch223001_01.pfb --
+-- never once reached get_Ready, through four builds, and cost several field round-trips.
+-- Reverted. BaseColor is a MULTIPLY, so it preserves RELATIVE contrast (std/mean) even
+-- though absolute std drops; the coat lands at ~0.21 relative against the 0.61 a purpose
+-- built charcoal texture achieved. Visibly less rich, but the new derived NRMR carries
+-- most of the surface read, which is why this route never looked rubbery in the field.
+--
+-- ⭐⭐ AND THE EYES WORK NOW. These writes always went to ch23_001_eye_mat, but until the
+-- eye caps became a REAL submesh that material had nothing but a 1 mm dummy triangle
+-- parked at the Hip, so the yellow was painting an invisible speck. With real eye
+-- geometry the emissive finally lands.
 local PANTHER_MATERIALS = {
-    ch23_001_body_mat = {0.115, 0.125, 0.145, 1.0},
-    ch23_001_head_mat = {0.105, 0.115, 0.135, 1.0},
+    -- retuned to hit the same charcoal the texture build was aiming for (mean ~0.078 on
+    -- an albedo whose own mean is ~0.60), with the faint cool cast kept.
+    ch23_001_body_mat = {0.130, 0.140, 0.160, 1.0},
+    ch23_001_head_mat = {0.120, 0.130, 0.150, 1.0},
     ch23_001_fur1_mat = {0.165, 0.175, 0.195, 1.0},
     ch23_001_fur2_mat = {0.145, 0.155, 0.180, 1.0},
-    ch23_001_eye_mat = {1800.0, 55.0, 0.0, 1.0},
+    -- ⛔ WAS {1800, 55, 0}: a 1800x multiply was harmless while eye_mat drew nothing, but
+    -- against real eyeballs it blows the iris to a flat white-orange disc. Her painted
+    -- gold iris only needs a warm tint over it.
+    ch23_001_eye_mat = {1.00, 0.85, 0.25, 1.0},
 }
-local PANTHER_EYE_EMISSIVE = {5.0, 2.2, 0.04, 1.0}
+-- ⛔ the old {5.0, 2.2, 0.04} normalises to G/R = 0.44, which reads ORANGE. Aurora asked
+-- for yellow; G/R near 0.8 gets there. Emissive_Intensity on this material is already 8.2.
+local PANTHER_EYE_EMISSIVE = {2.20, 1.70, 0.08, 1.0}
 
 local REQUEST_SIGNATURE = table.concat({
     "createRequestInfo(soundlib.SoundTriggerInfo, via.GameObject, via.GameObject, ",
@@ -71,6 +116,25 @@ local C = {
     audio_enabled = true,
     replace_wolf_vocals = true,
     ambient_enabled = true,
+    -- ⛔ OFF SINCE THE ch23_002 SPLIT. The panther used to be the puma mesh recoloured at
+    -- runtime: BaseColor = {0.115, 0.125, 0.145} on every material. That is a flat 12%
+    -- MULTIPLY, and a multiply cannot add contrast -- it took the coat's albedo std from
+    -- 0.128 down to 0.015, which is exactly the "rubbery" look Aurora reported. It also
+    -- made yellow eyes impossible: the eyes rode body_mat, so their brightest achievable
+    -- value was 0.115. The panther now owns ch23_002.mesh + ch23_002.mdf2 with a purpose
+    -- built charcoal coat (std 0.049 on a 0.079 mean) and Emissive_Color1/2 patched gold
+    -- in the material itself. Leaving this on would double-darken a coat that is already
+    -- dark. It is inert anyway -- the table is keyed on ch23_001_* names and the panther's
+    -- materials are ch23_002_* now -- but inert-and-retrying every 60 frames is not free.
+    -- ⭐ BACK ON. Turned off when the panther briefly had its own ch23_002 material set;
+    -- that experiment is reverted (it never loaded), so this is once again the ONLY thing
+    -- that makes a panther black. See the PANTHER_MATERIALS note above.
+    recolour_panther_material = true,
+    -- ⭐ Prefer the panther's OWN ch23_002 material (real charcoal textures + gold iris +
+    -- baked yellow emissive) over the runtime BaseColor tint. Falls back to the tint
+    -- automatically if the pak is missing or the resource never streams, so turning the
+    -- pak off degrades to the old look rather than to a tawny panther.
+    panther_own_material = true,
 }
 
 local function load_config()
@@ -651,8 +715,129 @@ local function set_float4(mesh, material_index, variable_name, values)
     end)
 end
 
+-- Pin -> warm -> holder, mirroring IrisWildHorses.load_unicorn_resources.
+local function load_panther_mdf()
+    if S.pmdf_holder then return true end
+    if S.pmdf_failed then return false, S.pmdf_status end
+    if not S.pmdf_res then
+        pcall(function()
+            local res = sdk.create_resource("via.render.MeshMaterialResource",
+                PANTHER_MDF_PATH)
+            if res then
+                res:add_ref()
+                S.pmdf_res = res
+                S.pmdf_warm_at = os.clock()
+            end
+        end)
+        if not S.pmdf_res then
+            S.pmdf_failed = true
+            S.pmdf_status = "panther mdf2 resource NIL -- is the ch23_002 pak installed?"
+            report(S.pmdf_status)
+            return false, S.pmdf_status
+        end
+        S.pmdf_status = "panther mdf2 pinned; streaming"
+        report(S.pmdf_status)
+    end
+    local age = os.clock() - (S.pmdf_warm_at or 0)
+    if age < PANTHER_MDF_GATE then
+        S.pmdf_status = string.format("panther mdf2 streaming (%.0fs / %.0fs)",
+            age, PANTHER_MDF_GATE)
+        -- ⛔ "warming" IS NOT "failed" (Aurora: the first panther came out a recoloured
+        -- puma, a later one was correct). The caller MUST be able to tell them apart --
+        -- falling back to the BaseColor tint while the real material is still streaming
+        -- paints a body that is about to get the good material anyway.
+        return false, "warming"
+    end
+    local holder = nil
+    pcall(function()
+        holder = S.pmdf_res:create_holder("via.render.MeshMaterialResourceHolder")
+        if holder then holder:add_ref() end
+    end)
+    if not holder then
+        S.pmdf_failed = true
+        S.pmdf_status = "panther mdf2 holder build FAILED after warm gate"
+        report(S.pmdf_status)
+        return false, S.pmdf_status
+    end
+    S.pmdf_holder = holder
+    S.pmdf_status = "panther mdf2 loaded (ch23_002)"
+    report(S.pmdf_status)
+    return true
+end
+
+
+-- ⛔⛔ set_Material ON A LIVE MONSTER DANGLES app.EyeGlowController'S CACHED ACCESSORS and
+-- its next onUpdate is a c0000005. The controller is NOT a via component -- get_component
+-- sweeps can never find it -- it is a FIELD on the body's app.Monster. Neutralise it
+-- FIRST and leave it latched off (re-enabling re-caches against the layout that broke it).
+local function neutralise_eyeglow(game_object)
+    local done = "no app.Monster"
+    pcall(function()
+        local monster = game_object:call("getComponent(System.Type)",
+            sdk.typeof("app.Monster"))
+        if not monster then return end
+        local ctrl = monster:get_field("EyeGlowController")
+        if not ctrl then done = "Monster found, EyeGlowController field nil" return end
+        pcall(function() ctrl:call("resetController") end)
+        pcall(function() ctrl:call("set_IsInitialized", false) end)
+        pcall(function() ctrl:call("set_InitializeFailed", true) end)
+        done = "EyeGlowController latched off"
+    end)
+    return done
+end
+
+
+-- Swap the panther onto its OWN material. Returns true once a body is wearing ch23_002.
+local function apply_panther_mdf(character)
+    if not C.panther_own_material then return false, "disabled" end
+    local ok, why = load_panther_mdf()
+    if not ok then return false, why end
+    local swapped = false
+    pcall(function()
+        local game_object = character:get_GameObject()
+        local mesh = game_object and game_object:call("getComponent(System.Type)", mesh_type)
+        if not mesh then return end
+        neutralise_eyeglow(game_object)
+        local done = pcall(function() mesh:call("set_Material", S.pmdf_holder) end)
+        if done then
+            swapped = true
+            S.panther_mdf_swaps = (S.panther_mdf_swaps or 0) + 1
+            -- ⛔⛔ set_Material DOES NOT UNDO setMaterialFloat4 -- per-instance params live
+            -- on the material INSTANCE and survive re-assigning the resource (the single
+            -- most expensive law from the unicorn build). If this body was tinted by the
+            -- fallback before the real material arrived, that tint is STILL on it and
+            -- would double-darken an already-charcoal coat. Any revert must be explicit.
+            local count = tonumber(mesh:call("get_MaterialNum")) or 0
+            for mi = 0, count - 1 do
+                local mn = tostring(mesh:call("getMaterialName", mi) or "")
+                if PANTHER_MATERIALS[mn] then
+                    set_float4(mesh, mi, "BaseColor", {1.0, 1.0, 1.0, 1.0})
+                end
+            end
+        else
+            -- a throw here means the holder is hollow: drop it so the next retry builds a
+            -- fresh one from the now-cached resource. Retrying a hollow holder never works.
+            S.pmdf_holder, S.pmdf_failed = nil, false
+            S.pmdf_status = "panther set_Material threw; holder dropped for rebuild"
+        end
+    end)
+    return swapped
+end
+
+
 local function apply_panther_material(character)
     local writes = 0
+    -- ⭐ THE MATERIAL SWAP WINS WHEN IT IS AVAILABLE. Its textures are already charcoal
+    -- with a gold iris, so tinting BaseColor on top would only double-darken it.
+    local swapped, why = apply_panther_mdf(character)
+    if swapped then return 0, "mdf2" end
+    -- ⛔ AND WAIT RATHER THAN TINT WHILE IT STREAMS. Tinting during the warm gate is what
+    -- produced Aurora's "first panther was a recoloured puma, a later one was correct":
+    -- the fallback fired, painted the body, and the retry window then closed before the
+    -- real material was ready. Returning here leaves the body vanilla for a few seconds
+    -- and lets the retry land the genuine article.
+    if why == "warming" then return 0, "warming" end
+    if not C.recolour_panther_material then return 0, "off" end
     pcall(function()
         local game_object = character:get_GameObject()
         local mesh = game_object and game_object:call("getComponent(System.Type)", mesh_type)
@@ -820,9 +1005,24 @@ local function refresh_cats(source_limit)
         if item then
             visible_panthers = visible_panthers + 1
             record.last_seen = frame
-            if frame - record.first_frame <= 480 and frame - record.last_apply >= 60 then
-                local writes = apply_panther_material(item.character)
-                if writes > 0 then
+            -- ⛔⛔ 480 FRAMES IS 8 SECONDS AND THE MATERIAL WARM GATE IS 15. The retry
+            -- window used to close BEFORE ch23_002.mdf2 could possibly be ready, so the
+            -- first panther of a session was permanently stuck on whatever the fallback
+            -- had painted. 1800 frames (30 s) clears the gate with room to spare.
+            if not record.done
+                and frame - record.first_frame <= 1800
+                and frame - record.last_apply >= 60 then
+                local writes, mode = apply_panther_material(item.character)
+                -- ⭐ REMEMBER WHICH ROUTE EACH BODY ACTUALLY GOT (Aurora: "I can't tell if
+                -- the panther is the actual mesh or a coloured puma"). She should never
+                -- have to judge that by eye -- the two look deliberately similar. Once a
+                -- body is on ch23_002 it is done: stop re-applying so a later retry cannot
+                -- paint a tint over a material that is already correct.
+                record.mode = mode or record.mode
+                if mode == "mdf2" then
+                    record.last_apply = frame
+                    record.done = true
+                elseif writes > 0 then
                     record.last_apply = frame
                     record.applies = record.applies + 1
                     S.panther_material_writes = (S.panther_material_writes or 0) + writes
@@ -833,6 +1033,43 @@ local function refresh_cats(source_limit)
         end
     end
     S.panther_targets = visible_panthers
+    -- tally which route the LIVE panthers are actually wearing, for the panel
+    local n_mdf, n_tint, n_warm = 0, 0, 0
+    for _, record in pairs(S.panther_seen) do
+        if record.mode == "mdf2" then n_mdf = n_mdf + 1
+        elseif record.mode == "warming" then n_warm = n_warm + 1
+        elseif record.mode then n_tint = n_tint + 1 end
+    end
+    S.panther_modes = string.format("%d on ch23_002 | %d on tint | %d warming",
+        n_mdf, n_tint, n_warm)
+
+    -- ⭐ DUMP THE VOCAL-HOOK COUNTERS TO DISK. Aurora should not have to transcribe a
+    -- debug line off a screenshot for me -- she plays, the file records, I read it. Every
+    -- ~5 s, cheap, and it survives the session so a howl heard once is still evidence.
+    if (S.frame % 300) == 0 then
+        pcall(function()
+            local dg = A.dbg or {}
+            json.dump_file("IrisWildCats_audio.json", {
+                seen = dg.seen or 0,
+                no_vocal_id = dg.no_vocal_id or 0,
+                last_miss_id = dg.last_miss_id or 0,
+                no_cat = dg.no_cat or 0,
+                last_owner = tostring(dg.last_owner or "-"),
+                replaced = dg.replaced or 0,
+                suppressed = A.suppressed or 0,
+                catalogue_ids = A.vocal_ids and (function()
+                    local c = 0
+                    for _ in pairs(A.vocal_ids) do c = c + 1 end
+                    return c
+                end)() or -1,
+                audio_status = tostring(S.audio_status or "-"),
+                trigger_method_ok = S.trigger_method_ok == true,
+                trigger_hook_ok = S.trigger_hook_ok == true,
+                cats_visible = (S.puma_targets or 0) + visible_panthers,
+                replace_enabled = C.replace_wolf_vocals == true,
+            })
+        end)
+    end
     S.known_character_addresses = current_addresses
 
     -- Registry contract: every visible Redwolf A IS a puma (the chassis mesh
@@ -1066,11 +1303,17 @@ end
 -- Wolf vocal trigger ids: enumerated at runtime from the cat's own inherited
 -- catalogue, restricted to USER lists whose path contains "_vo" — vocals
 -- only, so native footsteps and effects stay untouched.
-local function ensure_vocal_ids(cat)
-    if A.vocal_ids then return A.vocal_ids end
+-- ⛔⛔ HARVEST FROM EVERY CAT AND **MERGE** -- DO NOT FREEZE ON THE FIRST ONE.
+-- (Aurora: "pumas are using the wolf sounds, panthers are using cat sounds".) The
+-- catalogue used to cache whichever cat vocalised first and never look again, so if the
+-- two variants do not share every vocal trigger id, only the first type ever matched. The
+-- counters named it: after the gate reorder `no_vocal_id` counts ONLY cats whose id is
+-- absent from the catalogue, and it sat at 42 while panthers worked perfectly.
+-- Merging is also self-healing -- any future variant harvests itself on its first miss.
+local function harvest_vocal_ids(cat)
     local wwise = get_component(cat, "app.WwiseContainerApp")
-    if not wwise then return nil end
-    local found = {}
+    if not wwise then return A.vocal_ids end
+    local found = A.vocal_ids or {}
     local total = 0
     pcall(function()
         local user_data = wwise._UserDataList
@@ -1099,10 +1342,19 @@ local function ensure_vocal_ids(cat)
             end
         end
     end)
-    if total == 0 then return nil end
+    if total == 0 then return A.vocal_ids end
     A.vocal_ids = found
-    report("cat vocal catalogue: " .. tostring(total) .. " trigger ids")
+    local grand = 0
+    for _ in pairs(found) do grand = grand + 1 end
+    A.vocal_id_count = grand
+    report(string.format("cat vocal catalogue: +%d new ids (%d total)", total, grand))
     return found
+end
+
+
+local function ensure_vocal_ids(cat)
+    if A.vocal_ids then return A.vocal_ids end
+    return harvest_vocal_ids(cat)
 end
 
 local function native_template_for(target)
@@ -1388,6 +1640,39 @@ local function registered_cat_ancestor(game_object)
         if record and (record.kind == "puma" or record.kind == "panther") then
             return current
         end
+        -- ⛔⛔ THE REGISTRY IS NOT AUTHORITATIVE FOR PUMAS. Panthers are recorded at
+        -- CONVERSION time (S.panther_seen), but a puma only ever enters REGISTRY if the
+        -- world scan happens to catch it -- and the panel routinely reads "Detected: none"
+        -- while a puma is stood in front of you. That asymmetry is precisely why pumas
+        -- kept their wolf vocals while panthers sounded right: the counter caught the body
+        -- being turned away with `no_cat 513 (last owner ch223001_00)` -- rejecting the
+        -- puma chassis BY NAME. The GameObject name carries the chassis id, so trust it
+        -- directly rather than depending on a scan that may never have run.
+        local name = nil
+        pcall(function() name = tostring(current:call("get_Name") or "") end)
+        local by_name = nil
+        if name and name:find(PANTHER_NAME, 1, true) then
+            by_name = "panther"
+        elseif name and name:find(PUMA_NAME, 1, true) then
+            by_name = "puma"
+        end
+        if by_name then
+            -- ⭐ ADOPT IT INTO THE REGISTRY, don't just wave it through. Returning the
+            -- GameObject alone made the puma MUTE rather than wolf-voiced: the hook
+            -- suppressed the wolf vocal, then asked cat_state_for() for the per-cat state
+            -- that decides which cat sound to queue -- and S.cats is only ever populated
+            -- by update_cat(), which iterates REGISTRY. No record, no state, no
+            -- replacement, silence. Registering here fixes every REGISTRY consumer for
+            -- pumas at once (speed tracking, vocal category, HP/death), not just audio.
+            if address and not REGISTRY[address] then
+                REGISTRY[address] = {
+                    kind = by_name,
+                    game_object = current,
+                    marked_at = os.clock(),
+                }
+            end
+            return current
+        end
         local parent_go = nil
         pcall(function()
             local transform = current:call("get_Transform")
@@ -1485,8 +1770,22 @@ local trigger_method = sdk.find_type_definition("app.WwiseContainerApp")
 local trigger_hook_installed = false
 local function install_trigger_hook()
     -- (08-13: stood down during the mount-CTD hunt and EXONERATED. Restored.)
-    if trigger_hook_installed or not trigger_method then return end
+    -- ⭐ Record the state where the DUMP can see it. `trigger_method` is a file-local
+    -- declared far below the sweep that writes IrisWildCats_audio.json, so referencing it
+    -- there would silently resolve to a nil GLOBAL -- and "hook never installed" would be
+    -- indistinguishable from "hook installed but never fired". They need completely
+    -- different fixes, so the dump must be able to tell them apart.
+    S.trigger_method_ok = trigger_method ~= nil
+    if trigger_hook_installed or not trigger_method then
+        S.trigger_hook_ok = false
+        return
+    end
     trigger_hook_installed = true
+    S.trigger_hook_ok = true
+    -- ⛔ DISCARD ANY CACHED CATALOGUE AT ARM. `A` lives in _G and survives a script
+    -- reload, so a catalogue learned from the wrong chassis would outlive the very fix
+    -- for it -- and the symptom (wolf sounds continuing) is identical either way.
+    A.vocal_ids = nil
     sdk.hook(trigger_method, function(args)
         if S.generation ~= GENERATION then return end
         if not (C.enabled and C.replace_wolf_vocals) then return end
@@ -1500,8 +1799,53 @@ local function install_trigger_hook()
         pcall(function()
             trigger_id = normal_u32(request:call("get_TriggerId")) or 0
         end)
-        local vocal_ids = ensure_vocal_ids(owner)
-        if not (vocal_ids and vocal_ids[trigger_id]) then return end
+        -- ⭐ WHY-COUNTERS. Posting demonstrably works (the panel test plays pain_03) yet
+        -- "vocals replaced: 0" in the field, so the hook is being turned away at one of
+        -- exactly two gates. Counting them costs nothing and ends the guessing: if
+        -- no_vocal_id dominates, the catalogue never learned this wolf's VO trigger ids;
+        -- if no_cat dominates, the sound's owner GameObject is not resolving back to a
+        -- registered cat (the container's owner is often a CHILD of the character).
+        A.dbg = A.dbg or {seen = 0, no_vocal_id = 0, no_cat = 0, replaced = 0}
+        A.dbg.seen = A.dbg.seen + 1
+        -- ⛔⛔⛔ RESOLVE THE CAT **BEFORE** BUILDING THE VOCAL CATALOGUE. This hook fires
+        -- for EVERY Wwise trigger in the game, and ensure_vocal_ids() caches the FIRST
+        -- non-empty result GLOBALLY. Called with the raw sound owner it therefore learned
+        -- whichever creature happened to vocalise first -- the field counters caught it
+        -- red-handed: 72 sounds owned by `ch299420_A_00_1` sailed through the vocal-id
+        -- gate, which is only possible if the cached ids belong to THAT chassis. Real wolf
+        -- vocals on cats then never matched, so `replaced` sat at 1 instead of hundreds.
+        -- Gate on "is this a cat" first, and the catalogue can only ever be a cat's.
+        local cat = nil
+        local mounted_audio = rawget(_G, "__iris_rodeo_mounted_cat_audio_owner")
+        if mounted_audio then
+            pcall(function() cat = mounted_audio(owner, container) end)
+        end
+        if not cat then cat = registered_cat_ancestor(owner) end
+        if not cat then
+            A.dbg.no_cat = A.dbg.no_cat + 1
+            pcall(function()
+                A.dbg.last_owner = tostring(owner and owner:call("get_Name") or "nil")
+            end)
+            return
+        end
+
+        local vocal_ids = ensure_vocal_ids(cat)
+        if not (vocal_ids and vocal_ids[trigger_id]) then
+            -- ⭐ SELF-HEAL: a miss ON A CAT means the catalogue has never seen THIS cat's
+            -- bank -- which is exactly how pumas ended up on wolf sounds while panthers
+            -- were fine. Re-harvest from this animal and merge, throttled so a genuinely
+            -- non-vocal id cannot spin the bank walk every frame.
+            if os.clock() >= (A.next_harvest or 0) then
+                A.next_harvest = os.clock() + 1.0
+                vocal_ids = harvest_vocal_ids(cat)
+            end
+            if not (vocal_ids and vocal_ids[trigger_id]) then
+                A.dbg.no_vocal_id = A.dbg.no_vocal_id + 1
+                A.dbg.last_miss_id = trigger_id
+                return
+            end
+        end
+        A.dbg.replaced = A.dbg.replaced + 1
 
         -- Learn the semantic howl ID from the only reliable evidence: a VO
         -- request fired while layer 0 is playing the atlas-verified howl clips.
@@ -1519,18 +1863,17 @@ local function install_trigger_hook()
             A.wolf_howl_heard_at = os.clock()
         end
 
-        local cat = nil
-        local mounted_audio = rawget(_G,
-            "__iris_rodeo_mounted_cat_audio_owner")
-        if mounted_audio then
-            pcall(function() cat = mounted_audio(owner, container) end)
-        end
-        if not cat then cat = registered_cat_ancestor(owner) end
-        if not cat then return end
-
         local state = cat_state_for(cat)
         if state and state.death_played then
             return sdk.PreHookResult.SKIP_ORIGINAL
+        end
+        -- ⛔ NO STATE YET = A SILENT CAT. update_cat only builds the per-cat state on the
+        -- next sweep after the body is registered, so the very first vocal of a freshly
+        -- adopted puma would be suppressed with nothing queued in its place. Queue a
+        -- sensible default instead -- a muted cat is worse than a slightly generic growl.
+        if not state and os.clock() >= (A.next_orphan_vocal or 0) then
+            A.next_orphan_vocal = os.clock() + 2.0
+            A.pending_vocals[#A.pending_vocals + 1] = {cat = cat, category = "growl"}
         end
         if state and os.clock() > (state.next_vocal or 0) then
             state.next_vocal = os.clock() + 2.0
@@ -1763,6 +2106,12 @@ re.on_application_entry("UpdateBehavior", function()
             install_hooks_once()
         else
             report("arm step 5: frame work live -- sweeps OFF, phasing in")
+            -- ⭐ WARM THE PANTHER MATERIAL AT BOOT, NEVER LAZILY ON THE FIRST PANTHER.
+            -- Exactly the unicorn's law: cold create_resource is async, so the 15 s stream
+            -- gate has to be paid by SOMETHING. Paying it here, minutes before any cat
+            -- spawns, means the first panther is instant instead of arriving vanilla and
+            -- waiting for a retry.
+            pcall(function() load_panther_mdf() end)
             S.sweep_source = 0
             WORLD_ARMED = true
         end
@@ -1950,6 +2299,60 @@ re.on_draw_ui(function()
         imgui.text("Resources: puma "
             .. tostring(resource_ready(S.puma_resource))
             .. " | panther " .. tostring(resource_ready(S.panther_resource)))
+        local dg = A.dbg or {}
+        imgui.text(string.format(
+            "Vocal hook: seen %d | no_vocal_id %d (last %s) | no_cat %d (last owner %s)"
+            .. " | replaced %d | catalogue %d ids",
+            dg.seen or 0, dg.no_vocal_id or 0, tostring(dg.last_miss_id or "-"),
+            dg.no_cat or 0, tostring(dg.last_owner or "-"), dg.replaced or 0,
+            A.vocal_id_count or 0))
+        imgui.text("Panther material: " .. tostring(S.pmdf_status or "not requested")
+            .. " | swaps " .. tostring(S.panther_mdf_swaps or 0))
+        imgui.text("Live panthers: " .. tostring(S.panther_modes or "none tracked"))
+        imgui.text("  staging error: puma "
+            .. tostring(S.puma_resource and S.puma_resource.error or "none")
+            .. " | panther "
+            .. tostring(S.panther_resource and S.panther_resource.error or "none"))
+
+        -- ⛔ THE PANTHER CHASSIS HAS NEVER LOADED SINCE ITS PREFAB WAS REDIRECTED TO
+        -- ch23_002 (2026-08-15). get_Ready alone cannot say WHICH referenced resource is
+        -- refusing, so stop guessing and ask the engine directly: probe every path the
+        -- redirected prefab depends on, with the working ch23_001 set as the control. If
+        -- the ch23_002 mesh/mdf2 resolve but the prefab still will not ready, the fault is
+        -- inside the prefab patch; if they do not resolve, it is the pak/paths.
+        if imgui.button("PROBE: ch23_002 resource resolution") then
+            local out = {}
+            local function probe(kind, path)
+                local res = nil
+                local ok, err = pcall(function()
+                    res = sdk.create_resource(kind, path)
+                end)
+                out[#out + 1] = path:match("[^/]+$") .. "="
+                    .. (res and "OK" or (ok and "nil" or "throw"))
+            end
+            probe("via.render.MeshResource", "character/ch/ch23_001/ch23_001.mesh")
+            probe("via.render.MeshResource", "character/ch/ch23_002/ch23_002.mesh")
+            probe("via.render.MeshResource", "character/ch/ch23_002/ch23_002.mdf2")
+            probe("via.Prefab", "AppSystem/ch/ch223/prefab/ch223001_00.pfb")
+            probe("via.Prefab", "AppSystem/ch/ch223/prefab/ch223001_01.pfb")
+            -- and a FRESH prefab instance, in case the one staged at load is just stale
+            local fresh_ready = "n/a"
+            pcall(function()
+                local p = sdk.create_instance("via.Prefab")
+                if p then
+                    p:add_ref()
+                    p:set_Path("AppSystem/ch/ch223/prefab/ch223001_01.pfb")
+                    p:call("set_Standby", true)
+                    fresh_ready = tostring(p:call("get_Ready"))
+                end
+            end)
+            S.probe_status = table.concat(out, " | ") .. "  || fresh panther prefab ready="
+                .. fresh_ready
+            report("PROBE: " .. tostring(S.probe_status))
+        end
+        if S.probe_status then
+            imgui.text("Probe: " .. tostring(S.probe_status))
+        end
         if imgui.button("Test: growl on PLAYER (target discriminator)") then
             local player_go = nil
             pcall(function()

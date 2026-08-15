@@ -482,60 +482,83 @@ local function _set_foliage_visibility(comp, index, visible)
     end)
 end
 
-local function _till_clear(cx, cz, radius, into)
-    -- phase A: cull by instance-0 proxy. A patch can sprawl, so the margin stays generous -
-    -- the expensive part is now spread over ticks rather than thrown away.
-    local near, comps = {}, 0
+local function _till_clear(cx, cz, radius, into, bed)
+    -- Never retain via.landscape.Foliage proxies here. They are streaming-owned
+    -- native objects, and a managed wrapper can remain truthy after its patch is
+    -- destroyed. The old near[] list was exactly the pointer lifetime that
+    -- crashed getWorldPosition while Aurora rode away from the homestead.
+    clear_jobs[#clear_jobs + 1] = {
+        cx = cx, cz = cz, r2 = radius * radius, radius = radius,
+        ci = 0, ii = 0, into = into, bed = bed,
+        hid = 0, comps = 0, near_count = 0, current_near = nil,
+    }
+    if bed then bed.clearing = true end
+    return 0   -- ⚠ the count is no longer known synchronously; the job logs its own total
+end
+
+-- Phase B reacquires the scene array every tick. Cursor indices may repeat if a
+-- patch streams during a clear, which is harmless; a stale native pointer is not.
+local function _pump_till_clears()
+    local job = clear_jobs[1]
+    if not job then return end
+    -- Farming foliage has no business following a mount through world streaming.
+    -- Cancel cleanly; the mound's next bind near home queues a fresh pass.
+    if rawget(_G, "IrisRiddenNow") == true then
+        if job.bed then job.bed.clearing = false end
+        table.remove(clear_jobs, 1)
+        return
+    end
+    local arr, comps = nil, 0
     pcall(function()
         local smgr = sdk.get_native_singleton("via.SceneManager")
-        local scene = smgr and sdk.call_native_func(smgr, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
-        local arr = scene and scene:call("findComponents(System.Type)", sdk.typeof("via.landscape.Foliage"))
-        local n = arr and arr:get_size() or 0
-        comps = tonumber(n) or 0
-        local near2 = (radius + 200.0) * (radius + 200.0)
-        for ci = 0, comps - 1 do
-            local c = arr:get_element(ci)
-            if c then
-                local cnt = 0
-                pcall(function() cnt = tonumber(c:call("get_InstanceCount")) or 0 end)
-                if cnt > 0 then
-                    local p0
-                    pcall(function() p0 = c:call("getWorldPosition", 0) end)
-                    if p0 then
-                        local dx, dz = p0.x - cx, p0.z - cz
-                        if dx * dx + dz * dz <= near2 then near[#near + 1] = { comp = c, cnt = cnt } end
+        local scene = smgr and sdk.call_native_func(smgr,
+            sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+        arr = scene and scene:call("findComponents(System.Type)",
+            sdk.typeof("via.landscape.Foliage")) or nil
+        comps = tonumber(arr and arr:get_size() or 0) or 0
+    end)
+    if not arr then return end
+    job.comps = math.max(tonumber(job.comps) or 0, comps)
+    local budget = 0
+    local near2 = (job.radius + 200.0) * (job.radius + 200.0)
+    while job.ci < comps and budget < CLEAR_SCAN_BUDGET do
+        local comp = arr:get_element(job.ci)
+        local cnt = 0
+        if comp then
+            pcall(function() cnt = tonumber(comp:call("get_InstanceCount")) or 0 end)
+        end
+        if job.current_near == nil then
+            job.current_near = false
+            if comp and cnt > 0 then
+                local p0 = nil
+                pcall(function()
+                    p0 = comp:call("getWorldPosition(System.UInt32)", 0)
+                end)
+                if p0 then
+                    local dx, dz = p0.x - job.cx, p0.z - job.cz
+                    job.current_near = dx * dx + dz * dz <= near2
+                    if job.current_near then
+                        job.near_count = (tonumber(job.near_count) or 0) + 1
                     end
                 end
             end
         end
-    end)
-    clear_jobs[#clear_jobs + 1] = { cx = cx, cz = cz, r2 = radius * radius, radius = radius,
-                                    near = near, ci = 1, ii = 0, into = into, hid = 0, comps = comps }
-    return 0   -- ⚠ the count is no longer known synchronously; the job logs its own total
-end
-
--- phase B: walk the culled patches over as many ticks as it takes, hiding what falls in radius.
-local function _pump_till_clears()
-    local job = clear_jobs[1]
-    if not job then return end
-    local budget = 0
-    while job.ci <= #job.near and budget < CLEAR_SCAN_BUDGET do
-        local e = job.near[job.ci]
-        if job.ii >= e.cnt then
-            job.ci, job.ii = job.ci + 1, 0
+        if not job.current_near or job.ii >= cnt then
+            job.ci, job.ii, job.current_near = job.ci + 1, 0, nil
         else
             pcall(function()
-                local wp = e.comp:call("getWorldPosition", job.ii)
+                local wp = comp:call("getWorldPosition(System.UInt32)", job.ii)
                 if wp then
                     local dx, dz = wp.x - job.cx, wp.z - job.cz
                     if dx * dx + dz * dz <= job.r2 then
                         -- only hide what's currently VISIBLE, so a re-assert can't double-record
                         -- an instance and the restore stays truthful
                         local vis
-                        pcall(function() vis = e.comp:call("getVisibility", job.ii) end)
+                        pcall(function() vis = comp:call("getVisibility", job.ii) end)
                         if vis ~= false then
-                            if _set_foliage_visibility(e.comp, job.ii, false) then
-                                job.into[#job.into + 1] = { comp = e.comp, i = job.ii, x = wp.x, z = wp.z }
+                            if _set_foliage_visibility(comp, job.ii, false) then
+                                -- Position-only receipt. Never retain comp/i.
+                                job.into[#job.into + 1] = { x = wp.x, z = wp.z }
                                 job.hid = job.hid + 1
                             end
                         end
@@ -546,29 +569,22 @@ local function _pump_till_clears()
             budget = budget + 1
         end
     end
-    if job.ci > #job.near then
+    if job.ci >= comps then
         _log(string.format("foliage clear: %d hidden within %.1fm (%d patch(es) near, %d component(s) in scene)",
-            job.hid, job.radius, #job.near, job.comps))
+            job.hid, job.radius, tonumber(job.near_count) or 0, job.comps))
+        if job.bed then
+            job.bed.clearing = false
+            job.bed.last_clear_at = os.clock()
+        end
         table.remove(clear_jobs, 1)
     end
 end
 local _reassert_at = 0.0
 local function _reassert_tilled()
-    if os.clock() - _reassert_at < 1.5 then return end
-    _reassert_at = os.clock()
-    for _, b in ipairs(beds) do
-        for _, h in ipairs(b.hidden or {}) do
-            pcall(function()
-                local wp = h.comp:call("getWorldPosition", h.i)
-                if wp then
-                    local dx, dz = wp.x - h.x, wp.z - h.z
-                    if dx * dx + dz * dz <= 1.0 then
-                        _set_foliage_visibility(h.comp, h.i, false)
-                    end
-                end
-            end)
-        end
-    end
+    -- Retired 08-14. This 1.5-second pass dereferenced foliage proxies saved
+    -- before world streaming and produced the exact repeating AV burst in the
+    -- crash dump. Bed/mound streaming now queues a fresh-object clear instead.
+    return
 end
 
 -- ── prop spawn (mirrored from IrisFurnish: GenerateManager, setInitialAngle ONLY) ──────────
@@ -1146,7 +1162,8 @@ local function _spawn_mound_mesh(b)
     -- job per frame until the first one finished - hundreds of duplicate scans.
     if #b.hidden == 0 and not b.clearing then
         b.clearing = true
-        _till_clear(b.ux - d.x, b.uz - d.z, M.till_clear or 1.3, b.hidden)
+        _till_clear(b.ux - d.x, b.uz - d.z,
+            M.till_clear or 1.3, b.hidden, b)
         _log(string.format("bed at (%.0f,%.0f): foliage clear queued on spawn", b.ux, b.uz))
     end
     return true
@@ -1962,7 +1979,10 @@ local function do_till(how)
     local bed = { ux = ux, uy = uy, uz = uz, plot = plot.name, yaw = yaw,
         crop = nil, grown = 0, dry = 0, missed = 0, hidden = {}, lift = snap_lift }
     -- clear the growth in RENDER space (foliage lives there), leaving bare earth
-    if d then _till_clear(ux - d.x, uz - d.z, M.till_clear or 1.3, bed.hidden) end
+    if d then
+        _till_clear(ux - d.x, uz - d.z,
+            M.till_clear or 1.3, bed.hidden, bed)
+    end
     beds[#beds + 1] = bed
     _save()
     _log(string.format("tilled a bed at (%.1f,%.1f) yaw %.0f%s - %d foliage cleared",

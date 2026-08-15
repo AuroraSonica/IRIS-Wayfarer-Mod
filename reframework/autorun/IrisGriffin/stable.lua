@@ -400,6 +400,12 @@ function griffin_tamed_save()
 end
 function griffin_tamed_tick()
     if S.world_paused == true then return false end
+    -- ⭐⭐⭐ FERAL TEST: hands off (08-15). This tick carries the calm burst (clear_griffin_targets
+    -- + hate scrub every 0.5s), the scale easer and the companion maintenance -- i.e. a large part
+    -- of what keeps her a controlled shell, re-asserted every frame. A test that only flips config
+    -- flags while this keeps running is not the test Aurora asked for ("turn off EVERYTHING that
+    -- makes her a tamed creature"). Stand the whole thing down so the experiment is honest.
+    if rawget(_G, "IrisFeralTest") == true then return false end
     local now = os.clock()
     -- WORLD-READY GATE: on_frame keeps running during load screens, and
     -- touching the character list or spawning there crashes natively.

@@ -46,6 +46,14 @@ Copy-Into "$live\rs_tools\iris_pak\IRIS_HorseJumpPack_FluffyMod.zip"        $pkg
 Copy-Into "$live\rs_tools\iris_pak\IRIS_HorseRitualPack_FluffyMod.zip"      $pkg
 Copy-Into "$live\rs_tools\unicorn_pak\IRIS_Unicorn_v1.3_FluffyMod.zip"      $pkg
 Copy-Into "$live\rs_tools\pegasus_pak\IRIS_Pegasus_v0.1_FluffyMod.zip"      $pkg
+# ⭐ the lioness/panther build is VERSION-STAMPED (IRIS_LionessPanther_v<ver>_<stamp>_...)
+# so it cannot be named literally here without going stale on every rebuild. Take the
+# newest one and drop any older copy, otherwise the repo accumulates one zip per build.
+Get-ChildItem (Join-Path $pkg "IRIS_LionessPanther_*_FluffyMod.zip") -EA SilentlyContinue |
+    Remove-Item -Force
+$lion = Get-ChildItem "$live\rs_tools\lioness_build\IRIS_LionessPanther_*_FluffyMod.zip" `
+    -EA SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($lion) { Copy-Into $lion.FullName $pkg }
 
 # ── 4. BUILD TOOLING + REFERENCE DATA ───────────────────────────────────────────
 Copy-Into "$live\rs_tools\iris_pak\*.py"  (Join-Path $repo "tools\iris_pak")

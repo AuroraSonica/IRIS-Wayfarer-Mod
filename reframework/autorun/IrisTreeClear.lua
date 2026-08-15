@@ -23,8 +23,12 @@ local MIN_H = 4.0
 -- remaining plot trunks invisible while we lack a safe per-instance collision API.
 -- Keep the global/shared collider untouched and hide only the plot render instances.
 -- Game restart restores all runtime foliage state.
-local M = { last = "(idle)", radius = 25.0, chop_watch = true, trunk_kill = false,
-    zone_foliage_hide = true }
+-- DISABLED 08-14 by design. Runtime mutation of streamed SpeedTree instances
+-- (visibility, scale and collision) costs too much and cannot be made safe with
+-- retained Lua wrappers. A game restart restores every runtime tree naturally.
+local M = { enabled = false, last = "disabled: streamed trees are left native",
+    radius = 25.0, chop_watch = false, trunk_kill = false,
+    zone_foliage_hide = false }
 local ledger = nil
 local seen = {}        -- [addr] = { name, ux, uy, uz, at, missing }  (chop presence-diff)
 local pass_at = 0.0
@@ -227,7 +231,7 @@ end
 -- are destroyed on sight; each foliage SpeedTree inside it is removed by exact instance
 -- id. Never split visibility from collision: foliage colliders are shared by model and
 -- cannot safely be toggled for one tree.
-M.zone_on = M.zone_on ~= false
+M.zone_on = false
 M.zone_radius = 45.0
 local ZONE_REG_FILE = "IRIS/iris_tree_comps.json"
 local zone = { cache = {}, scanned = false, active = false,
@@ -400,6 +404,7 @@ _G.IrisTreeClear = {
     -- IrisWoodcutting calls this at every wild-tree fell (render coords in). Only the
     -- configured radius of an owned plot qualifies; "near the homestead" is not enough.
     record_foliage_fell = function(rx, ry, rz)
+        if M.enabled ~= true then return false end
         _load()
         local rp, d = _player()
         if not (rp and d) then return false end
@@ -427,6 +432,7 @@ _G.IrisTreeClear = {
     end,
     -- IrisWoodcutting's target scan asks before offering a spot as choppable (render in)
     is_perm_felled = function(rx, rz)
+        if M.enabled ~= true then return false end
         _load()
         local rp, d = _player()
         if not (rp and d) then return false end
@@ -444,6 +450,7 @@ _G.IrisTreeClear = {
     end,
     -- fell + ledger every known tree within r of universal (ux, uz); returns count
     clear_at = function(ux, uz, r)
+        if M.enabled ~= true then return 0 end
         _load()
         local rp, d = _player()
         if not (rp and d) then return 0 end
@@ -470,6 +477,7 @@ _G.IrisTreeClear = {
 }
 
 re.on_application_entry("UpdateBehavior", function()
+    if M.enabled ~= true then return end
     if clear_pending then
         clear_pending = false
         local rp, d = _player()
@@ -742,20 +750,7 @@ end)
 
 re.on_draw_ui(function()
     if not imgui.tree_node("IRIS Tree Clear (the homestead stays clear)") then return end
-    _load()
-    imgui.text(M.last)
-    imgui.text("known tree ids: gm80_109, gm80_110 (survey more biomes to grow the list)")
-    local c
-    imgui.separator()
-    c, M.zone_on = imgui.checkbox("TREELESS PLOTS: every owned plot destroys ALL its trees, forever##itc_zone", M.zone_on ~= false)
-    c, M.zone_radius = imgui.slider_float("treeless radius around each plot (m)##itc_zr", tonumber(M.zone_radius) or 45.0, 15.0, 90.0)
-    if imgui.button("rescan the zone now##itc_zs") then
-        zone.scanned = false
-        zone.cache = {}
-        zone.apply_i = 1
-        zone.gimmick_done = false
-    end
-    imgui.text("zone: " .. tostring(#(zone.cache or {})) .. " tree instance(s) held invisible; panel status reports verified shrink")
-    imgui.text("Tree removal is clamped to the owned-plot radius; the old loose PIN/CLEAR routes are retired.")
+    imgui.text("Disabled: homestead trees and their native collision are left untouched.")
+    imgui.text("Reason: streamed SpeedTree mutation caused hitches and unsafe stale pointers.")
     imgui.tree_pop()
 end)
