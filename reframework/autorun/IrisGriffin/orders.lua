@@ -180,7 +180,21 @@ function griffin_recall()
     status(tostring(C.route3_griffin_name or "Companion") .. " returns to your side")
     return true
 end
+-- Aurora's explicit ask: "a stop command that does it early". Every existing stand-down path
+-- (the Stay button, the stay hotkey, recall) already funnels through griffin_order_disengage.
+function griffin_order_stop(reason)
+    if griffin_combat_lease_active() then
+        return griffin_combat_lease_end(reason or "ordered")
+    end
+    return false
+end
+
 function griffin_order_disengage(reason)
+    -- End the lease FIRST, then fall through to the normal stand-down. Returning early here would
+    -- skip the aerial clear / pacify / animation stop that every other disengage path performs.
+    if griffin_combat_lease_active() then
+        pcall(function() griffin_combat_lease_end(reason or "ordered") end)
+    end
     S.companion_order = "stay"
     S.companion_target = nil
     S.companion_target_go = nil
@@ -217,6 +231,239 @@ function griffin_order_disengage(reason)
     status(tostring(C.route3_griffin_name or "Companion") .. " stands down" .. (reason and (" - " .. reason) or ""))
     return true
 end
+-- ⭐⭐ PASSIVE SPECIES (2026-08-14, Aurora: "we need to disable the attack command for what
+-- would be considered passive creatures"). A rabbit or a hen has no business being ordered at a
+-- goblin, and a doe/horse is prey, not a fighter.
+-- ⛔ BLOCKLIST, NOT AN ALLOWLIST -- deliberately, and for the same reason the kick's heavy list
+-- is one: an unrecognised creature should default to ABLE (Aurora: "majority of the time you'll
+-- want the creature to attack whatever enemies it can"), so a newly tamed species works on the
+-- day it is tamed instead of silently refusing until someone remembers to whitelist it.
+-- ⚠ Matched by chassis PREFIX against the body's GameObject name, the same way the rodeo's
+-- heavy-target list matches -- so ch299011_A_00 and ch299011_B_01 both hit the ch299011 entry.
+function griffin_species_is_passive(go)
+    if not go then return false, nil end
+    local bands = tostring(C.route3_attack_passive_bands or "")
+    if bands == "" then return false, nil end
+    local nm = tostring(go_name(go) or "")
+    if nm == "" then return false, nil end
+    for band in bands:gmatch("[^,%s]+") do
+        if nm:find(band, 1, true) then return true, band end
+    end
+    return false, nil
+end
+
+-- ⭐⭐⭐ THE COMBAT LEASE (2026-08-15). Aurora: "give her the AI back to attack without attacking
+-- us, then when enemies are dead return to the original state, and a stop command that does it
+-- early." Enter = become what a wild griffin IS. Exit = change back, exactly.
+-- ⛔ Everything here is a MEASURED difference, not a guess. Census vs a live cyclops and a live
+-- goblin proved her body is structurally complete; the only gaps are the wild group hash and three
+-- disabled components. Aurora's own field observation ("griffins hunt goblins in Battahl") is what
+-- says we need no relationship override: give her the wild identity and the hunt is native.
+function griffin_combat_lease_active()
+    return type(S.route3_combat_lease) == "table"
+end
+
+function griffin_combat_lease_start(target)
+    if C.route3_lease_enabled == false then return false end
+    if griffin_combat_lease_active() then return true end
+    local gch, go = reacquire_griffin()
+    if not (gch and go and target) then return false end
+    local tgo = char_go(target)
+    if not tgo then return false end
+    local lease = { started = os.clock(), target = target, target_go = tgo,
+                    last_seen = os.clock() }
+    -- SNAPSHOT FIRST, and only then touch anything -- a lease that cannot restore is a one-way
+    -- door, and this one moves her off the party faction.
+    lease.prior_components = griffin_wake_combat_components(true, gch)
+    -- ⭐ THE IDENTITY. Copy the faction box straight off the body she is about to fight: it is a
+    -- guaranteed-live monster group (measured 1895570358 for goblin, cyclops AND her own stashed
+    -- wild value), which beats trusting S.route3_ally_orig -- memory records that stash can be
+    -- poisoned with the party hash on reclaim.
+    -- ⛔ THIS IS THE CRASH FIX. All three CTDs were party-group + kind 8 = a battle group the
+    -- engine cannot represent. Wild group + kind 8 is what every monster in Battahl already is.
+    lease.group_set = griffin_group_copy_from(gch, target)
+    -- publish BEFORE the fight starts: ownership, friendly-fire and downed all key on this while
+    -- she is off-party (see griffin_body_is_ours).
+    pcall(function() rawset(_G, "IrisCombatLeaseAddr", go:get_address()) end)
+    -- ⭐⭐⭐ THE LIFECYCLE RESET, and it must come AFTER the identity is in place so the state
+    -- machine restarts as the thing she now is. Taming set_Enabled(false)'d her combat components;
+    -- re-enabling them resumes update() but NEVER re-runs awake()/start(), so the combat state
+    -- machine stays parked at cstate 0 -- which is exactly "sees 19 enemies, sits in
+    -- Locomotion.Wait". resetActionAndAI is the one lifecycle-reset call in the tree, and July
+    -- recorded it moving her Locomotion.Wait -> Attack.Attack01 (and hate rank 0 -> 1).
+    -- ⛔ Safe HERE and only here: she is a parked body at this instant. Calling it on a body
+    -- mid-native-action is a documented crash class.
+    -- ⛔⛔⛔ THE PARKING BRAKES -- and I built this entire lease without them (08-15).
+    -- The telemetry is the proof: module=1 (the COMBAT decision module), hate=1, enemyList=16,
+    -- relForced climbing hard... and node=Locomotion.Wait. Her brain decided; her BODY stayed
+    -- parked. Established hours earlier on the probe and then never carried across:
+    -- C.puppet_motion_fsm is TRUE, and ~19 sites "restore" a body by writing
+    -- set_motion_fsm_puppet(go, C.puppet_motion_fsm == true) -- the mod's restore path IS a
+    -- re-puppet. A PUPPETED MotionFsm2 does not run its own transitions, so it can never leave
+    -- Locomotion.Wait however good the enemy list is. Think-stop and nav are the same story: the
+    -- probe released all of these on every run; the lease released none of them.
+    pcall(function() restore_disabled() end)
+    pcall(function() set_think_stop(gch, false) end)
+    pcall(function() stop_navigation(gch, false) end)
+    pcall(function() set_griffin_motion_speed(1.0) end)
+    pcall(function() set_motion_fsm_puppet(go, false) end)
+    pcall(function() gch:call("resetActionAndAI") end)
+    -- ⭐⭐⭐ THE IGNITION (Aurora, 08-15: "get her out of Locomotion.Wait so she can natively start
+    -- attacking"). Everything is primed -- module=1, hate=1, enemyList=16, puppet=false -- and she
+    -- still never transitions. An AI parked in an idle node may never re-evaluate INTO combat;
+    -- once it is IN a combat tree it has somewhere to go. So kick the door open and hand over.
+    -- ⭐ griffin_wake_natural_combat IS that kick, and it already exists (probe:7775): it sets
+    -- `BattleStateCtrl.<IsDetectArisenParty>k__BackingField = true` -- THE combat-entry latch, the
+    -- thing a freshly spawned enemy gets for free at instantiation -- and fires the wake action
+    -- nodes (route3_natural_wake_action_nodes = "CombatStateNormal,...").
+    -- ⛔ FOR THE RECORD: BattleStateCtrl is a FIELD ON THE CHARACTER, not a component. The census
+    -- reporting "BattleStateController=MISSING" was a false negative from the wrong lookup -- the
+    -- latch was reachable all along. The unleash path calls this; the lease never did.
+    -- ⛔ AND KEEP THE WAKE OFF THE AERIAL MOVES. route3_natural_wake_action_nodes ships as
+    -- "CombatStateNormal,Ch253TakeoffLong,Ch253GaleAttack,Ch253AirLandingPressStartLoop" -- three
+    -- of those four are FLIGHT moves, and firing them at a goblin standing next to her is exactly
+    -- what Aurora saw: "random flying attack animations, then flight idle". For a commanded fight
+    -- we want the state entry only; the actual strike comes from griffin_swing_once, which uses
+    -- route3_attack_nodes ("Attack.Attack01", the ground move). Snapshot + restore so the wake list
+    -- is untouched for every other caller.
+    lease.wake_nodes_prior = C.route3_natural_wake_action_nodes
+    C.route3_natural_wake_action_nodes = "CombatStateNormal"
+    pcall(function() griffin_wake_natural_combat(gch, target, true) end)
+    S.route3_combat_lease = lease
+    S.companion_order = "attack"
+    S.companion_target = target
+    S.companion_target_go = tgo
+    -- the calm burst clears hate every 0.5s and stands down for companion_order=="attack";
+    -- setting the order above is what releases it, no manual zeroing needed.
+    local nm = tostring(C.route3_griffin_name or "Companion")
+    status(nm .. " goes hunting")
+    log.info(string.format("[IrisAttack] LEASE START group_set=%s target=%s",
+        tostring(lease.group_set), tostring(go_name(tgo))))
+    return true
+end
+
+function griffin_combat_lease_end(reason)
+    local lease = S.route3_combat_lease
+    if not lease then return false end
+    S.route3_combat_lease = nil
+    pcall(function() rawset(_G, "IrisCombatLeaseAddr", nil) end)
+    local gch = reacquire_griffin()
+    -- restore components to EXACTLY what they were, then hand her identity back through the
+    -- proven path: route3_ally_join_party is what put her on the party faction in the first place
+    -- (it copies the player's boxed hash + sets kind + clears hate + arms the calm burst).
+    if lease.wake_nodes_prior ~= nil then
+        C.route3_natural_wake_action_nodes = lease.wake_nodes_prior
+    end
+    pcall(function() griffin_restore_combat_components(lease.prior_components, gch) end)
+    pcall(function() route3_ally_join_party() end)
+    pcall(function() clear_griffin_hate() end)
+    pcall(function() clear_griffin_targets() end)
+    S.companion_order = "follow"
+    S.companion_target = nil
+    S.companion_target_go = nil
+    local nm = tostring(C.route3_griffin_name or "Companion")
+    status(nm .. " stands down" .. (reason and (" - " .. reason) or ""))
+    log.info("[IrisAttack] LEASE END: " .. tostring(reason)
+        .. " hateBlocks=" .. tostring(S.route3_lease_hate_blocks or 0))
+    return true
+end
+
+function griffin_combat_lease_tick()
+    local lease = S.route3_combat_lease
+    if not lease then return false end
+    local gch, go = reacquire_griffin()
+    if not (gch and go) then return griffin_combat_lease_end("body lost") end
+    local now = os.clock()
+    -- HARD CAP: she always comes home, whatever else goes wrong.
+    if now - (tonumber(lease.started) or now) > (tonumber(C.route3_lease_max_secs) or 120.0) then
+        return griffin_combat_lease_end("time")
+    end
+    -- interrupts that must win immediately
+    if S.mounted == true then return griffin_combat_lease_end("mounted") end
+    pcall(function()
+        local d = rawget(_G, "IrisDownedAddrs")
+        local a = go:get_address()
+        if type(d) == "table" and a and d[a] then griffin_combat_lease_end("downed") end
+    end)
+    if not griffin_combat_lease_active() then return true end
+    -- re-assert the wild faction: the engine reverts group writes (the documented law behind
+    -- route3_ally_join_party's own per-beat re-assert), and a lapsed faction mid-fight would put
+    -- her straight back into the party-group + kind-8 contradiction that CTD'd three times.
+    -- ⛔⛔ `valid()` IS NOT AVAILABLE HERE. It is a file-LOCAL in every module that defines it and
+    -- context.lua does not export it -- the third nil-global of the night after get_component and
+    -- griffin_hate_system. It would have thrown inside pcall(griffin_combat_lease_tick), been
+    -- swallowed, and STOPPED THE LEASE FROM TICKING AT ALL -- i.e. no exit conditions, no timeout,
+    -- no stop: a companion permanently stuck as a wild monster. Not needed anyway:
+    -- griffin_group_copy_from pcalls every access and no-ops on a dead body.
+    if lease.target then
+        pcall(function() griffin_group_copy_from(gch, lease.target) end)
+    end
+    -- ⭐⭐⭐ HOLD THE BRAKES OFF, EVERY FRAME. Releasing once at lease start is the losing move --
+    -- the probe proved a one-shot puppet release reads back as PUPPET=true inside a single frame,
+    -- because ~19 restore sites re-assert C.puppet_motion_fsm (which is TRUE). Same law as every
+    -- other tick-war in this codebase: a single write never beats a per-frame writer.
+    -- ⛔ These are cheap component/flag setters, NOT engine-container mutations -- unlike the
+    -- relationship-registry WRITES that CTD'd three times tonight. Safe at frame rate.
+    pcall(function() set_motion_fsm_puppet(go, false) end)
+    pcall(function() set_think_stop(gch, false) end)
+    -- both hooks are load-installed, but a load-time miss must not mean "silently absent all
+    -- session" -- retry from the tick, the pattern every other hook in this tree uses.
+    pcall(function() griffin_install_lease_hate_door() end)
+    pcall(function() griffin_install_lease_relationship_hook() end)
+    -- ⭐ LEASE TELEMETRY, 2s throttle. Without this every diagnosis needs a separate probe run and
+    -- a screenshot; with it the log says what she is doing while she is doing it. The node name is
+    -- the whole story: Locomotion.Wait = not engaging, Attack.* / Combat* = engaging.
+    if now >= (tonumber(lease.next_log) or 0.0) then
+        lease.next_log = now + 2.0
+        local node = "?"
+        pcall(function() node = tostring(read_griffin_fsm_node() or "?") end)
+        pcall(function() griffin_ai_state_diag(gch) end)
+        local el = tostring(tostring(S.route3_ai_state or ""):match("enemyList=(%-?%d+)") or "?")
+        -- surface PUPPET too: it is the brake that was silently on for every run above
+        local pup = tostring(tostring(S.route3_ai_state or ""):match("PUPPET=(%a+)") or "?")
+        -- ⭐⭐⭐ IGNITION RETRY. One kick may not hold: if her AI drops straight back into the idle
+        -- tree, re-latch and re-fire. The moment she STAYS out of Wait we stop kicking entirely and
+        -- let the native AI drive -- that handover is the whole point, and the log records the
+        -- exact second it happens so we know whether it held or she slid back.
+        local waiting = tostring(node):find("Wait", 1, true) ~= nil
+            or tostring(node):find("Idle", 1, true) ~= nil
+        if waiting then
+            lease.ignitions = (tonumber(lease.ignitions) or 0) + 1
+            pcall(function() griffin_wake_natural_combat(gch, lease.target, true) end)
+            -- and an actual attack node: requestActionCore is the route her own AI uses, and
+            -- griffin_swing_once now opens a live window so the node carries real root motion.
+            if C.route3_attack_ignite_swing ~= false then
+                pcall(function() griffin_swing_once(nil) end)
+            end
+        elseif not lease.escaped then
+            lease.escaped = true
+            log.info(string.format(
+                "[IrisAttack] ⭐ LEFT Locomotion.Wait after %d ignition(s) -> node=%s",
+                tonumber(lease.ignitions) or 0, tostring(node)))
+        end
+        local decide = "?"
+        pcall(function() decide = tostring(griffin_combat_state_diag(gch) or "?") end)
+        log.info(string.format(
+            "[IrisAttack] lease %.0fs node=%s ignitions=%s puppet=%s enemyList=%s relForced=%s hateBlocks=%s | %s",
+            now - (tonumber(lease.started) or now), node,
+            tostring(lease.ignitions or 0), pup, el,
+            tostring(S.route3_lease_rel_hits or 0),
+            tostring(S.route3_lease_hate_blocks or 0), decide))
+    end
+    -- IS THE FIGHT OVER? Any live enemy within the radius keeps it going -- not just the original
+    -- target, because she should finish the pack rather than stop at one kill.
+    local foe = nil
+    pcall(function() foe = griffin_find_enemy(tonumber(C.route3_lease_radius) or 45.0) end)
+    if foe then
+        lease.last_seen = now
+        lease.target = foe
+        lease.target_go = char_go(foe)
+    elseif now - (tonumber(lease.last_seen) or now) > (tonumber(C.route3_lease_quiet_secs) or 6.0) then
+        return griffin_combat_lease_end("no enemies left")
+    end
+    return true
+end
+
 function griffin_order_attack()
     if C.route3_attack_uses_unleash == true then
         return griffin_unleash()
@@ -224,11 +471,23 @@ function griffin_order_attack()
     if S.mounted == true then status("dismount before ordering an attack"); return false end
     local gch, go = reacquire_griffin()
     if not (gch and go) then status("no companion to command"); return false end
+    -- the passive gate, ahead of everything: no target search, no state teardown, no order set.
+    if griffin_species_is_passive(go) then
+        local nm9 = tostring(C.route3_griffin_name or "This one")
+        S.route3_tame_status = nm9 .. " is not a fighter"
+        status(S.route3_tame_status)
+        return false
+    end
     local target = griffin_find_enemy(40.0)
     if not target then
         S.route3_tame_status = "no enemy in range to attack"
         status(S.route3_tame_status)
         return false
+    end
+    -- ⭐ NATIVE FIRST (08-15): hand her the wild identity + her combat components and let the
+    -- engine hunt. The driven strike loop below stays as the fallback for when the lease refuses.
+    if C.route3_lease_enabled ~= false and griffin_combat_lease_start(target) then
+        return true
     end
     S.companion_order = "attack"
     S.companion_target = target
@@ -303,10 +562,265 @@ function griffin_order_attack()
     status(tostring(C.route3_griffin_name or "Companion") .. " attacks " .. tname .. "!")
     return true
 end
+-- ⭐⭐⭐ THE NATIVE-COMBAT PROBE (2026-08-14). ONE QUESTION, ONE NUMBER: does a tamed
+-- companion's AI ever classify a nearby enemy as an enemy?
+-- `enemyList` = app.AIBlackBoardController.get_EnemyActionTargetList():get_Count(). In July it
+-- read 0 with the griffin standing ON a goblin, and that single reading killed the native path
+-- and forced the driven "translator" we still use. Aurora's call (08-14): re-test it, because
+-- the toolkit has moved a long way since -- the live window (field-proven on the pounce), native
+-- predation running on a RIDDEN body, and Bestiary/Puppeteer node firing all postdate that verdict.
+-- ⛔ THIS PROBE PREDICTS NOTHING. It opens the live window, hands her brain back, points hate at
+-- the nearest real enemy, and then just WATCHES enemyList for a few seconds.
+--   enemyList climbs  -> native combat was never dead; the attack command should be native.
+--   enemyList stays 0 -> July's wall is real, and we build the driver properly instead of guessing.
+-- Safety: the live window carries its own watchdog + close, we restore nothing we did not change,
+-- and the probe self-retires. Run it in the field, not in a village.
+function griffin_combat_probe_start()
+    local gch, go = reacquire_griffin()
+    if not (gch and go) then status("no companion out to probe"); return false end
+    if S.route3_combat_probe then status("probe already running"); return false end
+    -- ⛔⛔ REFUSE ON A PASSIVE SPECIES. 08-14: the first run of this probe was taken with Quoth
+    -- the CROW out (ch299410) and duly reported "enemyList NEVER LEFT 0 -- July's wall
+    -- reproduces". That reading was worthless: a critter has no combat-targeting AI to begin
+    -- with, so it is the one body guaranteed to answer zero whatever the truth is. A probe that
+    -- can return a confident false negative is worse than no probe at all -- it would have
+    -- retired the native attack path on the strength of a bird.
+    -- ⭐ The question is only meaningful on a PREDATOR: wolf, panther, griffin, drake, garm.
+    if griffin_species_is_passive(go) then
+        local _, band0 = griffin_species_is_passive(go)
+        S.route3_combat_probe_verdict =
+            "REFUSED: " .. tostring(band0) .. " is a passive species -- probe a predator "
+            .. "(wolf/griffin/drake), a critter cannot answer this question"
+        status(S.route3_combat_probe_verdict)
+        return false
+    end
+    local target = griffin_find_enemy(40.0)
+    if not target then status("probe needs an enemy within 40m"); return false end
+    S.companion_target = target
+    S.companion_target_go = char_go(target)
+    local secs = math.max(2.0, tonumber(C.route3_combat_probe_secs) or 8.0)
+    S.route3_combat_probe = {
+        started = os.clock(), ends = os.clock() + secs, next_sample = 0.0,
+        samples = {}, target_name = tostring(go_name(S.companion_target_go) or "?"),
+    }
+    -- BEFORE: capture the untouched state so the dump can prove what we changed.
+    pcall(function() griffin_ai_state_diag(gch) end)
+    S.route3_combat_probe.before = tostring(S.route3_ai_state or "?")
+    pcall(function()
+        local gctx = route3_ally_group_ctx(gch)
+        S.route3_combat_probe.kind = tostring(gctx and gctx:get_field("CharacterKind"))
+    end)
+    -- Hand the body back: un-park exactly what the mount parks, via the PROVEN window.
+    pcall(function() restore_disabled() end)
+    pcall(function() set_think_stop(gch, false) end)
+    pcall(function() set_motion_fsm_puppet(go, false) end)
+    pcall(function() stop_navigation(gch, false) end)
+    pcall(function() set_griffin_motion_speed(1.0) end)
+    pcall(function() griffin_attack_live_window_open("combat_probe", secs) end)
+    -- ⭐⭐⭐ THE ONE NEW VARIABLE: wake AttackNoticeRequester (plus AIDecisionMaker / NavigationAI,
+    -- which the probe already woke by other means). The enabled-diff against a live fighting
+    -- cyclops named exactly these three as enabled-on-it / disabled-on-us, and AttackNoticeRequester
+    -- is the one that stayed FALSE through every run tonight -- restore_disabled only restores what
+    -- it personally disabled, and nothing had ever touched this component.
+    -- Prior states are kept so the probe puts her back exactly as it found her.
+    S.route3_combat_probe.prior_components = griffin_wake_combat_components(true, gch)
+    -- ⭐ resetActionAndAI is the ONE lifecycle-reset call in the tree, and July's own notes
+    -- record it moving her Locomotion.Wait -> Attack.Attack01 (a bare set_Enabled(true) resumes
+    -- update() without re-running awake()/start(), so the combat state machine stays parked).
+    -- ⛔ Safe HERE and only here: she is a parked body at this instant, not mid-native-action --
+    -- calling it on a body mid-swing is a documented crash class.
+    pcall(function() gch:call("resetActionAndAI") end)
+    pcall(function() griffin_attack_assert_hate() end)
+    status("combat probe: watching enemyList for " .. string.format("%.0f", secs) .. "s")
+    return true
+end
+
+function griffin_combat_probe_tick()
+    local pr = S.route3_combat_probe
+    if not pr then return false end
+    local now = os.clock()
+    local gch, go = reacquire_griffin()
+    if not (gch and go) then S.route3_combat_probe = nil; return false end
+    -- ⭐⭐⭐ HOLD THE PUPPET OPEN, EVERY FRAME (08-15). The first run released it once at start and
+    -- read PUPPET=true in all 30 samples. Cause: `C.puppet_motion_fsm` is TRUE -- the code default
+    -- AND Aurora's live config -- and ~19 sites across the tree "restore" a body by writing
+    -- `set_motion_fsm_puppet(go, C.puppet_motion_fsm == true)`. The mod's own RESTORE path is
+    -- therefore a RE-PUPPET, and a one-shot release loses the race inside a single frame. That is
+    -- the same shape as every other tick-war in this codebase: a 1-shot write never beats a
+    -- per-frame writer.
+    -- ⛔ Deliberately NOT flipping the global config: the ride/mount drive needs the puppet to
+    -- steer her body, and turning it off tree-wide would break riding to answer one question. The
+    -- probe holds it open for its own window only; the mod's restore sites reclaim it at the end.
+    pcall(function() set_motion_fsm_puppet(go, false) end)
+    -- ⛔⛔⛔ CALM SUPPRESSION IS NOW OFF BY DEFAULT (08-15, after two CTDs).
+    -- Both crashes were the same fault at the same address --
+    --   c0000005 app.EnemyManager.updateBattleGroupInfo <- app.EnemyManagerBehavior.update
+    -- -- and the ONLY thing common to the crashing runs (and absent from the four clean ones) is
+    -- PERSISTENT COMPANION HATE, which is what suppressing the calm burst produces. Run 4 kept the
+    -- suppression and survived, so it is intermittent, not deterministic -- which is worse, not
+    -- better. ⚠ THE UNCOMFORTABLE POSSIBILITY: the calm burst may be LOAD-BEARING, i.e. it may
+    -- exist precisely BECAUSE a tamed body carrying live hate destabilises the battle-group walk.
+    -- I had been calling it "our own safety net getting in the way"; that framing is now suspect.
+    -- ⇒ The AttackNoticeRequester test below changes exactly ONE thing, so leave this alone.
+    if pr.suppress_calm == true then
+    -- ⭐⭐⭐ SUPPRESS OUR OWN CALM BURST (08-15). She sees 19 enemies with a free FSM and never
+    -- leaves Locomotion.Wait -- so the question moved from "can she see?" to "why does she not
+    -- WANT to?", and in DD2 that is the hate ranking.
+    -- ⛔ AND OUR OWN CODE IS THE PRIME SUSPECT, for the third time this session:
+    -- route3_ally_join_party (probe:5635) arms `route3_ally_calm_until = now + 12s` and calls
+    -- clear_griffin_hate(); the calm burst then wipes her hate + targets on a 0.5s beat. It stands
+    -- down only for `companion_order == "attack"` or an active unleash (stable.lua:632) -- and the
+    -- probe is NEITHER, so it has been erasing the hate we assert, every half second, all along.
+    -- griffin_unleash zeroes exactly these two for exactly this reason (probe:7811-7812, "would
+    -- stomp our kind-8 back to kind 2 ... she reverts to a peaceful party member and just postures").
+    S.route3_ally_calm_until = 0.0
+    S.route3_ally_auto_at = 0.0
+    end
+    -- ⛔⛔⛔ DO NOT CALL griffin_attack_assert_hate() FROM HERE. 2026-08-15: I did, at 60Hz, and
+    -- it HARD-CRASHED the game within seconds of pressing the probe next to a cyclops:
+    --     c0000005 in app.EnemyManager.updateBattleGroupInfo <- app.EnemyManagerBehavior.update
+    --     preceded by repeated app.BattleRelationshipHolder.requestSetBidirectionalRelationship
+    --                        / app.BattleRelationshipHolder.requestSetRelationshipFromTo
+    -- That function is NOT a cheap hate write -- its own header says it "persist[s] mutual
+    -- hostility in the RELATIONSHIP REGISTRY the damage path actually reads" (probe:6404). That
+    -- registry is a global engine structure EnemyManagerBehavior.update walks every frame, so
+    -- rewriting it 60x/sec is a concurrent modification of a live container. It is called ONCE
+    -- per order for a reason.
+    -- ⛔ MY MISREADING, RECORDED SO IT IS NOT REPEATED: July's "frequency is everything" law is
+    -- about addHateParam + updateHateRanking -- the hate RANKING, which decays and must be
+    -- re-won. It is NOT a licence to hammer relationship/battle-group structure. Those are two
+    -- different subsystems and only one of them tolerates per-frame writes.
+    -- ⭐ The decay question is now answered by MEASUREMENT instead: hateRank is sampled 4x/sec
+    -- below, so if hate lands and then decays we will simply watch it happen in the trace --
+    -- better science than blindly out-spamming a system we had not identified.
+    if now >= (tonumber(pr.next_sample) or 0.0) then
+        pr.next_sample = now + 0.25
+        -- ⛔⛔ 08-15: THE FIRST VERSION OF THIS READ WAS DEAD CODE AND PRINTED A CONFIDENT LIE.
+        -- It called get_component(go, "app.AIBlackBoardController") -- but get_component is NOT
+        -- among the names context.lua hands this file (see the import block at the top), so it
+        -- resolved to a nil global, threw inside the pcall, and left el at the -1 sentinel on
+        -- EVERY sample. peak stayed 0 and the probe reported "enemyList NEVER LEFT 0 -- July's
+        -- wall reproduces" while griffin_ai_state_diag, on the very same line, was reading
+        -- enemyList=21..35. It nearly retired the native attack path on a measurement of nothing.
+        -- ⭐ FIX + LAW: do not re-implement a read that a working function already performs. Parse
+        -- the numbers out of the string griffin_ai_state_diag just built -- it lives in the probe
+        -- file where those locals are in scope, and it is the one already field-proven.
+        pcall(function() griffin_ai_state_diag(gch) end)
+        local line = tostring(S.route3_ai_state or "?")
+        local el = tonumber(line:match("enemyList=(%-?%d+)") or "") or -1
+        local pup = line:match("PUPPET=(%a+)")
+        local mv = tonumber(line:match("moved=(%-?%d+)") or "") or 0
+        -- ⭐⭐⭐ THE FSM NODE -- the datum this probe should have carried from the start, and the
+        -- one July's whole verdict actually rested on ("fsm=Locomotion.Wait"). With the puppet now
+        -- released and her STILL standing still, this is the fork:
+        --   Locomotion.Wait / an idle node -> her DECISION layer is not choosing to fight
+        --   an Attack.* node while moved stays ~0 -> she IS deciding, and MOVEMENT is being eaten
+        -- Those need opposite fixes, so measure it rather than argue about it.
+        local node = "?"
+        pcall(function() node = tostring(read_griffin_fsm_node() or "?") end)
+        pr.nodes = pr.nodes or {}
+        if not pr.nodes[node] then pr.nodes[node] = 0; pr.node_order = (pr.node_order or 0) + 1 end
+        pr.nodes[node] = pr.nodes[node] + 1
+        -- ⭐ AND OUR OWN ROOT-MOTION EATER. orders.lua:237 documents it: the onRootApply hook
+        -- SKIPs root motion for her body and counts every skip in S.root_apply_blocks. It should
+        -- be inert here (its gate needs airborne + seat/proxy, or a live whistle fly-in) -- but
+        -- "grep our own safety nets FIRST" is a law paid for with two days on the clearance net,
+        -- so we measure the counter instead of assuming.
+        local rb = tonumber(S.root_apply_blocks) or 0
+        pr.rootblocks0 = pr.rootblocks0 or rb
+        pr.rootblocks = rb - pr.rootblocks0
+        -- ⭐⭐⭐ THE HATE RANKING -- July's ground truth, and the number 19 rounds never read.
+        -- A truly-fighting griffin held 4 ranked hate targets; ours held 0, and "a monster with an
+        -- empty ranking has nobody to fight -> it drifts off" (probe:3556-3559). enemyList says
+        -- who she COULD fight; this says who she WANTS to. 0 here with 19 in enemyList is the
+        -- whole explanation for Locomotion.Wait.
+        -- ⛔ character_hate_system is the GLOBAL accessor; griffin_hate_system is a file-local in
+        -- the probe and is NOT reachable from here (the same scope trap that made v1 lie).
+        local hr = -1
+        pcall(function()
+            local hs9 = character_hate_system(gch, go)
+            if hs9 then hr = tonumber(griffin_hate_rank_count(hs9)) or -1 end
+        end)
+        pr.peak_hate = math.max(tonumber(pr.peak_hate) or 0, hr)
+        -- the combat-entry census (defined in the probe file, where get_component is in scope)
+        local entry = "?"
+        pcall(function() entry = tostring(griffin_combat_entry_census(gch) or "?") end)
+        pr.entry_last = entry
+        pr.samples[#pr.samples + 1] = string.format("%.2fs | node=%s hateRank=%d rootSkips=%d | %s | %s",
+            now - (tonumber(pr.started) or now), node, hr, pr.rootblocks, entry, line)
+        pr.peak_el = math.max(tonumber(pr.peak_el) or 0, el)
+        pr.peak_moved = math.max(tonumber(pr.peak_moved) or 0, mv)
+        pr.total_moved = (tonumber(pr.total_moved) or 0) + mv
+        if pup == "false" then pr.puppet_released = true end
+    end
+    if now < (tonumber(pr.ends) or 0.0) then return true end
+    -- REPORT
+    S.route3_combat_probe = nil
+    pcall(function() griffin_attack_live_window_close("probe end") end)
+    -- put the body back exactly as we found it -- a probe that leaves a companion permanently
+    -- combat-woken is no longer a probe, it is an undeclared feature.
+    pcall(function() griffin_restore_combat_components(pr.prior_components, gch) end)
+    -- ⭐⭐⭐ THE QUESTION MOVED (08-15, first honest run). enemyList is NOT the wall -- a tamed
+    -- griffin/drake carries 21-35 entries in it, populated BEFORE we touch anything. She can see
+    -- enemies perfectly well. What she does instead is NOTHING: moved=0mm/f with PUPPET=true in
+    -- every sample, even though the probe calls set_motion_fsm_puppet(go,false) on the way in.
+    -- So the verdict now reports the three facts separately instead of collapsing them into one
+    -- misleading yes/no: can she SEE, did the puppet ever RELEASE, and did she MOVE.
+    local peak = tonumber(pr.peak_el) or 0
+    local moved = tonumber(pr.peak_moved) or 0
+    local verdict
+    if peak <= 0 then
+        verdict = "she never classified an enemy (enemyList 0) -- acquisition IS the wall"
+    elseif not pr.puppet_released then
+        verdict = string.format(
+            "sees %d enemies, but PUPPET never released (peak moved %dmm/f) -- the FREEZE is the wall, not acquisition",
+            peak, moved)
+    else
+        -- name the node she actually SAT in -- the most-sampled one is the honest headline
+        local top, topn = "?", -1
+        for n9, c9 in pairs(pr.nodes or {}) do
+            if c9 > topn then top, topn = n9, c9 end
+        end
+        local fighting = tostring(top):lower():find("attack", 1, true) ~= nil
+        local hate = tonumber(pr.peak_hate) or -1
+        if moved < 50 then
+            verdict = string.format(
+                "sees %d enemies, hateRank %d, STILL DID NOT MOVE -- sat in %s | %s",
+                peak, hate, top, tostring(pr.entry_last or "?"))
+        elseif not fighting then
+            verdict = string.format("sees %d enemies, hateRank %d, never left %s | %s",
+                peak, hate, top, tostring(pr.entry_last or "?"))
+        else
+            verdict = string.format("sees %d enemies, moved %dmm total, node %s -- SHE IS FIGHTING",
+                peak, tonumber(pr.total_moved) or 0, top)
+        end
+    end
+    pcall(function()
+        json.dump_file(MOD .. "_combat_probe.json", {
+            verdict = verdict, peak_enemy_list = peak, peak_moved_mm = moved,
+            peak_hate_rank = tonumber(pr.peak_hate) or -1,
+            combat_entry = tostring(pr.entry_last or "?"),
+            total_moved_mm = tonumber(pr.total_moved) or 0,
+            puppet_released = pr.puppet_released == true,
+            root_apply_skips = tonumber(pr.rootblocks) or 0,
+            nodes_seen = pr.nodes, target = pr.target_name,
+            kind_at_start = pr.kind, before = pr.before, samples = pr.samples,
+            time = os.date("%H:%M:%S"),
+        })
+    end)
+    log.info("[IrisAttack] combat probe: " .. verdict)
+    S.route3_combat_probe_verdict = verdict
+    status("combat probe: " .. verdict)
+    return true
+end
+
 function griffin_order_tick()
     -- FOLLOW / STAY / COME: the companion walks or runs after the player.
     -- Come = follow until arrival, then stay. Orders suspend while mounted.
     if S.world_paused == true then return false end
+    -- the probe owns nothing and blocks nothing; it just watches while whatever else runs.
+    pcall(griffin_combat_probe_tick)
+    pcall(griffin_combat_lease_tick)
     -- EAT THAT command owns her while active (flight -> pounce -> feed); suspends orders -- but
     -- not against an explicit order or the player leaving. Ending it here rather than returning
     -- means she picks the new order up in this same tick, instead of standing still for a frame.
@@ -526,6 +1040,14 @@ function griffin_order_tick()
     end
     local order = S.companion_order
     if order == "attack" then
+        -- ⛔⛔ THE LEASE OWNS HER -- the native AI is driving, so this DRIVEN strike loop must not
+        -- also run. Two writers on one body is the exact collision behind every crash tonight, and
+        -- here it would be a scripted clip fighting a live combat FSM.
+        -- ⭐ The order deliberately STAYS "attack": that is what stands the calm burst down
+        -- (stable.lua:632, so her hate survives the fight) and what routes the Stay button into
+        -- griffin_order_disengage -- i.e. it is what makes Aurora's "stop command" work at all.
+        -- Only the driving is suppressed.
+        if griffin_combat_lease_active() then return true end
         if S.mounted == true then griffin_order_disengage("rider mounted"); return true end
         local tgt = S.companion_target
         if not tgt or griffin_target_is_dead(tgt) then
@@ -1006,7 +1528,7 @@ function route3_order_hotkey_tick()
     end
     if edgek(C.route3_key_attack, "attack") then
         if S.route3_unleashed == true then griffin_recall() end
-        griffin_order_attack()
+        griffin_order_attack()   -- owns the passive gate for BOTH paths (it runs before unleash)
     end
     if edgek(C.route3_key_eat, "eat") then griffin_eat_start("hotkey") end
 end

@@ -37,7 +37,13 @@ local NAMES = {
     ch221 = "Saurian",
     ch222 = "Harpy",
     ch223000 = "Wolf",
-    ch223001 = "Dog",        -- the cats module overrides converted puma/panther bodies
+    -- 08-14: the old comment here was a lie - nothing ever overrode this, so every puma in
+    -- every IRIS nameplate read "Dog". ch223001 is the REDWOLF chassis (charRef: Redwolf
+    -- _A/_B); with the IRIS cat pak both its prefabs ARE the cats. Longest-prefix matching
+    -- means these two variant keys win over the bare band beneath them.
+    ch223001_00 = "Puma",
+    ch223001_01 = "Panther",
+    ch223001 = "Redwolf",    -- the bare band, if one ever surfaces without a variant suffix
     -- the great tames
     ch253000 = "Griffin",
     ch254 = "Chimera",

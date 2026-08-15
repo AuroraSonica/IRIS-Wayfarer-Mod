@@ -35,7 +35,10 @@ local PART_KEYS = {
 local function type_name(nm)
     nm = tostring(nm or "")
     if nm:find("ch253", 1, true) then return "Griffin" end
-    if nm:find("ch223001", 1, true) then return "Dog" end
+    -- 08-14: ch223001 is the Redwolf chassis and the IRIS cat pak makes both its prefabs cats
+    -- (_01 Panther, _00 Puma) - this header used to read "DOG - PART" over a panther
+    if nm:find("ch223001_01", 1, true) then return "Panther" end
+    if nm:find("ch223001", 1, true) then return "Puma" end
     if nm:find("ch223", 1, true) then return "Wolf" end
     if nm:find("ch299410", 1, true) then return "Crow" end
     if nm:find("ch299430", 1, true) then return "Bird" end

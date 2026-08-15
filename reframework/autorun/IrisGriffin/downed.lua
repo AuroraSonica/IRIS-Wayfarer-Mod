@@ -602,6 +602,108 @@ function griffin_downed_install_death_guards()
     end
 end
 
+-- ⭐⭐⭐ THE FRIENDLY-FIRE ATTACKER SET (2026-08-14 -- Aurora: "make the tame animals summoned
+-- via the stable not take damage from the Arisen/Pawns but still take damage from enemies").
+-- ⛔ REBUILT WHOLESALE ON A CADENCE, NEVER PATCHED INCREMENTALLY -- the engine REUSES GameObject
+-- addresses, so a stale entry in here would silently hand some unrelated body free hits on your
+-- companion. That is the same law griffin_downed_protected_refresh states for the protected set,
+-- and it is the reason this is a rebuild rather than an add/remove.
+function griffin_friendly_attackers_refresh(force)
+    local now = os.clock()
+    if force ~= true and now < (tonumber(S.friendly_atk_at) or 0.0) then
+        return S.friendly_atk or {}
+    end
+    S.friendly_atk_at = now + 1.0
+    local set = {}
+    pcall(function()
+        local pgo = char_go(get_player())
+        local a = pgo and pgo:get_address()
+        if a then set[a] = "arisen" end
+    end)
+    -- ⭐ The getter ladder is FIELD-PROVEN, not guessed: the unicorn blessing logs
+    -- "blessing: pawn list via get_AlivePawnCharacterList (N)" on every single cast.
+    -- ⛔ get_PartyPawnList returns List<app.Pawn> whose items have NO get_GameObject (dump-verified
+    -- 08-12, "pawn 0 -> invalid GO"); only the CharacterList getters return real app.Character.
+    pcall(function()
+        local pm = sdk.get_managed_singleton("app.PawnManager")
+        if not pm then return end
+        for _, getter in ipairs({"get_AlivePawnCharacterList", "get_PawnCharacterList"}) do
+            local list = nil
+            if pcall(function() list = pm:call(getter) end) and list then
+                local count = 0
+                pcall(function() count = tonumber(list:call("get_Count")) end)
+                for i = 0, (count or 0) - 1 do
+                    pcall(function()
+                        local chr = list:call("get_Item", i)
+                        local go = chr and chr:call("get_GameObject")
+                        local a = go and go:get_address()
+                        if a then set[a] = "pawn" end
+                    end)
+                end
+                return
+            end
+        end
+    end)
+    S.friendly_atk = set
+    return set
+end
+
+-- Returns "arisen" / "pawn" when THIS damage packet was dealt by the player or one of her pawns,
+-- else nil.
+-- ⛔ IT FAILS OPEN BY DESIGN. Every unreadable/ambiguous case returns nil and the damage proceeds
+-- normally. A shield that guesses would make a companion quietly invulnerable to something it is
+-- supposed to fear, which is a far worse bug than the occasional friendly hit getting through.
+function griffin_downed_friendly_attacker(di)
+    if not di then return nil end
+    -- ⭐ THE LADDER IS TAKEN VERBATIM FROM IrisTaming's strike hook (IrisTaming.lua:3303-3313),
+    -- which is FIELD-PROVEN in this game: it is what flips a courtship into the combat tame when
+    -- Aurora swings at a wolf. Every tier normalises to a GAMEOBJECT, matching the set's key class
+    -- ("DamageInfo speaks GameObjects", IrisTaming.lua:3292) -- ⛔ never compare a Character addr
+    -- against a GameObject addr.
+    -- ⚠ DO NOT "correct" these names against a field dump: they are auto-property BACKING FIELDS
+    -- and do not appear in DamageInfo's get_fields() enumeration at all. MOD_damageinfo_fields.json
+    -- lists 81 fields and not one of them is an attacker -- yet this ladder demonstrably works.
+    local ago = nil
+    pcall(function() ago = di:get_field("<AttackOwnerObject>k__BackingField") end)
+    if not ago then
+        -- arrows / spells: the shell carries its caster, so a pawn's bowshot still attributes home
+        pcall(function()
+            local ahc = di:get_field("<AttackHitController>k__BackingField")
+            local shell = ahc and ahc:get_field("<CachedShell>k__BackingField")
+            local owner = shell and shell:get_field("<OwnerCharacter>k__BackingField")
+            ago = owner and owner:call("get_GameObject")
+        end)
+    end
+    if not ago then
+        pcall(function()
+            local ahc = di:get_field("<AttackHitController>k__BackingField")
+            local ach = ahc and ahc:get_field("<CachedCharacter>k__BackingField")
+            ago = ach and ach:call("get_GameObject")
+        end)
+    end
+    if not ago then
+        pcall(function() ago = di:get_field("<AttackGameObject>k__BackingField") end)
+    end
+    if not ago then return nil end
+    local aaddr = nil
+    pcall(function() aaddr = ago:get_address() end)
+    if not aaddr then return nil end
+    return (griffin_friendly_attackers_refresh() or {})[aaddr]
+end
+
+-- one receipt on the first block, then one every 20th -- enough to prove it is live in the log
+-- without drowning it during a fight.
+function griffin_downed_note_friendly_block(who, where)
+    local n = (tonumber(S.friendly_blocks) or 0) + 1
+    S.friendly_blocks = n
+    S.friendly_last = string.format("%s (%s)", tostring(who), tostring(where))
+    if n == 1 or (n % 20) == 0 then
+        log.info(string.format(
+            "[IrisDowned] friendly fire ignored: %s hit your companion (%s) -- %d blocked",
+            tostring(who), tostring(where), n))
+    end
+end
+
 function griffin_downed_install_hook()
     -- The shield lives HERE, not in IrisTaming: the roster/stable/downed machinery is all in
     -- this file, and a protection this load-bearing must not depend on the other script being
@@ -613,10 +715,11 @@ function griffin_downed_install_hook()
     -- _v2 = fall shield. _v3 = hit-reaction flag + field dump. _v4 (r70) = ConvertedHitBackDir capture.
     -- _v8 = active-griffin winged-fall immunity at both DamageInfo and HP-subtraction stages.
     -- _v9 = resolve grafted/child HitControllers back to the canonical companion address.
+    -- _v10 (08-14) = FRIENDLY FIRE SHIELD at both the reaction and HP-subtraction stages.
     -- Bump on every behaviour
     -- change in here, or test in-game against a closure that no longer exists.
     griffin_downed_install_death_guards()
-    if _G.IrisDownedHookInstalled_v9 then return true end
+    if _G.IrisDownedHookInstalled_v10 then return true end
     local ok = pcall(function()
         local td = sdk.find_type_definition("app.HitController")
         local m = td and td:get_method("calcDamageReaction(app.HitController.DamageInfo)")
@@ -676,6 +779,22 @@ function griffin_downed_install_hook()
             pcall(function() receiver = sdk.to_managed_object(args[2]) end)
             local protected_addr = griffin_downed_resolve_receiver(receiver, daddr)
             if not protected_addr then return end
+            -- ⭐⭐ FRIENDLY FIRE (08-14): the Arisen and her pawns cannot hurt their own companion.
+            -- Zeroing here is what suppresses the FLINCH -- this file's own rule two lines down is
+            -- that a zero-damage packet "is not a hit and must not manufacture a flinch", so the
+            -- animal simply ignores the blow instead of staggering for nothing. The authoritative
+            -- HP subtraction is a different argument entirely and is stopped in updateDamageHp.
+            if C.route3_friendly_fire_shield ~= false then
+                local who = griffin_downed_friendly_attacker(di)
+                if who then
+                    pcall(function()
+                        di:set_field("Damage", 0.0)
+                        di:set_field("FixedDamage", 0.0)
+                    end)
+                    griffin_downed_note_friendly_block(who, "reaction")
+                    return
+                end
+            end
             -- Scale/clamp before raising visual state. A zero-damage overlap
             -- packet is not a hit and must not manufacture a flinch.
             griffin_downed_clamp(args, di, protected_addr)
@@ -747,6 +866,19 @@ function griffin_downed_install_hook()
                             (tonumber(S.griffin_fall_hp_ignored) or 0) + 1
                         return
                     end
+                    -- ⭐⭐ FRIENDLY FIRE, THE AUTHORITATIVE HALF. ⛔ This is the one that actually
+                    -- matters: DamageInfo.Damage is only the REACTION input -- HP is subtracted from
+                    -- args[4], a separate argument, which is why the block above it exists in the
+                    -- same shape for winged falls. Zeroing the field without zeroing args[4] would
+                    -- have looked correct and changed nothing about the HP loss.
+                    if C.route3_friendly_fire_shield ~= false then
+                        local who = griffin_downed_friendly_attacker(di)
+                        if who then
+                            args[4] = sdk.float_to_ptr(0.0)
+                            griffin_downed_note_friendly_block(who, "hp")
+                            return
+                        end
+                    end
                     local hp = tonumber(hc:call("get_Hp"))
                     local amount = sdk.to_float(args[4])
                     if not (hp and amount and amount > 0.0) then return end
@@ -759,9 +891,9 @@ function griffin_downed_install_hook()
                 end)
             end, function(r) return r end)
         end
-        _G.IrisDownedHookInstalled_v9 = true
+        _G.IrisDownedHookInstalled_v10 = true
     end)
-    return ok and _G.IrisDownedHookInstalled_v9 == true
+    return ok and _G.IrisDownedHookInstalled_v10 == true
 end
 function griffin_downed_request_node(ch, node, prio)
     -- generic (not griffin-bound) requestActionCore. ⛔ Never verify the slot in this frame --

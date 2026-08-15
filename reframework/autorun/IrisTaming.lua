@@ -524,6 +524,12 @@ local C = {
     player_circle_clip = 813,     -- 60:813 look around / track (CIRCLE)
     player_hand_clip = 6200,      -- 60:6200 hand out and down -- THE HAND (LAST STEPS)
     player_flinch_clip = 830,     -- 60:830 startled step back (played on a failed RUSH)
+    player_brace_clip = 0,        -- 0:0 ch00_001_comNM_idle_loop -- THE PURE IDLE. Held through
+    player_brace_bank = 0,        -- STAND YOUR GROUND so the Arisen simply stands. (0:1 is
+                                  -- idle_variation_1, a fidget - the loop is 0:0.)
+    player_stare_clip = 3001,     -- 0:3001 ch00_000_com_catch_stance_loop -- braced and watchful
+    player_stare_bank = 0,        -- for THE STARE-DOWN. The palm was repetitive there and made
+                                  -- no sense: you are meeting its eyes, not offering a hand.
     player_pact_clip = 1220,      -- 60:1220 patting a dog's head -- THE PACT pet
     pose_freeze_delay = 1.0,      -- secs of raise before the hand pose freezes in place
     rush_back_dist = 28.0,        -- the coil: how far it backs up (dramatic but safe from cliffs; 55 ran off ledges)
@@ -541,7 +547,15 @@ local C = {
     cue_howl_loop = 4611,
     cue_howl_end = 4612,
     howl_secs = 4.0,
-    howl_key = 0x48,             -- H -- HOLD to howl BACK (its own key, separate from the hand N)
+    seal_howl_start_secs = 1.5,   -- THE PACT HOWL: how long 0:4610 (howling_start) runs before
+    seal_howl_loop_secs = 2.2,    -- 0:4611 (howling_loop) takes over, and how long it holds
+    seal_howl_end_secs = 1.8,     -- ...then 0:4612 (howling_end), and only THEN the handover.
+                                  -- ⛔ The handover resets the body to a neutral idle - it used to
+                                  -- fire 1.6s in and chop the howl off mid-breath (Aurora, field
+                                  -- 08-14: "the howl at the end doesn't last long enough").
+    howl_key = 0x48,             -- H -- HOLD to howl BACK (its own key, separate from the hand N).
+                                 -- On a pad the howl answers on B/Circle (TB.howl_down): there is
+                                 -- no spare face button, so B does double duty there.
     howl_player_bank = 150,      -- 150:1500 Warrior Bellow roar = your howl-back (plays on any vocation)
     howl_player_clip = 1500,
     howl_player_start = 80.0,    -- skip the sword-slam wind-up; the roar starts ~frame 80
@@ -558,10 +572,23 @@ local C = {
     use_feast_bite = false,       -- EXPERIMENT: feed via bite actions (needs live FSM; test in lab first)
     cue_circle_clip = 100,        -- 0:100 -- the circle's stalking gait
     cue_tell_clip = 3,            -- 0:3 pace-and-growl -- telegraph phase 1
-    cue_tension_clip = 4030,      -- 0:4030 "tension up" jumps -- telegraph phase 2
+    cue_tension_clip = 2,         -- 0:2 comBM_idle_threat_02 -- telegraph phase 2, the escalation.
+                                  -- ⛔ WAS 4030, WHICH DOES NOT EXIST IN BANK 0 ON THIS CHASSIS.
+                                  -- wolf_clip hard-codes bank 0; the ch223000 atlas has 64 bank-0
+                                  -- clips and no 4030 (the only 4030 anywhere is 20:4030, a
+                                  -- grab-escape). So the tension half of the telegraph has been a
+                                  -- silent no-op and the wolf just kept pacing. The threat ladder
+                                  -- is now honest: 0:3 distance_01 pacing -> 0:2 threat_02.
+                                  -- (0:410 ch23000_JumpAttackPrepare_Left is the coil, if the
+                                  -- escalation ever wants to be more violent - also bank 0, also
+                                  -- atlas-verified.)
     cue_stop_clip = 312,          -- 0:312 dash_end -- the NATIVE skid out of the charge dash
     cue_snarl_clip = 1,           -- 0:1 idle_threat_01 -- it SNARLS in your face (was plain idle)
     tell_secs = 3.0,              -- total telegraph time (pace ~55%, tension jumps ~45%)
+    stand_face_deadband = 20.0,   -- STAND YOUR GROUND: only re-settle your facing past this many degrees off
+    stand_face_step = 12.0,       -- and ease there at most this many degrees per frame (never a per-frame slam)
+    stand_leave_dist = 1.6,       -- walking this far off your spot, with the gap still opening, fails the stand
+    stand_leave_grace = 0.6,      -- ...but only after you have been out there this long (a nudge is not a retreat)
     cue_lie_action = "Ch223_LiedownStart",   -- the wolf's OWN lie-down action node
     use_lie_action = false,       -- action on a WILD think-stopped wolf = crash suspect; clips by default
     cue_lie_bank = 60,            -- the liv (life) bank -- the deep scan's crown jewel
@@ -574,15 +601,32 @@ local C = {
     hunt_opens_ritual = false,    -- true = the OLD behaviour: the hunt always opens the tame
                                   -- (and then repeats later, since it is in the plan too).
                                   -- false = the hunt takes a random slot like everything else.
-    hunt_spawn_max_drop = 3.0,    -- reject a doe spawn this far below you (it lands out of
-                                  -- sight under a ledge -- ground_probe casts DOWN 400m)
+    hunt_spawn_max_drop = 3.0,    -- reject a berth this far BELOW you. Downhill is the dangerous
+                                  -- direction: water and riverbeds are always down, and the
+                                  -- landing ray does NOT hit water (it reports the BED).
+    hunt_spawn_max_rise = 3.0,    -- and this far above (the probe starts overhead now, so uphill
+                                  -- ground is finally visible at all - see hunt_ground_y). ⛔ KEEP
+                                  -- THIS AND THE RAY START IN STEP: anything the ray can reach is
+                                  -- eligible to BE the ground, canopies included.
+    hunt_spawn_headroom = 1.5,    -- a ceiling within ~4m directly overhead = you are INSIDE
+                                  -- something. ⛔ NOT a general roof test - see hunt_berth_deep_ok.
+    hunt_spawn_flat = 2.0,        -- max spread across the 2m ring: more = slope, step or ledge lip
+    hunt_spawn_step = 2.5,        -- max terrain step between walk-line samples (gorge, wall, river)
     hunt_prey_range = 60.0,       -- live ch299 prey within this of the player qualifies
-    hunt_prey_band = "ch299011,ch299020,ch299221",   -- HUNTABLE ground prey: doe, goat, chicken
-                                  -- (bare "ch299" matched BIRDS, BUTTERFLIES and FISH -- the
-                                  -- invisible-quarry bug: a marker on a fish underwater)
-    hunt_spawn = true,            -- empty meadow? conjure a doe OUT OF SIGHT for the hunt
-    hunt_spawn_cid = "ch299011_A_00",   -- EnemySpawner charRef cid for the Doe
-    hunt_spawn_dist = 35.0,       -- conjured behind the camera at this range
+    hunt_prey_band = "ch299010,ch299011,ch299020,ch299221",   -- HUNTABLE ground prey: stag, doe,
+                                  -- goat, chicken. (bare "ch299" matched BIRDS, BUTTERFLIES and
+                                  -- FISH -- the invisible-quarry bug: a marker on a fish
+                                  -- underwater.) ch299010 leads: the conjured quarry is the STAG.
+    hunt_spawn = true,            -- empty meadow? conjure a stag OUT OF SIGHT for the hunt
+    hunt_spawn_cid = "ch299010_A_00",   -- EnemySpawner charRef cid for the STAG
+                                  -- (EnemySpawner/charRef.lua:173, triple-confirmed).
+                                  -- ⭐ WHY NOT THE DOE (08-14, Aurora): ch299011 is the exact
+                                  -- chassis IrisWildHorses re-skins, so one hunt in four used to
+                                  -- conjure a horse the ritual then refused to hunt. The stag is
+                                  -- a band nothing else claims, and its atlas is the same motion
+                                  -- family (IrisTaming_atlas_ch299010.json).
+    hunt_spawn_dist = 35.0,       -- (legacy) the old fixed conjure range. The berth picker sweeps
+                                  -- 14/20/26/32m and scores toward ~22m behind the camera instead.
     hunt_leash = 150.0,           -- during the hunt the wolf WAITS -- the leash extends to this
     hunt_runaway_dist = 100.0,    -- quarry farther than this from the player = lost in the void -> despawn + one fresh respawn
     hunt_deliver_range = 6.0,     -- the offering registers within this of the WOLF (horizontal)
@@ -1298,6 +1342,14 @@ local function creature_label(go2)
             if kind == "panther" then return "Panther" end
             if kind == "puma" then return "Puma" end
         end
+        -- ⛔ 08-14: that ask was DEAD for nine days (IrisWildCats exported claim_next, play and
+        -- is_cat but never cat_kind), which is how a wild puma's native B prompt came to read
+        -- "Tame the Dog". NEVER let another file's load order decide a creature's NAME. The
+        -- chassis id is the same truth the cats registry is built from, and the same rule the
+        -- stable already names by: with the IRIS cat pak the Redwolf prefabs ARE the cats.
+        local var = nm:match("ch223001_(%d+)")
+        if var == "01" then return "Panther" end
+        if var == "00" then return "Puma" end
     end
     if nm:find("ch223001", 1, true) then return "Dog" end
     if nm:find("ch223", 1, true) then return "Wolf" end
@@ -1309,6 +1361,7 @@ local function creature_label(go2)
     if nm:find("ch299210", 1, true) then return "Rat" end
     if nm:find("ch299200", 1, true) then return "Rabbit" end
     if nm:find("ch299003", 1, true) then return "Ox" end
+    if nm:find("ch299010", 1, true) then return "Stag" end   -- THE HUNT's quarry since 08-14
     if nm:find("ch299011", 1, true) then
         -- 07-24 (Aurora #6): a CONVERTED horse and a wild doe are both
         -- ch299011 — ask the wild-horses registry which this is.
@@ -1642,19 +1695,18 @@ local function spawn_prey(pos)
             ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
             postProcScale = false,
         }
-        -- Our quarry is a ch299011 doe -- the exact chassis IrisWildHorses re-skins, at a 0.25
-        -- chance per spawn. Tell it to leave THIS one alone, or one hunt in four conjures a
-        -- horse that the ritual then (correctly) refuses to hunt.
-        pcall(function()
-            local api = rawget(_G, "__iris_wild_horses_api")
-            if api and api.skip_next_horse then api.skip_next_horse() end
-        end)
-        S.spawner:requestAddInstances(tostring(C.hunt_spawn_cid or "ch299011_A_00"), pos, q, cfg, 1)
+        -- ⭐ 08-14: THE HORSE SKIP IS GONE ON PURPOSE. It existed because the quarry was a
+        -- ch299011 doe -- the exact chassis IrisWildHorses re-skins -- so one hunt in four
+        -- conjured a horse the ritual then (correctly) refused to hunt. The quarry is a STAG
+        -- (ch299010) now, a band the horses module never touches (its DOE_PREFIX is ch299011),
+        -- so the skip is worse than pointless: skip_next_horse sets a STICKY flag that would eat
+        -- the next legitimate wild-horse conversion in the world, once per hunt.
+        S.spawner:requestAddInstances(tostring(C.hunt_spawn_cid or "ch299010_A_00"), pos, q, cfg, 1)
         S.spawn_pump_until = os.clock() + 15.0   -- pump only while a birth is pending
         S.doe_spawn_pt = { x = pos.x, y = pos.y, z = pos.z }   -- the conjured doe's birthplace
         S.doe_verify_until = os.clock() + 6.0                  -- then count the bodies
         ok = true
-        pcall(function() log.info("[IrisTaming] doe spawn requested") end)
+        pcall(function() log.info("[IrisTaming] quarry spawn requested (" .. tostring(C.hunt_spawn_cid or "?") .. ")") end)
     end)
     return ok
 end
@@ -1835,6 +1887,189 @@ local function ground_probe(x, y, z)
         if b and b.ground_below then hit = b.ground_below(x, y, z, 8.0, 400.0) end
     end)
     return hit
+end
+
+-- ⭐⭐⭐ THE QUARRY MUST LAND ON GROUND YOU CAN WALK TO (08-14, Aurora: the quarry stuck in
+-- the rock face by the water, and unreachable three tames running).
+-- ground_probe answers exactly ONE question - "what is the highest collision surface at or below
+-- this Y" - and it answers it about ANY surface: a boulder's flank, the underside of an arch, the
+-- BED of a river. The rays do not hit water at all, so a river reads as perfectly good ground a
+-- few metres down. Every hunt-spawn bug so far came from treating that one number as "walkable".
+-- These helpers vet a berth five ways, all built from the landing ray we already trust (there is
+-- no verified navmesh query anywhere in this install, so reachability is geometric, not nav):
+--   1 GROUND    a hit at all (nil = void, which is also what open water reads as)
+--   2 ELEVATION downhill tight (water is always DOWN), uphill looser
+--   3 HEADROOM  probe again from 25m up: a higher surface means something is OVER the berth
+--   4 FLATNESS  a 4-point ring at 2m - catches slopes, steps, ledge lips, boulder tops
+--   5 WALK LINE sample the straight line from the player, carrying the reference Y forward. A
+--               gorge, a river channel and a wall all read as a step - and a quarry you cannot
+--               reach is the same bug as a buried one.
+-- ⛔ COST DISCIPLINE: the cheap gates (1+2) run over the whole sweep (48 rays); the expensive
+-- ones (3+4+5) only run on the 6 best-scoring survivors, in ONE pass, and the relaxed tier reuses
+-- that pass's verdicts rather than re-probing. Worst case ~48 + 6x15 + 32 = ~170 rays, once per
+-- hunt, in one frame. This game is CPU-bound: if that ever reads as a hitch, halve the bearings
+-- in the sweep first - it is the only unconditional cost here.
+local function hunt_probe_y(x, y, z)
+    local h = ground_probe(x, y, z)
+    return h and tonumber(h.y) or nil
+end
+
+local function hunt_ground_y(pp, x, z)
+    -- ⛔ START THE RAY A LITTLE OVERHEAD, AND NO MORE. The cast keeps only contacts at or below
+    -- (start + 1.0) and returns the HIGHEST of them, so the start height is not just "how far
+    -- uphill can I see" - it is "how high can something be and still be mistaken for the ground".
+    -- Probing from pp.y (the old code) made ground even a metre uphill invisible and biased every
+    -- berth downhill toward pits and water. Probing from pp.y + 6.0 (my first pass at this, caught
+    -- in review) made a boulder top or a low branch up to 7m over your head eligible as "ground" -
+    -- which conjures the stag onto a rock, i.e. the very unreachable-quarry bug being fixed.
+    -- +2.0 recovers the uphill metre or two and nothing else. It must stay in step with
+    -- C.hunt_spawn_max_rise.
+    return hunt_probe_y(x, pp.y + 2.0, z)
+end
+
+local function hunt_berth_deep_ok(pp, x, z, gy, want_line)
+    -- ⛔⛔ THE HEADROOM PROBE MUST STAY SHORT (red-team, 08-14 - this is the one that would have
+    -- shipped broken). The cast returns the HIGHEST contact at or below start+1.0, and this
+    -- engine's rays DO hit tree crowns - the ride probe's own comments say so in four places, it
+    -- is why its landing ray clamps its upward reach at all. So probing 25m up did not ask "am I
+    -- inside a rock", it asked "is there anything overhead at all", and in woodland the answer is
+    -- always yes. Every forest berth came back "roofed", all three tiers refused, and the hunt
+    -- would have died at its 12s timeout every single time - in wolf country.
+    -- ⇒ Ask the narrow question instead: is there a ceiling within ~4m of my head? That is being
+    -- INSIDE something. Burial in a cliff is caught far more reliably by the flatness ring and the
+    -- walk line below (a buried point's neighbours disagree wildly, and the approach steps up onto
+    -- the rock), and by the post-birth watch in the hunt tick.
+    local hy = hunt_probe_y(x, gy + 3.0, z)
+    if hy and (hy - gy) > (tonumber(C.hunt_spawn_headroom) or 1.5) then return false, "roofed" end
+    local lo, hi = gy, gy
+    for _, o in ipairs({ { 2.0, 0.0 }, { -2.0, 0.0 }, { 0.0, 2.0 }, { 0.0, -2.0 } }) do
+        -- ⛔ gy + 3.0, NOT gy + 6.0 (round-2 review). The cast accepts contacts to start+1.0, so
+        -- a +6.0 start let foliage and rock lips up to 7m above the berth count as a neighbour's
+        -- "ground" - and anything over the 2.0 spread fails outright. That put woodland straight
+        -- back to being rejected as "slope or ledge", two lines under the headroom fix that was
+        -- supposed to end exactly that. A neighbour more than 3m up already fails the spread test,
+        -- so the extra reach bought nothing but canopy hits.
+        local ry = hunt_probe_y(x + o[1], gy + 3.0, z + o[2])
+        if not ry then return false, "ring void" end
+        if ry < lo then lo = ry end
+        if ry > hi then hi = ry end
+    end
+    if (hi - lo) > (tonumber(C.hunt_spawn_flat) or 2.0) then return false, "slope or ledge" end
+    if not want_line then return true end
+    local dx, dz = x - pp.x, z - pp.z
+    local dd = math.sqrt(dx * dx + dz * dz)
+    if dd < 3.0 then return true end
+    local steps = math.max(2, math.floor(dd / 3.0))
+    local step_max = tonumber(C.hunt_spawn_step) or 2.5
+    local prev = pp.y
+    for i = 1, steps do
+        local tt = i / steps
+        local sy = hunt_probe_y(pp.x + dx * tt, prev + 3.0, pp.z + dz * tt)
+        if not sy then return false, "no path" end
+        if math.abs(sy - prev) > step_max then return false, "step" end
+        prev = sy
+    end
+    return true
+end
+
+-- THE ONE PICKER. Both hunt spawn paths call this now - the two divergent inline sweeps that used
+-- to live in the tick had different gates, which is why every previous fix only half-landed.
+-- Returns a UNIVERSAL {x,y,z}. Four tiers, each more forgiving than the last: fully vetted, then
+-- the best one whose only fault was a rough approach, then the best by ground+elevation alone,
+-- then a close ring. It only returns nil when not one of 48 swept points had ground at a sane
+-- elevation - which in practice means there is nowhere to stand at all.
+local function hunt_pick_berth(pp, fx, fz)
+    if not pp then return nil end
+    local shortlist, why = {}, {}
+    for _, rng in ipairs({ 14.0, 20.0, 26.0, 32.0 }) do
+        for a = 0, 11 do
+            local th = a * (math.pi / 6.0)
+            local dx, dz = math.cos(th), math.sin(th)
+            local cx, cz = pp.x + dx * rng, pp.z + dz * rng
+            local gy = hunt_ground_y(pp, cx, cz)
+            if not gy then
+                why["void"] = (why["void"] or 0) + 1
+            elseif (pp.y - gy) > (tonumber(C.hunt_spawn_max_drop) or 3.0) then
+                why["below you"] = (why["below you"] or 0) + 1
+            elseif (gy - pp.y) > (tonumber(C.hunt_spawn_max_rise) or 3.0) then
+                why["above you"] = (why["above you"] or 0) + 1
+            else
+                local front = dx * fx + dz * fz          -- >0 = in front of your camera
+                shortlist[#shortlist + 1] = { x = cx, z = cz, y = gy,
+                    score = math.abs(rng - 22.0) + math.max(0.0, front) * 40.0
+                        + math.abs(gy - pp.y) * 2.0 }    -- level with you beats merely legal
+            end
+        end
+    end
+    table.sort(shortlist, function(a, b) return a.score < b.score end)
+    -- ONE PASS, not two. A candidate that fails only on the walk line has ALREADY paid for its
+    -- headroom and flatness probes, so remembering it as the relaxed fallback is free - the old
+    -- second pass re-probed the same points and bought nothing but ~50 raycasts.
+    -- ⛔ RANK THE FALLBACKS. "step" is a MEASURED bank of 2.5-4m on the way there - you walk
+    -- around it. "no path" is the nil-probe case: a void, or a wall taller than the sampler can
+    -- see. They are not the same evidence, and taking whichever merely scored better meant a
+    -- berth across a gorge could beat one up a shallow rise.
+    local fb_step, fb_path = nil, nil
+    local tried = 0
+    for _, cnd in ipairs(shortlist) do
+        if tried >= 6 then break end
+        tried = tried + 1
+        local ok, reason = hunt_berth_deep_ok(pp, cnd.x, cnd.z, cnd.y, true)
+        if ok then
+            pcall(function() log.info(string.format(
+                "[IrisTaming] quarry berth vetted %.1f,%.1f,%.1f (score %.1f, %d shortlisted)",
+                cnd.x, cnd.y + 0.3, cnd.z, cnd.score, #shortlist)) end)
+            return { x = cnd.x, y = cnd.y + 0.3, z = cnd.z }
+        end
+        if reason then why[reason] = (why[reason] or 0) + 1 end
+        if reason == "step" and not fb_step then fb_step = cnd end
+        if reason == "no path" and not fb_path then fb_path = cnd end
+    end
+    local fallback = fb_step or fb_path
+    if fallback then
+        pcall(function() log.info(string.format(
+            "[IrisTaming] quarry berth (no clean approach) %.1f,%.1f,%.1f",
+            fallback.x, fallback.y + 0.3, fallback.z)) end)
+        return { x = fallback.x, y = fallback.y + 0.3, z = fallback.z }
+    end
+    -- ⭐ AND IT MUST NEVER COME BACK EMPTY-HANDED. Neither spawn path can recover from nil: one
+    -- silently skips the hunt, the other retries the identical geometry once and then times out
+    -- with "nothing came of the hunt". Every shortlist entry already has verified ground at a sane
+    -- elevation - that is exactly what the whole system had BEFORE this change, and it beats no
+    -- quarry at all. Deep vetting is a preference, not a precondition.
+    -- ⛔ AND PREFER A POINT WE HAVE NO EVIDENCE AGAINST. shortlist[1] is ALWAYS the first
+    -- candidate the deep loop tested, so reaching here means it failed - very likely as "roofed",
+    -- which is the gate's own word for "inside something". Handing that one back would be
+    -- choosing the known-bad point over the merely unknown. Take the best UNTRIED candidate.
+    local unv = shortlist[tried + 1] or shortlist[1]
+    if unv then
+        pcall(function() log.info(string.format(
+            "[IrisTaming] quarry berth UNVETTED (%s of %d, ground+elevation only)",
+            shortlist[tried + 1] and "best untried" or "best overall", #shortlist)) end)
+        return { x = unv.x, y = unv.y + 0.3, z = unv.z }
+    end
+    -- LAST RESORT - and it is NOT "your own Y six metres back" any more. THAT was the buried
+    -- spawn: stand at the foot of a cliff and it put the body inside the rock. A tight ring
+    -- close in, keeping the checks that catch geometry, dropping only flatness and the path.
+    for _, rng in ipairs({ 8.0, 11.0 }) do
+        for a = 0, 7 do
+            local th = a * (math.pi / 4.0)
+            local cx, cz = pp.x + math.cos(th) * rng, pp.z + math.sin(th) * rng
+            local gy = hunt_ground_y(pp, cx, cz)
+            if gy and math.abs(gy - pp.y) < 2.0 then
+                -- ⛔ NO HEADROOM GATE HERE. It used to be the ONLY gate on this ring, which is
+                -- backwards: the last resort should be the most permissive tier, not the one whose
+                -- single test is the least reliable.
+                pcall(function() log.info("[IrisTaming] quarry berth: LAST RESORT ring at " .. tostring(rng) .. "m") end)
+                return { x = cx, y = gy + 0.3, z = cz }
+            end
+        end
+    end
+    local parts = {}
+    for k, v in pairs(why) do parts[#parts + 1] = k .. "=" .. tostring(v) end
+    pcall(function() log.info("[IrisTaming] quarry spawn REFUSED: no walkable berth ("
+        .. table.concat(parts, " ") .. ")") end)
+    return nil
 end
 
 local function is_game_paused()
@@ -2136,6 +2371,7 @@ local function release_creature(ch)
     unparent_critter(ch)   -- never leave a body riding the player's hand
     pcall(function() ch:call("setCharacterControllerEnable", true) end)   -- never leave a no-clip body behind
     pcall(function() set_ground_glue(char_go(ch), true) end)              -- nor a terrain-snapless one
+    S.ghost_ch = nil; S.ghost_lease = nil   -- the crossing's ghost lease is settled here
     despawn_doe()   -- abandoning the tame abandons any conjured quarry
 end
 
@@ -2151,6 +2387,29 @@ local function nav_follow(ch, pgo)
     return pcall(function() nav:call("navigationRequest(via.GameObject)", pgo) end)
 end
 
+-- ⭐⭐ THE QUARRY IS NOT PART OF THE PEACE (08-14, Aurora: "the quarry has not been
+-- killable"). The hunt's kill is the ONE body inside the ritual's radius that must stay
+-- hostile, aimable and mortal - that is the entire errand. Both area sweeps below used to
+-- reach it: the truce nulls app.LockOnTarget.TargetData (the de-target lever the homestead
+-- box uses to make a resident un-aimable), and the pack hold hands out full set_immunity
+-- (IsDamageZero + IsIgnoreDamageHit + DamageCollisionOff). Either one and the quarry cannot
+-- be killed, so the hunt can never end.
+-- ⛔ A FIELD ON S, NOT A CHUNK-LOCAL: this file lives near Lua's 200-local ceiling.
+S.is_quarry = function(ch)
+    if not ch then return false end
+    local a = nil
+    pcall(function() a = ch:get_address() end)
+    for _, o in ipairs({ (S.trial and S.trial.hunt_ch) or false, S.hunt_our or false }) do
+        if o then
+            if rawequal(o, ch) then return true end
+            local oa = nil
+            pcall(function() oa = o:get_address() end)
+            if a and oa and oa == a then return true end
+        end
+    end
+    return false
+end
+
 local function truce_bubble(pgo, target_ch)
     -- THE TRUCE: while a taming ritual is active, quiet the hate of everyone nearby (pawns most
     -- of all -- they will otherwise maul the yielded/approached creature as a registered enemy).
@@ -2161,6 +2420,13 @@ local function truce_bubble(pgo, target_ch)
     S.truce_last = now
     local pp = pgo and upos(pgo)
     if not pp then return end
+    -- 08-14: SWEEP BOTH BUBBLES. The rite regularly parks the courted creature far from the
+    -- player - during the hunt it sits pinned while the player chases the quarry out to
+    -- hunt_leash (150m) - and a player-centred sweep leaves everything standing next to it fully
+    -- hostile. That is why villagers and other packs kept mauling a wolf mid-rite. One extra
+    -- dist() per candidate; no second scene walk.
+    local wp = nil
+    pcall(function() wp = upos(char_go(target_ch)) end)
     -- party members are handled SURGICALLY elsewhere (shield_party_off: wolf-only strips, so pawns
     -- still fight goblins mid-tame and the player's lock-on survives). This sweep must therefore
     -- SKIP the party -- it used to strip_hate+clear_targets them wholesale every 0.5s, which both
@@ -2182,9 +2448,12 @@ local function truce_bubble(pgo, target_ch)
             pcall(function()
                 local ch = comps:call("get_Item", i) or comps[i]
                 local ca = ch and ch:get_address()
-                if ch and ch ~= target_ch and not (ca and skip[ca]) then
+                if ch and ch ~= target_ch and not (ca and skip[ca]) and not S.is_quarry(ch) then
                     local go = char_go(ch)
-                    if go and dist(upos(go), pp) < 30.0 then strip_hate(ch); clear_targets(ch) end
+                    local gp9 = go and upos(go)
+                    if gp9 and (dist(gp9, pp) < 30.0 or (wp and dist(gp9, wp) < 30.0)) then
+                        strip_hate(ch); clear_targets(ch)
+                    end
                 end
             end)
         end
@@ -2293,8 +2562,19 @@ local function pacify_pack(pgo, target_ch)
     S.pack_last = now
     local pp = pgo and upos(pgo)
     if not pp then return end
+    -- 08-14: the pack ring follows the COURTED CREATURE too (the player is up to 150m away
+    -- during the hunt, and a player-centred ring left the rest of the pack loose around the one
+    -- body we are trying to protect)
+    local wp = nil
+    pcall(function() wp = upos(char_go(target_ch)) end)
     local species = ""
-    pcall(function() species = (go_name(char_go(target_ch)) or ""):match("ch%d%d%d") or "" end)
+    -- ⛔ WAS match("ch%d%d%d") - THREE digits, so a ch299-band target (ox ch299003, hen
+    -- ch299221, rabbit, rat) collapsed to the band "ch299" and prefix-matched EVERY ch299 animal
+    -- within 40m, the hunt's quarry included, then handed them all set_immunity(true). A pack is
+    -- the SAME CHASSIS: wolves pack with wolves. Cross-band packs are still covered, deliberately
+    -- and explicitly, by the C.target_bands csv on the next line down (default "ch223", which is
+    -- what keeps a mixed wolf/puma pack holding together).
+    pcall(function() species = (go_name(char_go(target_ch)) or ""):match("ch%d+") or "" end)
     local rng = tonumber(C.pack_range) or 40.0
     S.pack = S.pack or {}
     pcall(function()
@@ -2308,11 +2588,12 @@ local function pacify_pack(pgo, target_ch)
         for i = 0, (tonumber(n) or 0) - 1 do
             pcall(function()
                 local ch = comps:call("get_Item", i) or comps[i]
-                if ch and ch ~= target_ch and not is_dead(ch) and not S.tamed[ch] then
+                if ch and ch ~= target_ch and not is_dead(ch) and not S.tamed[ch] and not S.is_quarry(ch) then
                     local go = char_go(ch)
                     local nm = go and go_name(go) or ""
                     local packmate = (species ~= "" and nm:find(species, 1, true) == 1) or name_in_csv(nm, C.target_bands)
-                    if packmate and go and dist(upos(go), pp) < rng then
+                    local gp8 = go and upos(go)
+                    if packmate and gp8 and (dist(gp8, pp) < rng or (wp and dist(gp8, wp) < rng)) then
                         full_pacify(ch); set_ai(ch, false); set_immunity(ch, true); set_nav_stop(ch, true)
                         S.pack[ch] = true
                     end
@@ -2361,15 +2642,34 @@ local function shield_party_off(target_ch)
     local chaddr = nil
     pcall(function() chaddr = target_ch:get_address() end)
     _G.IrisTamingHoldWolf = { addr = waddr, ch_addr = chaddr, until_t = os.clock() + 0.5 }
-    local function stand_down(member)
+    -- ⛔ TWO STRENGTHS, ON PURPOSE (review round 3, 08-14).
+    -- The FULL treatment does three things, and only one of them is harmless to hand a stranger:
+    --   clear(wgo)            transient, self-healing, safe on anyone.
+    --   setCustomRate(wgo,0)  PERMANENT. There is no writer of 1.0 anywhere in this file and
+    --                         neither restore_pack nor release_creature undoes it - so handing it
+    --                         to a passing town guard means that guard can NEVER work up hate
+    --                         toward that creature again, for the life of the body. Fine for the
+    --                         party (we own their lifecycle); not fine for the world.
+    --   RemoveAt on EnemyActionTargetList  mutates, from the Lua thread, a container this file's
+    --                         own notes say the AI "refills AND consumes inside its own update
+    --                         tick, between our frames". Pointing that at four pawns we control is
+    --                         one thing; pointing it at 32 arbitrary bodies mid-combat is a
+    --                         native-AV surface for no gain.
+    -- ⇒ The party gets the full treatment. Everyone else gets the hate CLEAR only - because the
+    -- acquisition door (install_hate_door_hook) now stops them re-accruing any, which is exactly
+    -- what setCustomRate was there to do, without the permanent write.
+    local function stand_down(member, light)
         local maddr = nil
         pcall(function() maddr = member:get_address() end)
         if maddr and maddr ~= paddr then          -- never touch the PLAYER (keeps the lock-on alive)
             local mhs = hate_system(member)
             if mhs then
                 pcall(function() mhs:call("clear(via.GameObject)", wgo) end)
-                pcall(function() mhs:call("setCustomRate(via.GameObject, System.Single)", wgo, 0.0) end)
+                if not light then
+                    pcall(function() mhs:call("setCustomRate(via.GameObject, System.Single)", wgo, 0.0) end)
+                end
             end
+            if light then return end
             pcall(function()
                 local bb = comp(char_go(member), "app.AIBlackBoardController")
                 local list = bb and bb:call("get_EnemyActionTargetList")
@@ -2387,10 +2687,18 @@ local function shield_party_off(target_ch)
     for _, member in ipairs(party_characters()) do
         stand_down(member)
     end
-    -- Stray pawns are not returned by the player's party list, but they can
-    -- still acquire and repeatedly attack the courted animal.  Sweep them at
-    -- 4 Hz and remove only this one target; their ability to fight goblins or
-    -- anything else remains untouched.
+    -- ⛔⛔ 08-14: THIS SWEEP HAD NEVER TOUCHED A STRAY PAWN. It filtered candidates on
+    -- `id:match("^ch100")` - but an unhired/stray pawn is the ch11xxxx chassis, not ch100
+    -- (HostileUnhiredPawns-1.2.0.lua:157 buckets ch11* as a sub pawn; get_CharaIDString returns
+    -- "ch110021_00"-shaped ids). The ONLY body that filter ever admitted was the MAIN pawn, which
+    -- the party loop twenty lines up had already handled. So the block written specifically to
+    -- stop a stray pawn mauling the courted wolf was a no-op from the day it was added, which is
+    -- exactly what Aurora watched happen: "a stray pawn was attacking the wolf the entire time".
+    -- ⇒ The ask is "nobody attacks it", so stop guessing at chassis prefixes and treat EVERY
+    -- body near the creature. stand_down is surgical by construction - it clears hate toward THIS
+    -- creature, zeroes its accrual RATE, and removes only this one entry from the attacker's
+    -- action list. Their fight with anything else is untouched, and the PLAYER is skipped inside
+    -- stand_down (that skip is what keeps her lock-on alive).
     local now = os.clock()
     if now >= (tonumber(S.stray_shield_at) or 0.0) then
         S.stray_shield_at = now + 0.25
@@ -2401,15 +2709,33 @@ local function shield_party_off(target_ch)
             local chars = scene and scene:call(
                 "findComponents(System.Type)", sdk.typeof("app.Character"))
             local wp = wgo and upos(wgo)
-            for _, member in ipairs(chars and chars:get_elements() or {}) do
-                pcall(function()
-                    local id = tostring(member:call("get_CharaIDString") or "")
-                    if not id:match("^ch100") then return end
-                    local mgo = char_go(member)
-                    local mp = mgo and upos(mgo)
-                    if wp and mp and dist(wp, mp) <= 55.0 then stand_down(member) end
-                end)
+            local list9 = chars and chars:get_elements() or {}
+            -- ⛔ A ROLLING CURSOR, NOT THE FIRST 32. findComponents returns a stable order, so a
+            -- flat cap meant the same bodies were treated every sweep forever and anything past
+            -- the cut was NEVER touched - and a late-registered body (a stray pawn that just
+            -- wandered in) sits at a high index, i.e. exactly the one most likely to be missed.
+            -- Start where the last sweep stopped and wrap: the whole roster is covered within a
+            -- few 0.25s passes at the same per-sweep cost.
+            local total9 = #list9
+            local done = 0
+            if total9 > 0 then
+                local start9 = (tonumber(S.stray_shield_i) or 0) % total9
+                for k9 = 0, total9 - 1 do
+                    if done >= 32 then S.stray_shield_i = (start9 + k9) % total9; break end
+                    local member = list9[((start9 + k9) % total9) + 1]
+                    pcall(function()
+                        if member == target_ch or is_dead(member) then return end
+                        local mgo = char_go(member)
+                        local mp = mgo and upos(mgo)
+                        if wp and mp and dist(wp, mp) <= 55.0 then
+                            done = done + 1
+                            stand_down(member, true)   -- LIGHT: hate clear only (see stand_down)
+                        end
+                    end)
+                    if k9 == total9 - 1 then S.stray_shield_i = 0 end
+                end
             end
+            S.stray_shield_n = done
         end)
     end
 end
@@ -2433,6 +2759,16 @@ local function install_hold_hook()
             function(retval)
                 local hold = _G.IrisTamingHoldWolf
                 if not hold or os.clock() > (tonumber(hold.until_t) or 0.0) then return retval end
+                -- 08-14: a lease with no GAMEOBJECT address cannot strip anything - the match
+                -- below compares an address to nil and is never true. Fail LOUD (once a second)
+                -- rather than quietly doing nothing for a whole rite while the panel reads LIVE.
+                if not hold.addr then
+                    if os.clock() > (tonumber(_G.IrisTamingHoldWarnAt) or 0.0) then
+                        _G.IrisTamingHoldWarnAt = os.clock() + 1.0
+                        pcall(function() log.info("[IrisTaming] HOLD LEASE has no addr - the target-list strip is doing nothing") end)
+                    end
+                    return retval
+                end
                 pcall(function()
                     local bb = thread.get_hook_storage().bb
                     local list = bb and bb:call("get_EnemyActionTargetList")
@@ -2450,6 +2786,52 @@ local function install_hold_hook()
     return ok and _G.IrisTamingHoldHookInstalled == true
 end
 install_hold_hook()
+
+-- ⭐⭐⭐ 08-14 THE ACQUISITION DOOR (Aurora: "we need the wolf not to be a target for pawns,
+-- stray pawns, NPCs, other enemies etc").
+-- Every defence above answers a question someone else asked - "is this a foe?" (contested: four
+-- post-hooks share getRelationshipFromTo) or "what is on my menu?" (updateEnemyTargetList, which
+-- RiftSpeak's own pacify recon found the game barely calls: "bbCalls=0 ... the list is filled
+-- inline per-frame by some other path"). Both are downstream of the thing that actually starts a
+-- fight: hate. In DD2 an AI only ever picks attack targets off its hate list, and hate is only
+-- ever written through ONE method. Shut that door and nothing can even begin to want the wolf,
+-- whatever chassis it wears and whatever any other mod thinks of the relationship.
+-- ⭐ AND IT CANNOT BLOCK THE PLAYER. Hate is an AI-only ledger; Aurora does not swing through a
+-- hate system. Striking the creature still fires damageProc -> S.combat_tame -> the shield's
+-- combat branch stops calling shield_party_off, the 0.5s lease lapses, this door opens, and the
+-- allies pile in exactly as the design wants.
+-- ⛔ SIGNATURE IS PROVEN, NOT GUESSED: this exact overload is called live by
+-- "GriffinRideProbe - Iris.lua":6412 and SKIP-hooked the same way by RiftSpeak/pacifist.lua:146.
+local function install_hate_door_hook()
+    if _G.IrisTamingHateDoorInstalled then return true end
+    local ok = pcall(function()
+        local td = sdk.find_type_definition("app.HateSystem")
+        local m = td and td:get_method(
+            "addHateParam(via.GameObject, app.HateRecvCategory, app.HateSystem.WriteType, "
+            .. "System.Single, System.Single, System.Single, System.Single)")
+        if not m then return end
+        sdk.hook(m,
+            function(args)
+                -- fast bail FIRST: this fires constantly, all over the game
+                local hold = _G.IrisTamingHoldWolf
+                if not hold or not hold.addr then return end
+                if os.clock() > (tonumber(hold.until_t) or 0.0) then return end
+                local skip = false
+                pcall(function()
+                    local tgo = sdk.to_managed_object(args[3])
+                    if tgo and tgo:get_address() == hold.addr then skip = true end
+                end)
+                if skip then
+                    S.hate_door = (tonumber(S.hate_door) or 0) + 1
+                    return sdk.PreHookResult.SKIP_ORIGINAL
+                end
+            end,
+            function(retval) return retval end)
+        _G.IrisTamingHateDoorInstalled = true
+    end)
+    return ok and _G.IrisTamingHateDoorInstalled == true
+end
+install_hate_door_hook()
 
 -- GRAB DETECTION: the game's native pick-up runs through app.Human.requestTryCatch (confirmed by
 -- reflection dump). When the player initiates a grab and a beaten creature is waiting, open a short
@@ -2997,6 +3379,11 @@ local function protect_tame_target(player, pgo, ch, go, d, hc, hp)
         set_think_stop(ch, false); set_nav_stop(ch, false); set_ai(ch, true)
         pcall(function() ch:call("resetActionAndAI") end)
         _G.IrisTamingTargetAddr = nil
+        -- ⛔ AND DROP THE SHIELD LEASE THIS INSTANT. The trial publishes a 2.0s lease, so without
+        -- this the card says "your allies join" while the hate door and the target-list strip keep
+        -- them from acquiring it for up to two more seconds. (Harmless before this batch, because
+        -- that publisher used to write addr=nil and both mechanisms no-op'd on it.)
+        _G.IrisTamingHoldWolf = nil
     end
     -- BACK OUT: sheathe again BEFORE you have actually hurt it -> drop back to the peaceful shield.
     -- Once you have drawn blood (hp fell) it stays committed (no yo-yo mid-fight).
@@ -3214,6 +3601,20 @@ TB.pad_down = function()
     end)
     return pad
 end
+
+-- ⭐ THE HOWL BUTTON (08-14, Aurora: "on controller we need to keep this as B"). C.howl_key is
+-- deliberately NOT the palm key - on keys, a held palm must not auto-pass the howl beat. But a
+-- controller has no spare face button, so the howl answers on B/Circle: the same 0x40080 mask
+-- every other rite reads through TB.pad_down (wyrm rite, rodeo, InteractButton, the ride probe).
+-- ⛔ BOTH howl sites must call THIS - the performer that fires the Bellow roar and the stage
+-- clock that scores it. If they ever disagree you roar while the trial refuses to advance, or
+-- the trial advances with no roar. The pad half is raw pad_down, NOT pad_ok: pad_ok's camera
+-- cone would drop the howl mid-beat and fail the rite (the same trap the critter CALL avoided).
+TB.howl_down = function()
+    local kb = false
+    pcall(function() kb = iris_kb(math.floor(tonumber(C.howl_key) or 0x48)) == true end)
+    return kb or TB.pad_down()
+end
 -- ⭐⭐⭐ THE MISSING ARGUMENT THAT KEPT THE NATIVE B PROMPT OFF EVERY TAME (08-13).
 -- `_G.IrisPrompt.set(owner, text, prio, dist, POS, go)` -- every tame call site passed **nil** for
 -- pos, and IrisPromptBar's `_world_prompt` bails on `not entry.pos`. So the tames only ever drove
@@ -3317,7 +3718,13 @@ end
 -- camera-track it. Snapping you to face it would fight the ritual's whole point.
 TB.face = function(go, secs)
     if not go then return false end
-    if S.trial and tostring(S.trial.stage or "") == "circle" then return false end
+    -- The CIRCLE (you camera-track the orbiting wolf) AND the STAND YOUR GROUND beats. A 0.15s
+    -- hard snap laid on top of a LIVE player MotionFsm2 is the sidestepping Aurora saw - those
+    -- stages settle your facing themselves, gently, and must be the sole authority while they run.
+    do
+        local st9 = S.trial and tostring(S.trial.stage or "") or ""
+        if st9 == "circle" or st9 == "rush_tell" or st9 == "rush" then return false end
+    end
     local ok = false
     pcall(function()
         local pgo9 = char_go(get_player())
@@ -3394,6 +3801,21 @@ TB.held = function()
     local kb = false
     pcall(function() kb = iris_kb(math.floor(tonumber(C.tame_key) or 0x4E)) == true or iris_kb(0x4E) == true end)
     local held = kb or (TB.pad_ok() and TB.pad_down())
+    -- ⭐⭐ 08-14 THE PAD HAND MAY NOT STUTTER (Aurora: "the palm looks like it re-triggers over
+    -- and over even when I am not moving" - controller only). On a pad the hand is gated by
+    -- TB.pad_ok: a ~70 degree camera cone plus a speed test. ONE frame where the creature slips
+    -- the cone (the CIRCLE orbits it out on purpose) or one dt spike that fakes a sprint drops
+    -- `held`. The performance block reads that as "hand down", hands the body back, NILS S.pclip,
+    -- then re-seizes on the very next frame and replays the palm from frame 0. Keyboard N skips
+    -- pad_ok entirely, which is exactly why this only ever looked broken on a controller.
+    -- ⇒ while the BUTTON is still physically down and a rite is live, a cone blip is not a
+    -- release. A true release drops TB.pad_down() on the same frame, so this adds no lag.
+    if held then
+        S.pad_hand_at = os.clock()
+    elseif (S.trial or S.ox_rite) and TB.pad_down()
+        and (os.clock() - (tonumber(S.pad_hand_at) or 0.0)) < 0.35 then
+        held = true
+    end
     -- ⭐ 08-13: the palm IS the face. Every rite reads its hand through TB.held(), so facing here
     -- covers wolf trials, the ox yoke, critter/bird give, the griffin rite and horses in ONE place
     -- instead of six. Re-asserted while held (0.35s lease) so it tracks a creature that moves.
@@ -3796,8 +4218,21 @@ local function load_state()
         if tonumber(C.rush_back_speed) < 6.0 or tonumber(C.rush_back_speed) > 18.0 then C.rush_back_speed = 14.0 end
         if tonumber(C.tell_secs) == 2.2 then C.tell_secs = 3.0 end
         if tostring(C.hunt_prey_band) == "ch299" then C.hunt_prey_band = "ch299011,ch299020,ch299221" end
+        -- 08-14 THE QUARRY IS A STAG NOW. Both halves must move together: changing only the cid
+        -- leaves the newborn stag failing is_huntable, so it is never adopted into T.hunt_ch, no
+        -- marker appears, and the hunt dies at the 12s timeout with "nothing came of the hunt".
+        if tostring(C.hunt_spawn_cid) == "ch299011_A_00" then C.hunt_spawn_cid = "ch299010_A_00" end
+        if not tostring(C.hunt_prey_band or ""):find("ch299010", 1, true) then
+            C.hunt_prey_band = "ch299010," .. tostring(C.hunt_prey_band or "")
+        end
+        -- ⛔ THE RAY START AND THIS VALUE MUST STAY IN STEP. hunt_ground_y probes from pp.y+2.0
+        -- and the cast accepts contacts up to start+1.0, so anything above +3.0 is unreachable
+        -- by the probe anyway - a saved 5.0 from the first cut of this feature would just be a
+        -- lie in the panel. (The +6.0 start it was written for made low branches read as ground.)
+        if tonumber(C.hunt_spawn_max_rise) == 5.0 then C.hunt_spawn_max_rise = 3.0 end
         if tostring(C.target_bands) == "ch2,ch3" then C.target_bands = "ch223" end
         if tonumber(C.cue_stop_clip) == 30 then C.cue_stop_clip = 312 end
+        if tonumber(C.cue_tension_clip) == 4030 then C.cue_tension_clip = 2 end   -- 4030 is not a bank-0 clip
         -- deep-scan riches (the wolf had a real walk + settle + howl all along)
         if tonumber(C.cue_walk_clip) == 200 then C.cue_walk_clip = 100 end
         if tonumber(C.circle_anim_speed) == 0.65 then C.circle_anim_speed = 1.0 end
@@ -11804,6 +12239,7 @@ local function do_handover(ch, why)
     local go = char_go(ch)
     if not go then S.status = "handover lost the body (despawned?)"; return end
     set_nav_stop(ch, false)
+    S.seal_howl = nil   -- the howl has had its full say by now; this reset is what used to cut it
     pcall(function() play_motion(ch, 0, 0) end)   -- neutral idle: no forced howl/lie clip lingering
     set_think_stop(ch, false)
     _G.IrisTamingTargetAddr = nil
@@ -11866,6 +12302,14 @@ local function try_finish(player, pgo, ch, go, why, at_hand)
         play_motion(ch, 60, 0)   -- a cat doesn't howl the pact (08-05): it SITS before you
     else
         play_motion(ch, 0, tonumber(C.cue_howl_clip) or 4610)   -- THE PACT SEALS WITH A HOWL
+        -- ...and the howl is a FAMILY, not a clip: 4610 start -> 4611 loop -> 4612 end. Only the
+        -- start was ever played, and the handover's neutral-idle reset landed on top of it 1.6s
+        -- later, so the pact ended on a wolf drawing breath. The machine below chains all three
+        -- and the handover waits for it. (Atlas-verified: ch23_000_com_howling_start/loop/end.)
+        local hs9 = tonumber(C.seal_howl_start_secs) or 1.5
+        local hl9 = tonumber(C.seal_howl_loop_secs) or 2.2
+        S.seal_howl = { ch = ch, stage = "start",
+            loop_at = os.clock() + hs9, end_at = os.clock() + hs9 + hl9 }
     end
     _G.IrisTamingTargetAddr = nil
     S.lie_cue = nil
@@ -11875,7 +12319,14 @@ local function try_finish(player, pgo, ch, go, why, at_hand)
     -- do_commit runs ~2s LATER and read the gender off S.trial --
     -- gone = 50/50 reroll. Stash it across the settle window.
     S.pact_gender = (S.trial and S.trial.gender) or S.pact_gender
-    S.finish_pending = { ch = ch, at = os.clock() + 1.6, why = why }
+    -- the settle window has to outlast whatever the seal is performing
+    local seal_secs = 1.6
+    if S.seal_howl then
+        seal_secs = (tonumber(C.seal_howl_start_secs) or 1.5)
+            + (tonumber(C.seal_howl_loop_secs) or 2.2)
+            + (tonumber(C.seal_howl_end_secs) or 1.8)
+    end
+    S.finish_pending = { ch = ch, at = os.clock() + seal_secs, why = why }
     if seal_ox then
         S.status = "it lows - the pact is sealed"
         set_prompt("THE PACT IS SEALED", "It lows for you, deep and content.", 2.5, 0xFF80FFB0)
@@ -12794,6 +13245,19 @@ local function pick_next(T, now)
     local nxt = T.plan[T.plan_i]
     if not nxt then
         T.stage = "laststeps"; T.t0 = now; S.wolf_clip = nil
+        -- THE LAST STEPS OPEN CLEAN (08-14): the crossing's latch and the pact's one-shots live
+        -- on T and S, and NOTHING used to clear them here. A stale S.lie_cue from an abandoned
+        -- rite skips the lie-down outright, and a stale T.arrived would seal the pact from across
+        -- the clearing.
+        T.arrived = nil; T.ghost_at = nil; T.pact_at = nil; T.pat_played = nil; T.walked = nil
+        -- ⛔ T.hand_seen IS THE LOAD-BEARING ONE (red-team 08-14). stare and howl both set it and
+        -- neither clears it on the way out, and the plan always contains at least one of them - so
+        -- the crossing opened with the latch already true, which arms its 5s "you lowered the
+        -- hand" fail clock the instant the player lets go between stages. And laststeps runs
+        -- inside 3m, where trial_fail's `attack` test is always true: the whole rite would end in
+        -- a mauling for not already having the palm out.
+        T.hand_seen = nil; T.nohand = nil
+        S.lie_cue = nil; S.lie_at = nil
         S.status = "NOW: hand out (HOLD N / B) and hold it - it is deciding."
         return
     end
@@ -12817,16 +13281,24 @@ local function pick_next(T, now)
         despawn_doe()   -- fresh hunt: no leftover doe/corpse from a past tame
         -- if the meet spotted real live prey, this slot adopts it rather than conjuring
         local adopt = nil
-        if T.pending_prey and not is_dead(T.pending_prey) then
-            local pg = char_go(T.pending_prey)
-            if pg and is_huntable(pg) then adopt = T.pending_prey end
-        end
+        -- ⛔ 08-14: despawn_doe above can have DESTROYED this handle between the meet and the
+        -- hunt slot, and char_go on a dead body throws a native InvalidOperationException that
+        -- unwinds the whole tick (seen in the log as a burst of via.Component.get_GameObject
+        -- exceptions the instant the hunt opened). Guard the whole adoption.
+        pcall(function()
+            if T.pending_prey and not is_dead(T.pending_prey) then
+                local pg = char_go(T.pending_prey)
+                if pg and is_huntable(pg) then adopt = T.pending_prey end
+            end
+        end)
         T.pending_prey = nil
         T.hunt_sit = nil; T.hunt_ch = adopt; T.hold_pt2 = nil; T.hunt_corpse = nil
         T.offer_scan_at = 0.0; T.hunt_scan_at = 0.0; T.spawned = nil; T.hunt_start = now; T.doe_respawned = nil
+        T.quarry_checked = nil; T.quarry_recheck_at = nil; T.quarry_free_at = nil; T.quarry_born_at = nil
+        T.qmove_pt = nil; T.qmove_t = nil; T.qstuck_at = nil
         S.status = "IT HUNGERS - prey stirs nearby. HUNT it and bring the kill."
     else
-        T.rush_phase = nil; T.snarl_at = nil; T.charge_d = nil; T.snarl_pt = nil
+        T.rush_phase = nil; T.snarl_at = nil; T.charge_d = nil; T.snarl_pt = nil; T.flinch_t = nil
         S.status = "IT COILS TO STRIKE - stand your ground."
     end
 end
@@ -13241,9 +13713,29 @@ re.on_frame(function()
                 local comps = scene and scene:call(
                     "findComponents(System.Type)",
                     sdk.typeof("app.Character"))
+                -- ⛔ 08-14: THIS SWEEP NEVER GOT truce_bubble's PARTY SKIP, and clear_targets nulls
+                -- app.LockOnTarget.TargetData - so for the whole trial it was wiping the PLAYER's
+                -- own lock-on every two seconds. That is the exact bug truce_bubble was already
+                -- fixed for; this copy was simply missed. Party pawns are handled surgically by
+                -- shield_party_off (wolf-only strips, so they still fight goblins mid-rite).
+                local skip3 = {}
+                pcall(function()
+                    for _, m3 in ipairs(party_characters()) do
+                        pcall(function() skip3[m3:get_address()] = true end)
+                    end
+                end)
                 for _, c in ipairs(comps and comps:get_elements() or {}) do
                     pcall(function()
                         if c == S.target then return end
+                        local ca3 = c:get_address()
+                        if ca3 and skip3[ca3] then return end
+                        -- ⛔ 08-14 THE THIRD SWEEP. truce_bubble and pacify_pack both learned to
+                        -- leave the hunt's quarry alone; this one is a separate 25m bubble around
+                        -- the WOLF and it was still reaching it. clear_targets nulls
+                        -- app.LockOnTarget.TargetData, which is the same lever the homestead box
+                        -- uses to make a body un-aimable - so this quietly kept de-targeting the
+                        -- one creature the errand exists to kill.
+                        if S.is_quarry and S.is_quarry(c) then return end
                         local g = char_go(c)
                         local p = g and upos(g)
                         if p and dist(p, wp) < 25.0 then
@@ -13302,6 +13794,7 @@ re.on_frame(function()
         if not _G.IrisTamingRelHookInstalled then install_rel_hook() end         -- retry until the relationship hook lands
         if not _G.IrisTamingGuardHookInstalled then install_guard_hook() end     -- retry until the damage-clamp hook lands
         if not _G.IrisTamingTryCatchHookInstalled then install_trycatch_hook() end -- retry until the grab-detect hook lands
+        if not _G.IrisTamingHateDoorInstalled then install_hate_door_hook() end   -- retry until the acquisition door lands
         if IPPS then IPPS("player_base") end
         local now = os.clock()
         local dt = math.max(0.001, math.min(0.1, now - (S.last_tick or now)))
@@ -13441,11 +13934,15 @@ re.on_frame(function()
                         pcall(function()
                             local c = comps:call("get_Item", i) or comps[i]
                             local nm = go_name(char_go(c))
-                            if nm:find("ch299011", 1, true) then
+                            -- the quarry band follows the config now (it is a STAG since 08-14)
+                            if nm:find(tostring(C.hunt_spawn_cid or "ch299010_A_00"):sub(1, 8), 1, true) then
                                 found = found + 1
                                 local p = upos(char_go(c))
                                 if p then
-                                    local d = dist(p, S.doe_spawn_pt)
+                                    -- ⛔ S.doe_spawn_pt is the RENDER-converted request point and `p`
+                                    -- is UNIVERSAL - comparing them printed a distance wrong by the
+                                    -- origin offset. Measure against the berth we actually vetted.
+                                    local d = dist(p, S.doe_spawn_uni or S.doe_spawn_pt)
                                     if not nearest or d < nearest then nearest = d end
                                 end
                             end
@@ -13453,7 +13950,7 @@ re.on_frame(function()
                     end
                 end)
                 pcall(function() log.info(string.format(
-                    "[IrisTaming] doe VERIFY: %d ch299011 in scene, nearest %s from spawn point",
+                    "[IrisTaming] quarry VERIFY: %d in scene, nearest %s from the vetted berth",
                     found, nearest and string.format("%.1fm", nearest) or "n/a")) end)
             end
         end
@@ -14200,6 +14697,44 @@ re.on_frame(function()
             end
         end
 
+        -- THE PACT HOWL, in three breaths. The body is still think-stopped with its FSM off here
+        -- (the clip-visibility recipe), so nothing else is touching layer 0 - the seal is the last
+        -- thing this creature does as a wild animal.
+        if S.seal_howl and not char_go(S.seal_howl.ch) then
+            S.seal_howl = nil   -- the body went away mid-seal; do_handover's early return would
+                                -- otherwise leave this machine talking to a dead handle forever
+        end
+        if S.seal_howl then
+            -- ⛔ THE SEAL MUST KEEP THE BODY (review round 3). The trials path runs
+            -- release_creature the instant try_finish returns - which restores the creature's
+            -- motion FSM, its brain and its nav, and drops immunity. So the comment that used to
+            -- sit here ("still think-stopped, nothing else is touching layer 0") was simply wrong
+            -- for the path that actually runs, and 4611/4612 would have been stomped by the body's
+            -- own FSM exactly the way the single 4610 was. Hold it ourselves for the few seconds
+            -- the howl needs, and keep the shield lease fresh so nothing swings at it mid-pact;
+            -- do_handover does the real, careful hand-back the moment the chain ends.
+            pcall(function()
+                local sgo = char_go(S.seal_howl.ch)
+                if sgo then
+                    set_think_stop(S.seal_howl.ch, true)
+                    set_player_fsm(sgo, false)
+                    set_immunity(S.seal_howl.ch, true)
+                    _G.IrisTamingHoldWolf = { addr = sgo:get_address(),
+                        ch_addr = S.seal_howl.ch:get_address(), until_t = os.clock() + 0.5 }
+                end
+            end)
+            local H9 = S.seal_howl
+            if H9.stage == "end" and now >= (tonumber(H9.end_at) or 0.0)
+                + (tonumber(C.seal_howl_end_secs) or 1.8) + 1.0 then
+                S.seal_howl = nil   -- self-retire: the handover normally clears this first
+            elseif H9.stage == "start" and now >= (tonumber(H9.loop_at) or 0.0) then
+                H9.stage = "loop"
+                pcall(function() play_motion(H9.ch, 0, tonumber(C.cue_howl_loop) or 4611) end)
+            elseif H9.stage == "loop" and now >= (tonumber(H9.end_at) or 0.0) then
+                H9.stage = "end"
+                pcall(function() play_motion(H9.ch, 0, tonumber(C.cue_howl_end) or 4612) end)
+            end
+        end
         -- phase 2 of a settling pact
         if S.finish_pending and now >= (tonumber(S.finish_pending.at) or 0.0) then
             local fpd = S.finish_pending
@@ -16434,6 +16969,20 @@ re.on_frame(function()
             S.abandon_t = nil
         end
 
+        -- ⭐ THE GHOST WATCHDOG (08-14). The last steps switch the creature's push capsule and
+        -- ground snap OFF so it cannot bulldoze the player, and that lease is renewed at 4Hz by
+        -- the crossing itself. This lives in the UNCONDITIONAL region of the tick on purpose: it
+        -- is the one place that runs at every distance, so no stage and no range band can strand
+        -- a body ghosted. pcall is load-bearing, not decorative - char_go on a body destroyed by
+        -- a zone change throws a native exception that unwinds the whole tick.
+        if S.ghost_lease and os.clock() > S.ghost_lease then
+            pcall(function()
+                local g9 = S.ghost_ch and char_go(S.ghost_ch)
+                if g9 then set_ground_glue(g9, true) end
+            end)
+            S.ghost_ch = nil; S.ghost_lease = nil
+        end
+
         -- ⭐⭐⭐ 08-13 THE ARM DECAYS, AND THE RITE CAN BE CANCELLED OUTRIGHT.
         -- S.armed was LEVEL-set and never expired. The rite's per-frame body re-engages on
         -- `S.armed and d <= gate_range` with NO button, so any arm left behind -- by walking off,
@@ -16562,6 +17111,20 @@ re.on_frame(function()
         -- ritual stage, so nothing kills the wolf in the gap before the ritual engages.
         if S.armed and S.mode ~= "yielded" then
             protect_tame_target(player, pgo, ch, go, d, hc, hp)
+        elseif S.mode == "yielded" then
+            -- ⛔ 08-14 THE FEED GAP. The yielded shield lived ONLY in the block further down -
+            -- but the FEED MACHINE above it early-returns on every frame an offering lies out, so
+            -- while the beaten creature ate there was NO pacify, NO truce, NO pawn stand-down, and
+            -- the 0.5s FRIEND lease lapsed and took the rel hook with it. Every call here is
+            -- level-set and idempotent. ⛔ The copy that used to sit further down in the yielded
+            -- block has been REMOVED - do not put it back. It doubled the whole cluster every
+            -- frame for the entire yield window, and shield_party_off walks every party member's
+            -- target list.
+            full_pacify(ch)
+            truce_bubble(pgo, ch)
+            shield_party_off(ch)
+            pacify_pack(pgo, ch)   -- 08-14: the peaceful branch holds the pack; this one forgot to
+            set_immunity(ch, true)
         end
 
         -- death-rescue: a one-shot can kill between frames before the floor sees it; inside the
@@ -16753,10 +17316,10 @@ re.on_frame(function()
         end
 
         if S.mode == "yielded" then
-            full_pacify(ch)                         -- hate + targets + zero-rate: it truly stops fighting
-            truce_bubble(pgo, ch)                   -- quiet the bystanders (non-party)
-            shield_party_off(ch)                    -- pawns stand down -- but only off THIS wolf (goblins stay fair game)
-            set_immunity(ch, true)                  -- a yielded beast cannot be finished off
+            -- ⛔ 08-14: the four shield calls that used to live here have moved UP beside
+            -- protect_tame_target, which runs before the feed machine's early return. Leaving a
+            -- copy here ran the whole cluster TWICE a frame for the entire yield window, and
+            -- shield_party_off is not cheap - it walks every party member's target list.
             if hp and hp < (tonumber(C.floor_hp) or 1.0) then write_hp(hc, tonumber(C.floor_hp) or 1.0) end
             local near = (d and d <= (tonumber(C.camp_hold_range) or 6.0))
             local carried = catch_active(player)   -- native carry active?
@@ -16967,7 +17530,7 @@ re.on_frame(function()
                             set_prompt("THE BOND GROWS",
                                 bonding and "Sit with it by the fire." or "Take a stool, or just be still beside it.",
                                 0.6, 0xFF80D0FF)
-                            S.status = string.format("%s: bonding %d%%", nm, math.floor(tonumber(rite.bond) or 0.0))
+                            S.status = nm .. ": the bond grows"   -- the bar one line up already shows the number
                         end
                     elseif rite.stage == "feed_wait" then
                         -- THE MEAL: your own act - N lays the meat down (one is taken from the bag,
@@ -17201,6 +17764,31 @@ re.on_frame(function()
                     if iris_kb(k) then wants_move = true; return end
                 end
             end)
+            -- ⭐ 08-14 THE PAD HAD NO WAY OUT. This read was keyboard-only, so a stick push never
+            -- handed the body back: the perform block kept re-asserting think-stop + FSM-off while
+            -- the stick steered, which reads on screen as sliding and sidestepping. get_AxisL is
+            -- the same reader the stable hint already uses.
+            if not wants_move then
+                pcall(function()
+                    local gpn = sdk.get_native_singleton("via.hid.GamePad")
+                    local gtd = sdk.find_type_definition("via.hid.GamePad")
+                    local dev = gpn and gtd and sdk.call_native_func(gpn, gtd, "get_MergedDevice")
+                    local ax = dev and dev:call("get_AxisL")
+                    if ax and (math.abs(tonumber(ax.x) or 0.0) > 0.35
+                        or math.abs(tonumber(ax.y) or 0.0) > 0.35) then
+                        wants_move = true
+                    end
+                end)
+            end
+            -- ⭐⭐⭐ A SHOVE IS NOT A STEP (08-14, Aurora: "the wolf just keeps walking into me,
+            -- pushing me back, and never reaches the final progress"). `moved_fast` is pure
+            -- DISPLACEMENT - dist(now, last)/dt - and being shoved by the creature's own collision
+            -- capsule IS displacement. First contact latched it true and it renewed itself every
+            -- frame, so THE MEET stalled at whatever percent it had reached and THE LAST STEPS
+            -- could never latch its arrival, start the lie-down or seal the pact. Measure what the
+            -- player ASKED for instead; keep displacement only where the creature is too far away
+            -- to be the one doing the pushing.
+            local player_moved = wants_move or (moved_fast and d > 4.5)
             -- the HOWL answers on its OWN key (H) with the Bellow roar; every other hand stage = N + 6200
             -- B/N only owns the palm animation in stages which explicitly ask for a hand.
             -- Holding B during hunts, feeding, backing off or a rush must leave the player's
@@ -17208,8 +17796,31 @@ re.on_frame(function()
             local ritual_palm_stage = stage_now == "meet" or stage_now == "circle"
                 or stage_now == "laststeps" or stage_now == "stare"
                 or stage_now == "c_meet" or stage_now == "c_call" or stage_now == "c_palm"
+            -- ⭐⭐ STAND YOUR GROUND IS A POSE NOW (Aurora, field 08-14: "the player was still
+            -- doing the weird sidestep thing... it looks like the end of the palm emote when the
+            -- Arisen is trying to return to their origin, but the palm emote isn't even used").
+            -- Deadbanding our own rotation writes was not enough, because these two beats were
+            -- deliberately EXCLUDED from the performance block - the player's own MotionFsm2 was
+            -- live the whole time, and a live locomotion FSM under a scripted root will keep
+            -- resolving little turn-in-place and settle steps no matter how rarely we write.
+            -- ⇒ Seize the body and hold the TRUE idle loop. Nothing is left that can take a step.
+            -- It asks for no hand: the card says "Do NOT move. Do NOT draw", not "hold the palm".
+            -- The walk-away is unaffected - a movement key or the stick still hands the body back
+            -- instantly (wants_move), and the nerve test downstream reads the step that follows.
+            local brace_stage = stage_now == "rush_tell" or stage_now == "rush"
             local perform_held, perf_clip, perf_bank, perf_start = hand and ritual_palm_stage,
                 tonumber(C.player_hand_clip) or 6200, 60, 0.0
+            if brace_stage then
+                perform_held = true
+                perf_clip = tonumber(C.player_brace_clip) or 0
+                perf_bank = tonumber(C.player_brace_bank) or 0
+                perf_start = 0.0
+            elseif stage_now == "stare" then
+                -- the stare-down gets its own stance (see the config note)
+                perf_clip = tonumber(C.player_stare_clip) or 3001
+                perf_bank = tonumber(C.player_stare_bank) or 0
+                perf_start = 0.0
+            end
             if stage_now == "c_call" or stage_now == "c_give" then
                 if S.call_anim_live then
                     -- the Wilds call sequence (whistle -> arm up -> loop) OWNS the body: the stance
@@ -17222,7 +17833,7 @@ re.on_frame(function()
             end
             if stage_now == "howl" then
                 perform_held = false
-                pcall(function() perform_held = iris_kb(math.floor(tonumber(C.howl_key) or 0x48)) end)
+                pcall(function() perform_held = TB.howl_down() end)
                 -- ⚠ S.trial, NOT T -- T is not bound in this scope (08-06: the first cat_sit
                 -- branch read a nil T here and the Bellow howled at a sitting cat anyway)
                 if S.trial and S.trial.cat_sit then
@@ -17243,7 +17854,10 @@ re.on_frame(function()
             elseif S.kneel_loop then
                 S.kneel_loop = nil   -- the sit is over: a fresh kneel next time
             end
-            if perform_held and not wants_move and not pat_hold and stage_now ~= "rush_tell" and stage_now ~= "rush"
+            -- ⛔ rush_tell / rush are NO LONGER excluded here (08-14): holding them is the fix for
+            -- the sidestep. The snarl beat still owns the body on its own terms - T.flinch_until
+            -- plus S.phold suppress this block for the startle, exactly as before.
+            if perform_held and not wants_move and not pat_hold
                 and not (stage_now == "laststeps" and S.lie_cue)   -- the stroke owns the body: no camera-servo (player beyblade)
                 and (not S.trial or now >= (tonumber(S.trial.flinch_until) or 0.0)) then
                 -- STUDIO MODE: the performance owns the body while you stand (think-stopped) -- WASD hands it back
@@ -17258,13 +17872,52 @@ re.on_frame(function()
                 S.pstop_tick = now   -- lease: watchdog restores control if we ever stop renewing
                 local pc = perf_clip
                 local is_pose = true
+                -- ⭐ 08-14: ASK THE BODY, DO NOT TRUST THE CACHE. S.pclip is nil'd by the 0.4s
+                -- think-stop watchdog and by every one-frame hand dropout, and a bare cache miss
+                -- re-raised the palm from frame 0 - the "it keeps re-animating" jitter. If layer 0
+                -- is already wearing this exact clip, adopt it and let it hold.
+                local live_ok = false
+                pcall(function()
+                    local l0 = player:call("get_Motion"):call("getLayer", 0)
+                    if not l0 then return end
+                    local mi = tonumber(l0:call("get_MotionID"))
+                    live_ok = (mi == pc)
+                end)
+                -- a hold that is behaving spends nothing: only a PERSISTENT thief can exhaust the
+                -- budget. Without this, meet and laststeps share clip 6200, so one budget of 12
+                -- had to cover minutes of ritual and then gave up silently.
+                if live_ok then S.pclip_fix = 0 end
                 if S.pclip ~= pc then
                     S.pclip = pc
-                    S.pclip_t0 = now
-                    play_player_motion(player, pc, perf_bank, perf_start)
+                    S.pclip_t0 = S.pclip_t0 or now
+                    S.pclip_fix = 0; S.pclip_fix_at = nil
+                    if not live_ok then
+                        S.pclip_t0 = now
+                        play_player_motion(player, pc, perf_bank, perf_start)
+                    end
+                elseif not live_ok and now >= (tonumber(S.pclip_fix_at) or 0.0) then
+                    -- ⛔ AND RE-ASSERT IF SOMETHING STEALS THE LAYER (08-14). The adopt check above
+                    -- only ran on a cache MISS, so a pose the camera or the FSM quietly took over
+                    -- while S.pclip was unchanged simply stopped showing and nothing noticed. The
+                    -- camera is a known thief here even with think-stop on and the FSM off - the
+                    -- wayfarer's-sense work proved it - so do not diagnose the thief, just take the
+                    -- layer back. Throttled, and capped so a clip the game genuinely refuses can
+                    -- never become an infinite fight.
+                    S.pclip_fix = (tonumber(S.pclip_fix) or 0) + 1
+                    S.pclip_fix_at = now + 0.25
+                    if S.pclip_fix <= 12 then
+                        play_player_motion(player, pc, perf_bank, perf_start)
+                    end
                 end
                 if is_pose then
-                    -- layer 0 is OURS while think-stopped: the last-frame pin sticks
+                    -- layer 0 is OURS while think-stopped: the last-frame pin sticks.
+                    -- ⛔ EXCEPT FOR A CLIP THAT ALREADY LOOPS. The pin exists because the palm
+                    -- (60:6200) is a ONE-SHOT that would otherwise fall through to whatever the
+                    -- FSM fancies. The brace idle (0:0 comNM_idle_loop) and the stare's catch
+                    -- stance (0:3001 com_catch_stance_loop) cycle on their own - pinning them on
+                    -- the final frame would turn a breathing Arisen into a statue.
+                    local pose_loops = brace_stage or stage_now == "stare"
+                    if not pose_loops then
                     pcall(function()
                         local layer = player:call("get_Motion"):call("getLayer", 0)
                         local ef = layer and layer:call("get_EndFrame")
@@ -17272,6 +17925,7 @@ re.on_frame(function()
                             layer:call("set_Frame", ef - 2.0)
                         end
                     end)
+                    end
                     -- the kneel chain: the 1103 sink has reached its floor -> 1105 loop takes over
                     if S.pclip == 1103 and S.trial and S.trial.cat_sit then
                         pcall(function()
@@ -17293,8 +17947,24 @@ re.on_frame(function()
                 -- follows the CAMERA yaw -- turn the camera to keep the hand on the wolf
                 pcall(function()
                     local hyaw
+                    if brace_stage then
+                        -- ⛔ STAND YOUR GROUND DOES NOT TRACK. The legs are pinned to an idle loop
+                        -- with the FSM off, so any rotation here is a static-footed swivel - and
+                        -- the wolf's backstep picks angles up to 180 degrees, so the 4 degree
+                        -- deadband would spin the Arisen bodily on the spot at 12 deg/frame. You
+                        -- brace and hold the line; the stage-open snap already put you face-on.
+                        return
+                    end
                     if stage_now == "circle" then
-                        -- THE CIRCLE: you track the orbiting wolf with your camera (it circles you)
+                        -- ⭐⭐ 08-14 (Aurora: "it keeps trying to return me to the original palm-out
+                        -- orientation - jittery and stupid"). THE CIRCLE IS A 1:1 STEERING WHEEL.
+                        -- The body is think-stopped with MotionFsm2 off, so this line is the ONLY
+                        -- path the right stick has to your yaw. A deadband there is not smoothing,
+                        -- it is INPUT QUANTISATION - a controller sweeps ~2-3 degrees per frame at
+                        -- 120fps, under the old 4 degree gate, so the body lurched every other
+                        -- frame in 4+ degree steps. And an ease based on a REMEMBERED yaw is not
+                        -- damping, it is a rubber band back to the yaw you started the hold with.
+                        -- Camera yaw in, body yaw out, every frame, nothing else.
                         local cam = sdk.get_primary_camera()
                         local cgo = cam and cam:call("get_GameObject")
                         local crot = cgo and cgo:call("get_Transform"):call("get_Rotation")
@@ -17304,7 +17974,19 @@ re.on_frame(function()
                         if C.camera_face_flip == true then fx = -fx; fz = -fz end
                         if math.abs(fx) + math.abs(fz) < 0.01 then return end
                         hyaw = math.atan(fx, fz)
-                    else
+                        -- ⛔ NO OTHER ROTATION AUTHORITY MAY SURVIVE THE RING. A stale ease base
+                        -- would drag the NEXT stage back toward the circle's yaw (which is why the
+                        -- stare and the last steps used to open pointing the wrong way), and a
+                        -- captured face_hold would re-assert an old quat over your stick from the
+                        -- top of the next tick.
+                        S.perf_yaw = nil
+                        S.face_hold = nil
+                        local cq = ValueType.new(sdk.find_type_definition("via.Quaternion"))
+                        cq.x = 0; cq.y = math.sin(hyaw / 2.0); cq.z = 0; cq.w = math.cos(hyaw / 2.0)
+                        pgo:call("get_Transform"):call("set_Rotation", cq)
+                        return
+                    end
+                    do
                         -- every other stage: face the WOLF directly. The camera-forward guess flipped
                         -- the body 180 half the time; the target's bearing never lies.
                         if math.abs(gp.x - pp.x) + math.abs(gp.z - pp.z) < 0.01 then return end
@@ -17318,7 +18000,17 @@ re.on_frame(function()
                     -- root's axis, trembles at fingertip length). Only
                     -- re-face when >4 deg off target, and ease there --
                     -- rare, smooth writes = still root = still hand.
-                    local last = tonumber(S.perf_yaw)
+                    -- ⭐ 08-14: RE-BASE OFF THE BODY, NOT OFF THE LAST NUMBER WE WROTE. Basing the
+                    -- ease on S.perf_yaw meant every rotation written by anyone else - the
+                    -- stage-open snap, TB.face, the pact lock - was undone on the very next frame
+                    -- by a jump back toward the old value.
+                    local last = nil
+                    pcall(function()
+                        local bq = pgo:call("get_Transform"):call("get_Rotation")
+                        local bx = 2.0 * (bq.x * bq.z + bq.w * bq.y)
+                        local bz = 1.0 - 2.0 * (bq.x * bq.x + bq.y * bq.y)
+                        if math.abs(bx) + math.abs(bz) > 0.01 then last = math.atan(bx, bz) end
+                    end)
                     if last then
                         local dy2 = hyaw - last
                         while dy2 > math.pi do dy2 = dy2 - 2 * math.pi end
@@ -17337,6 +18029,10 @@ re.on_frame(function()
                     pgo:call("get_Transform"):call("set_Rotation", hq)
                 end)
             else
+                -- a phold (the startle clip) owns the body on its own terms and re-asserts
+                -- think-stop itself every frame - but leaving OUR lease stamped let the 0.4s
+                -- watchdog fire a needless one-frame FSM restore in the middle of the snarl
+                if S.pstop_tick and S.phold then S.pstop_tick = nil end
                 if S.pstop_tick and not S.phold then
                     -- preserve the CURRENT facing across the FSM restore -- letting go of N must
                     -- NOT snap the character back to its original direction
@@ -17348,6 +18044,7 @@ re.on_frame(function()
                     S.pstop_tick = nil
                 end
                 S.pclip = nil
+                S.pclip_fix = nil; S.pclip_fix_at = nil   -- fresh re-assert budget next hold
                 S.perf_yaw = nil   -- r3: fresh deadband state next hold
             end
 
@@ -17395,7 +18092,21 @@ re.on_frame(function()
             -- tick, so no villager, guard or pawn classifies the wolf as engageable
             pcall(function()
                 if S.target then
-                    _G.IrisTamingHoldWolf = { ch_addr = S.target:get_address(), until_t = os.clock() + 2.0 }
+                    -- ⛔⛔ 08-14 THE LEASE MUST CARRY BOTH ADDRESSES. This publish runs LATER in
+                    -- the same tick than shield_party_off's complete lease, and with a LONGER life
+                    -- (2.0s vs 0.5s) - so what IT writes is what the game's AI reads when it ticks
+                    -- between our frames. It used to write ch_addr only, which keeps the rel hook
+                    -- (FRIEND classification) alive but leaves hold.addr nil - and install_hold_hook
+                    -- matches on `ago2:get_address() == hold.addr`. Comparing an address to nil is
+                    -- never true, so the target-list strip - the ONLY half that wins the race
+                    -- against the AI refilling its list inside its own update tick - was a silent
+                    -- no-op for the entire rite. That is why pawns and villagers kept swinging.
+                    local tgo9 = char_go(S.target)
+                    _G.IrisTamingHoldWolf = {
+                        addr = tgo9 and tgo9:get_address(),
+                        ch_addr = S.target:get_address(),
+                        until_t = os.clock() + 2.0,
+                    }
                 end
             end)
             -- the ritual card: every stage announces itself, big and clear
@@ -17409,16 +18120,27 @@ re.on_frame(function()
                     back_off = { "IT YIELDS GROUND", "Breathe. Keep the hand ready." },
                     laststeps = { "THE LAST STEPS", "KEEP N HELD. Stand still. It comes to your hand." },
                     stare = { "THE STARE-DOWN", "HOLD N / B. Meet its eyes -- don't look away." },
+                    -- ⛔ "H / B" would be a LIE on keyboard: B (0x42) is C.cancel_key and aborts
+                    -- the courtship. The parenthetical is unambiguous on both devices.
                     howl = (T and T.cat_sit)
-                        and { "IT SITS", "HOLD [H] -- be slow, be calm; let it study you." }
-                        or { "IT HOWLS", "HOLD [H] and HOWL BACK at it." },
+                        and { "IT SITS", "HOLD H (pad: B) - be slow, be calm; let it study you." }
+                        or { "IT HOWLS", "HOLD H (pad: B) and HOWL BACK at it." },
                     hunt = { "THE HUNT", "Kill the quarry and lay it before the " .. tostring(creature_label(go) or "wolf"):lower() .. "." },
                 }
                 if S.crumb_stage ~= T.stage then
                     S.crumb_stage = T.stage
                     pcall(function() log.info("[IrisTaming] stage -> " .. tostring(T.stage)) end)
+                    -- ⭐ 08-14: the ease base belongs to the stage that made it. Carried across a
+                    -- stage change it dragged the new stage's facing back toward the old one.
+                    S.perf_yaw = nil
                     -- snap to FACE the wolf as each ritual opens (force-face straight away)
-                    if gp and pp and (math.abs(gp.x - pp.x) + math.abs(gp.z - pp.z)) > 0.05 then
+                    -- ⛔ EXCEPT THE CIRCLE. It hands facing to the player for its whole length, so
+                    -- opening it with a forced snap AND a third of a second of held rotation is the
+                    -- first jolt you feel. Entering the ring we take nothing and let go of anything
+                    -- the previous stage was still holding.
+                    if T.stage == "circle" then
+                        S.face_hold = nil
+                    elseif gp and pp and (math.abs(gp.x - pp.x) + math.abs(gp.z - pp.z)) > 0.05 then
                         pcall(function()
                             local hyaw = math.atan(gp.x - pp.x, gp.z - pp.z)
                             local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
@@ -17560,6 +18282,86 @@ re.on_frame(function()
                 S.armed = nil; S.armed_at = nil
                 S.mode = "idle"; S.target = nil
                 save_state()
+            end
+
+            -- ⭐⭐ THE STAND BEAT (08-14, Aurora: "the arisen keeps moving weirdly while the wolf
+            -- gets into position, a lot of sidestepping. The player just needs to stand idle and
+            -- face the wolf - if the player starts walking away, the ritual should fail").
+            -- rush_tell and rush are deliberately EXCLUDED from the performance block, so the
+            -- player's OWN via.motion.MotionFsm2 is live and owns the root every frame. Writing an
+            -- absolute set_Rotation into that, every frame, with no deadband and no "is she
+            -- walking" guard, is a fight: her feet travel one way, the root is yanked another, and
+            -- the blend resolves as strafe and turn-in-place steps that carry root motion. Three
+            -- authorities were doing it at once (this, the face_hold replay, and TB.face's 0.15s
+            -- snap - which now stands down here).
+            -- ⇒ SETTLE, do not servo: write rarely, ease when we do, and never touch a player who
+            -- is genuinely walking (the same pspeed guard the face_hold replay already respects).
+            -- The walk-away rides the SAME trial_fail path every other ritual uses, keyed on
+            -- displacement off the spot the beat opened on (a speed test never catches a slow
+            -- retreat and punishes a knockback), and only while the gap is actually OPENING.
+            -- check_leave=false for the RUSH: that stage keeps its own, deliberately tighter nerve
+            -- test (0.5m off the anchor) below, and two authorities with different rules meant the
+            -- forgiving one was simply dead code behind the strict one.
+            -- ⛔ ONE FACING AUTHORITY. Now that the stand beats HOLD a pose, the performance
+            -- block's own servo (deadbanded, eased, re-based off the body) is already facing the
+            -- creature every frame - so this must not also write, or we are back to two writers
+            -- disagreeing, which is the wobble this whole beat exists to end. S.pstop_tick is
+            -- stamped by that block each frame it owns the body, and it runs earlier in the tick.
+            local function stand_beat(why_txt, check_leave)
+                local pose_owns = (S.pstop_tick ~= nil)
+                    and ((now - (tonumber(S.pstop_tick) or 0.0)) < 0.05)
+                if (not pose_owns) and (tonumber(pspeed) or 0.0) <= 0.8
+                    and (math.abs(gp.x - pp.x) + math.abs(gp.z - pp.z)) >= 0.05 then
+                    local want = math.atan(gp.x - pp.x, gp.z - pp.z)
+                    local cur = nil
+                    pcall(function()
+                        local rq = pgo:call("get_Transform"):call("get_Rotation")
+                        local bx = 2.0 * (rq.x * rq.z + rq.w * rq.y)
+                        local bz = 1.0 - 2.0 * (rq.x * rq.x + rq.y * rq.y)
+                        if math.abs(bx) + math.abs(bz) > 0.01 then cur = math.atan(bx, bz) end
+                    end)
+                    local write = true
+                    if cur then
+                        local dy = want - cur
+                        while dy > math.pi do dy = dy - 2.0 * math.pi end
+                        while dy < -math.pi do dy = dy + 2.0 * math.pi end
+                        if math.abs(dy) < math.rad(tonumber(C.stand_face_deadband) or 20.0) then
+                            write = false   -- inside the deadband: NO write at all. This is the idle.
+                        else
+                            local step9 = math.rad(tonumber(C.stand_face_step) or 12.0)
+                            if dy > step9 then want = cur + step9 elseif dy < -step9 then want = cur - step9 end
+                        end
+                    end
+                    if write then
+                        pcall(function()
+                            local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
+                            q.x = 0; q.y = math.sin(want / 2.0); q.z = 0; q.w = math.cos(want / 2.0)
+                            pgo:call("get_Transform"):call("set_Rotation", q)
+                        end)
+                        -- ⛔ NO face_hold stamp. The replay at the top of the tick is a SECOND
+                        -- rotation authority, and two authorities writing different yaws in one
+                        -- frame is precisely the wobble this is meant to end.
+                    end
+                end
+                if check_leave == false then return false end
+                if T.stand_stage ~= T.stage or not T.stand_anchor then
+                    T.stand_stage = T.stage
+                    T.stand_anchor = { x = pp.x, y = pp.y, z = pp.z }
+                    T.stand_d = d
+                    T.leave_t = 0.0
+                end
+                local opening = d > (tonumber(T.stand_d) or d) + 0.3
+                if dist(pp, T.stand_anchor) > (tonumber(C.stand_leave_dist) or 1.6) and opening then
+                    T.leave_t = (tonumber(T.leave_t) or 0.0) + dt
+                    set_prompt("STAND YOUR GROUND", "You are giving ground - stop, NOW.", 0.6, 0xFF5050FF)
+                    if T.leave_t > (tonumber(C.stand_leave_grace) or 0.6) then
+                        trial_fail(why_txt or "you gave ground")
+                        return true
+                    end
+                else
+                    T.leave_t = math.max(0.0, (tonumber(T.leave_t) or 0.0) - dt)
+                end
+                return false
             end
 
             -- ================= the stages =================
@@ -17962,7 +18764,8 @@ re.on_frame(function()
                             set_prompt("IT ANSWERS", "It settles on your arm. Now: DROP an herb for it.", 3.0, 0xFF80FFB0)
                         else
                             set_prompt("THE CALL", "It takes wing to your arm...", 0.6)
-                            S.status = string.format("%s: it glides to the glove (%.0f%%)", nm, k * 100.0)
+                            iris_prog_hud(k, "The Call")
+                            S.status = nm .. ": it glides to the glove"
                         end
                     end
                 end
@@ -18348,11 +19151,16 @@ re.on_frame(function()
                     S.status = string.format("come closer - it pays you no mind from %.1fm (hold %s = the hand)", d, "N")
                 elseif not hand then
                     S.status = "HOLD N / B - raise your hand and hold it. Let it look at you."
-                elseif moved_fast then
+                elseif player_moved then
                     S.status = "too fast - slow your feet, keep the hand up"
                 else
                     T.meet = (tonumber(T.meet) or 0.0) + dt
-                    S.status = string.format("it is reading you... hold. (%.0f%%)", math.min(100, T.meet / 4.0 * 100))
+                    -- ⭐ 08-14: THE NUMBER LIVES ON THE BAR NOW, never in the card text - the same
+                    -- shared amber gauge the yoke rite and the passive tames use. iris_prog_hud's
+                    -- own note says it: "Cards keep the flavor text; the NUMBER lives on the bar."
+                    -- The wolf rite was the one taming path that never fed it.
+                    iris_prog_hud(T.meet / 4.0, "The Meet")
+                    S.status = "it is reading you... hold."
                     if T.meet >= 4.0 then
                         -- fresh kill near? the ritual opens with THE FEAST
                         local feast = nil
@@ -18446,61 +19254,20 @@ re.on_frame(function()
                                 local fz = -(1.0 - 2.0 * (crot3.x * crot3.x + crot3.y * crot3.y))
                                 local fl = math.max(0.05, math.sqrt(fx * fx + fz * fz))
                                 fx, fz = fx / fl, fz / fl
-                                local dist_s = tonumber(C.hunt_spawn_dist) or 35.0
-                                -- candidates: behind, behind-flanks, sides, shorter behind
-                                local cands = {
-                                    { -fx * dist_s, -fz * dist_s },
-                                    { (-fx + fz) * 0.7 * dist_s, (-fz - fx) * 0.7 * dist_s },
-                                    { (-fx - fz) * 0.7 * dist_s, (-fz + fx) * 0.7 * dist_s },
-                                    { fz * dist_s, -fx * dist_s },
-                                    { -fz * dist_s, fx * dist_s },
-                                    { -fx * dist_s * 0.5, -fz * dist_s * 0.5 },
-                                }
-                                -- ⭐ PICK THE FLATTEST CANDIDATE, not the first that passes.
-                                -- ground_probe casts DOWN 400m, so a candidate over a ledge
-                                -- happily returns a floor storeys below; the old first-match
-                                -- + 8m gate then buried the doe out of sight (seen in the
-                                -- field 2026-07-25: uy=20.7 vs player 26.8 = a 6.1m drop).
-                                local best, best_dy = nil, nil
-                                for _, cnd in ipairs(cands) do
-                                    local px2, pz2 = pp.x + cnd[1], pp.z + cnd[2]
-                                    local hh = ground_probe(px2, pp.y, pz2)
-                                    local hy = hh and tonumber(hh.y) or nil
-                                    if hy then
-                                        local dy = math.abs(hy - pp.y)
-                                        if dy < 8.0 and (not best_dy or dy < best_dy) then
-                                            best, best_dy = { px2, pz2, hy }, dy
-                                        end
-                                    end
-                                end
-                                for _, cnd in ipairs(best and { best } or {}) do
-                                    local px, pz = cnd[1], cnd[2]
-                                    local h3 = { y = cnd[3] }
-                                    local hy3 = tonumber(h3.y)
-                                    pcall(function() log.info(string.format(
-                                        "[IrisTaming] doe ground: best drop=%.1fm of %d candidates",
-                                        best_dy or -1.0, #cands)) end)
-                                    if hy3 and math.abs(hy3 - pp.y) < (tonumber(C.hunt_spawn_max_drop) or 3.0) then
-                                        local py = hy3 + 0.3
-                                        pcall(function()
-                                            local rpp = pgo:call("get_Transform"):call("get_Position")
-                                            py = py - (pp.y - rpp.y)   -- universal -> render
-                                        end)
-                                        pcall(function() log.info(string.format("[IrisTaming] doe point: uy=%.1f ppy=%.1f render_y=%.1f", hy3, pp.y, py)) end)
-                                        -- ⭐ THE BIRTHPLACE IN *UNIVERSAL* SPACE. The born-adoption
-                                        -- scan is guarded by `and S.doe_spawn_uni`, so without this
-                                        -- the freshly-conjured doe is never adopted into T.hunt_ch:
-                                        -- no "(quarry)" marker, and the hunt times out with
-                                        -- "nothing came of the hunt". The other spawn path (below)
-                                        -- always set this; this one never did.
-                                        S.doe_spawn_uni = { x = px, y = hy3 + 0.3, z = pz }
-                                        local pv = ValueType.new(sdk.find_type_definition("via.Position"))
-                                        pv.x = px; pv.y = py; pv.z = pz
-                                        sp = pv
-                                        return
-                                    end
-                                end
-                                pcall(function() log.info("[IrisTaming] doe spawn REFUSED: no verified ground at any candidate") end)
+                                -- ⭐ THE SAME PICKER AS PATH B (08-14). Two divergent sweeps with
+                                -- different gates is exactly why every previous placement fix only
+                                -- half-landed - one of them always kept the old behaviour.
+                                local berth = hunt_pick_berth(pp, fx, fz)
+                                if not berth then return end
+                                S.doe_spawn_uni = { x = berth.x, y = berth.y, z = berth.z }
+                                local py = berth.y
+                                pcall(function()
+                                    local rpp = pgo:call("get_Transform"):call("get_Position")
+                                    py = py - (pp.y - rpp.y)   -- universal -> render
+                                end)
+                                local pv = ValueType.new(sdk.find_type_definition("via.Position"))
+                                pv.x = berth.x; pv.y = py; pv.z = berth.z
+                                sp = pv
                             end)
                             if sp and spawn_prey(sp) then
                                 T.stage = "hunt"; T.hunt_ch = nil; T.t0 = now
@@ -18651,41 +19418,16 @@ re.on_frame(function()
                                 fz = -(1.0 - 2.0 * (crot3.x * crot3.x + crot3.y * crot3.y))
                                 local fl = math.max(0.05, math.sqrt(fx * fx + fz * fz)); fx, fz = fx / fl, fz / fl
                             end
-                            -- sweep 8 bearings x 4 ranges; keep only points on REAL ground (probe
-                            -- elevation sane) so the doe never lands inside a cliff (the buried-in-rock bug).
-                            local px, pz, py = nil, nil, nil
-                            local bestscore = 1e9
-                            for _, rng in ipairs({ 16.0, 22.0, 28.0 }) do
-                                for a = 0, 11 do
-                                    local th = a * (math.pi / 6.0)
-                                    local dx, dz = math.cos(th), math.sin(th)
-                                    local cx, cz = pp.x + dx * rng, pp.z + dz * rng
-                                    local h3 = ground_probe(cx, pp.y, cz)
-                                    local hy3 = h3 and tonumber(h3.y) or nil
-                                    -- DOWNHILL is capped tight (08-06, Aurora: the doe in the river):
-                                    -- water and riverbeds are always DOWN -- a bank 3-5m below the
-                                    -- player passed the old symmetric 5m gate. Uphill stays looser.
-                                    if hy3 and (pp.y - hy3) < 2.5 and (hy3 - pp.y) < 5.0 then
-                                        local front = dx * fx + dz * fz   -- >0 = in front of your camera
-                                        local score = math.abs(rng - 22.0) + math.max(0.0, front) * 40.0   -- BEHIND you + ~22m, out of view
-                                        if score < bestscore then bestscore = score; px, pz, py = cx, cz, hy3 + 0.3 end
-                                    end
-                                end
-                            end
-                            if not px then   -- boxed in: ~16m BEHIND the camera on your ground (never right in front)
-                                -- the blind fallback gets a probe too (08-06): 16m behind a
-                                -- cliff-edge stand is open air over the river
-                                px, pz = pp.x - fx * 16.0, pp.z - fz * 16.0
-                                local hfb = ground_probe(px, pp.y, pz)
-                                local hyf = hfb and tonumber(hfb.y)
-                                if hyf and (pp.y - hyf) < 2.5 and (hyf - pp.y) < 5.0 then
-                                    py = hyf + 0.3
-                                    pcall(function() log.info("[IrisTaming] doe: no clear ground -> 16m behind fallback (probed)") end)
-                                else
-                                    px, pz, py = pp.x - fx * 6.0, pp.z - fz * 6.0, pp.y + 0.3
-                                    pcall(function() log.info("[IrisTaming] doe: nothing sane behind either -> 6m at your own level") end)
-                                end
-                            end
+                            -- ⭐ ONE VETTED BERTH (08-14). The sweep that used to live here tested
+                            -- elevation and NOTHING else, so a rock face at your level, a ledge
+                            -- across a gorge and a riverbed all passed - and when it found nothing
+                            -- it spawned at YOUR OWN Y six metres back, which IS the buried-in-the-
+                            -- cliff spawn. hunt_pick_berth does ground + elevation + headroom +
+                            -- flatness + walk line, relaxes in tiers rather than guessing, and
+                            -- refuses outright only when even a close ring has nowhere sane.
+                            local berth = hunt_pick_berth(pp, fx, fz)
+                            if not berth then return end
+                            local px, py, pz = berth.x, berth.y, berth.z
                             S.doe_spawn_uni = { x = px, y = py, z = pz }   -- UNIVERSAL birthplace (matches upos space for the born check)
                             local ry = py
                             pcall(function() local rpp = pgo:call("get_Transform"):call("get_Position"); ry = py - (pp.y - rpp.y) end)
@@ -18728,6 +19470,9 @@ re.on_frame(function()
                             end
                             if born then
                                 T.hunt_ch = born; S.hunt_our = born
+                                T.quarry_born_at = now   -- the burial watch's clock: T.hunt_start
+                                                         -- is stamped when the STAGE opens, which
+                                                         -- can be seconds before a body exists
                                 -- 08-08 (Aurora: "the doe quarry spawns
                                 -- idle -- have it able to move"): a
                                 -- conjured body can arrive with its
@@ -18752,7 +19497,11 @@ re.on_frame(function()
                                 -- the spawner puts the body where IT likes, not where we asked
                                 -- (08-06 tape: born 10.9m off the vetted point -- in the RIVER).
                                 -- Snap the newborn home to the point the picker actually vetted.
-                                if bornd > 2.0 and S.doe_spawn_uni then
+                                -- ⭐ 08-14: UNCONDITIONAL now. The old `bornd > 2.0` gate waved
+                                -- through a 1.9m error, and 1.9m sideways off a vetted berth is
+                                -- exactly far enough to be inside the rock face beside it. The
+                                -- vetted point is the only point we have any evidence about.
+                                if S.doe_spawn_uni then
                                     pcall(function()
                                         local g6 = char_go(born)
                                         local pv6 = ValueType.new(sdk.find_type_definition("via.Position"))
@@ -18774,6 +19523,23 @@ re.on_frame(function()
                     return true
                 end
                 local prey2 = T.hunt_ch
+                -- ⭐ 08-14 THE QUARRY IS FAIR GAME. Belt to the sweeps' braces: whatever an
+                -- earlier frame did - or an earlier rite that ended without restore_pack - is
+                -- undone here, on the marked quarry ONLY. Damage flags off, brain and legs back
+                -- (a hunt needs it to RUN), and its LockOnTarget re-enabled so the player's aim
+                -- can acquire it at all. 2 Hz: component lookups, not a hot path.
+                if prey2 and now >= (tonumber(T.quarry_free_at) or 0.0) then
+                    T.quarry_free_at = now + 0.5
+                    if S.pack then S.pack[prey2] = nil end
+                    pcall(function() set_immunity(prey2, false) end)
+                    pcall(function() set_ai(prey2, true) end)
+                    pcall(function() set_nav_stop(prey2, false) end)
+                    pcall(function()
+                        local qgo9 = char_go(prey2)
+                        local lo9 = qgo9 and comp(qgo9, "app.LockOnTarget")
+                        if lo9 then lo9:call("set_Enabled", true) end
+                    end)
+                end
                 local prey_go = prey2 and char_go(prey2)
                 if not prey_go then
                     S.status = "the prey slipped away - the ritual moves on"
@@ -18787,6 +19553,8 @@ re.on_frame(function()
                     if prey_pos and pp and dist(prey_pos, pp) > (tonumber(C.hunt_runaway_dist) or 100.0) then
                         despawn_doe()
                         T.hunt_ch = nil
+                        T.quarry_checked = nil; T.quarry_recheck_at = nil; T.quarry_born_at = nil
+                        T.qmove_pt = nil; T.qmove_t = nil; T.qstuck_at = nil
                         if not T.doe_ran then
                             T.doe_ran = true; T.spawned = nil; T.hunt_start = now   -- fresh conjure, fresh clock
                             S.status = "the quarry is lost to the wilds - another stirs..."
@@ -18796,6 +19564,80 @@ re.on_frame(function()
                             S.wolf_clip = nil; pick_next(T, now); save_state()
                         end
                         return true
+                    end
+                    -- ⭐⭐ BURIED-QUARRY WATCH (08-14, Aurora: the quarry in the rock face by the
+                    -- water). One check 1.5s after the BIRTH (not after the stage opened - the
+                    -- adoption scan can take seconds, and T.hunt_start is stamped long before a
+                    -- body exists), once it has settled. A bad verdict lifts it back to the vetted
+                    -- berth; still bad on the recheck and the quarry is scrapped for one fresh
+                    -- conjure.
+                    -- ⛔ STOP ASKING GEOMETRY, ASK THE ANIMAL (round-2 review, 08-14). Two
+                    -- geometric verdicts have now failed here, for opposite reasons. "Something
+                    -- above its head" is a ROOF test - a live stag trotting under a branch reads
+                    -- as buried. "No floor under its feet" cannot fire at all on a conjured
+                    -- quarry: the body is snapped to the berth the picker measured, so the probe
+                    -- re-finds that same ground and always answers "supported", however wedged in
+                    -- a rock face the body actually is.
+                    -- ⇒ The signal orthogonal to all of it: A LIVE STAG MOVES. One that has not
+                    -- shifted a metre in ten seconds is stuck, whatever the rays think. The floor
+                    -- test stays alongside it, because that IS the right test for the other half:
+                    -- the rays do not hit water, so a body adrift in a river probes down to the
+                    -- riverbed and reads unsupported. Never judge a corpse either - a ragdoll's
+                    -- height is not a standing height, and a carried one rides you.
+                    if prey_pos and not is_dead(prey2) and pp and dist(prey_pos, pp) < 90.0 then
+                        if (not T.qmove_pt) or dist(prey_pos, T.qmove_pt) > 1.0 then
+                            T.qmove_pt = { x = prey_pos.x, y = prey_pos.y, z = prey_pos.z }
+                            T.qmove_t = now
+                        end
+                    else
+                        T.qmove_t = now   -- dead, carried or far off: no verdict
+                    end
+                    -- the settle check is ONE-SHOT (T.quarry_checked); the stuck check has to stay
+                    -- live for the whole hunt, on its own throttle, or the first would silently
+                    -- disable the second the moment it latched
+                    local qstuck = (prey_pos ~= nil) and (not is_dead(prey2))
+                        and (now - (tonumber(T.qmove_t) or now)) > 10.0
+                        and now >= (tonumber(T.qstuck_at) or 0.0)
+                    local qsettle = (prey_pos ~= nil) and (not T.quarry_checked) and (not is_dead(prey2))
+                        and (now - (tonumber(T.quarry_born_at) or now)) > 1.5
+                    if qsettle or qstuck then
+                        if qsettle then T.quarry_checked = true end
+                        if qstuck then T.qstuck_at = now + 8.0 end
+                        local by = tonumber(prey_pos.y) or 0.0
+                        local foot_y = hunt_probe_y(prey_pos.x, by - 0.3, prey_pos.z)
+                        local unsupported = (foot_y == nil) or ((by - foot_y) > 2.5)
+                        if (unsupported or qstuck) and S.doe_spawn_uni then
+                            T.qmove_pt = nil; T.qmove_t = now
+                            pcall(function()
+                                local pv7 = ValueType.new(sdk.find_type_definition("via.Position"))
+                                pv7.x = S.doe_spawn_uni.x; pv7.y = S.doe_spawn_uni.y; pv7.z = S.doe_spawn_uni.z
+                                set_upos(prey_go, pv7)
+                                log.info("[IrisTaming] quarry stuck, buried or adrift -> lifted to the vetted berth")
+                            end)
+                            -- the recheck window has to outlast whichever verdict fired: the void
+                            -- test answers in a moment, but "did it move" needs long enough for a
+                            -- freed animal to actually walk somewhere
+                            T.quarry_recheck_at = now + (qstuck and 7.0 or 1.5)
+                        end
+                    elseif T.quarry_recheck_at and now >= T.quarry_recheck_at and not is_dead(prey2) then
+                        T.quarry_recheck_at = nil
+                        local by2 = prey_pos and (tonumber(prey_pos.y) or 0.0) or 0.0
+                        local ft2 = prey_pos and hunt_probe_y(prey_pos.x, by2 - 0.3, prey_pos.z) or nil
+                        local still2 = (now - (tonumber(T.qmove_t) or now)) > 6.0
+                        if prey_pos and (still2 or (ft2 == nil) or ((by2 - ft2) > 2.5)) then
+                            pcall(function() log.info("[IrisTaming] quarry still buried after the lift -> scrapped") end)
+                            despawn_doe()
+                            T.hunt_ch = nil; T.quarry_checked = nil; T.quarry_born_at = nil
+                            T.qmove_pt = nil; T.qmove_t = nil; T.qstuck_at = nil
+                            if not T.doe_ran then
+                                T.doe_ran = true; T.spawned = nil; T.hunt_start = now
+                                S.status = "the quarry was lost in the rocks - another stirs..."
+                            else
+                                S.status = "the hunt is cursed today - the ritual moves on"
+                                S.wolf_clip = nil; pick_next(T, now); save_state()
+                            end
+                            return true
+                        end
                     end
                     -- HORIZONTAL distance (the slope law): 3D kept the delivery from registering
                     local pdx, pdz = prey_pos and (prey_pos.x - gp.x) or 1e9, prey_pos and (prey_pos.z - gp.z) or 1e9
@@ -18869,8 +19711,9 @@ re.on_frame(function()
                         T.eat_cue2 = "loop"
                         play_motion(ch, tonumber(C.cue_eat_bank) or 60, tonumber(C.cue_eat_loop) or 26)
                     end
+                    iris_prog_hud(T.hf / 6.0, "The Feast")
                     set_prompt("THE OFFERING", "IT FEEDS. Your hunt speaks for you.", 0.6)
-                    S.status = string.format("it feeds on your kill (%.0fs)", math.max(0, 6.0 - T.hf))
+                    S.status = "it feeds on your kill"
                     if T.hf >= 6.0 then
                         pcall(function()
                             local cgo2 = char_go(T.hunt_corpse)
@@ -18923,16 +19766,16 @@ re.on_frame(function()
                         go:call("get_Transform"):call("set_Rotation", tq)
                     end)
                 end
-                local ok_now = hand and facing_ok and sheathed_ok and not moved_fast
+                local ok_now = hand and facing_ok and sheathed_ok and not player_moved
                 if not ok_now then
                     T.slack = (tonumber(T.slack) or 0.0) + dt
                 else
                     T.slack = math.max(0.0, (tonumber(T.slack) or 0.0) - dt * 0.5)
                 end
                 local elapsed = now - (tonumber(T.t0) or now)
-                S.status = string.format("IT CIRCLES - hand up, face it, don't chase. (%.0fs left%s)",
-                    math.max(0, (tonumber(C.circle_secs) or 10.0) - elapsed),
-                    T.slack > 1.0 and "  LOSING IT" or "")
+                iris_prog_hud(elapsed / math.max(0.001, tonumber(C.circle_secs) or 10.0), "The Circle")
+                S.status = "IT CIRCLES - hand up, face it, don't chase."
+                    .. (T.slack > 1.0 and "  LOSING IT" or "")
                 if T.slack > 2.5 then
                     trial_fail("it slipped your gaze")
                     return true
@@ -18945,13 +19788,10 @@ re.on_frame(function()
 
             elseif T.stage == "rush_tell" then
                 -- the telegraph escalates: pace-and-growl (0:3) -> TENSION JUMPS (0:4030) -> launch
-                pcall(function()   -- keep FACING the wolf through STAND YOUR GROUND
-                    local hyaw = math.atan(gp.x - pp.x, gp.z - pp.z)
-                    local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
-                    q.x = 0; q.y = math.sin(hyaw / 2.0); q.z = 0; q.w = math.cos(hyaw / 2.0)
-                    pgo:call("get_Transform"):call("set_Rotation", q)
-                    S.face_hold = { x = q.x, y = q.y, z = q.z, w = q.w, until_t = now + 0.4 }
-                end)
+                -- ONE eased settle toward it, deadbanded - never a per-frame slam - plus the
+                -- walk-away fail the telegraph never had (T.anchor was only armed as rush_tell
+                -- ENDED, so for the whole 3s tell you could simply wander off).
+                if stand_beat("you gave ground", true) then return true end
                 if now - T.t0 < (tonumber(C.tell_secs) or 3.0) * 0.55 then
                     wolf_clip(tonumber(C.cue_tell_clip) or 3)
                 else
@@ -18970,14 +19810,10 @@ re.on_frame(function()
                 -- the run clip can never bulldoze you or run on the spot.
                 local stop_d = tonumber(C.rush_stop_d) or 3.5
                 pcall(function() set_player_fsm(go, false) end)   -- run clip ANIMATES; set_upos owns the body
-                if T.rush_phase ~= "snarl" then   -- keep facing the charging wolf; snarl owns its own facing
-                    pcall(function()
-                        local hyaw = math.atan(gp.x - pp.x, gp.z - pp.z)
-                        local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
-                        q.x = 0; q.y = math.sin(hyaw / 2.0); q.z = 0; q.w = math.cos(hyaw / 2.0)
-                        pgo:call("get_Transform"):call("set_Rotation", q)
-                        S.face_hold = { x = q.x, y = q.y, z = q.z, w = q.w, until_t = now + 0.4 }
-                    end)
+                -- the snarl owns its own facing AND its own nerve test: the startle clip moves
+                -- your root, and you have already passed by then
+                if T.rush_phase ~= "snarl" then
+                    stand_beat("you gave ground", false)   -- facing only: the nerve test below owns the fail
                 end
                 if not T.rush_phase then
                     local bx, bz = gp.x - pp.x, gp.z - pp.z
@@ -19114,6 +19950,9 @@ re.on_frame(function()
                         play_motion(ch, tonumber(C.cue_pounce_bank) or 20, tonumber(C.cue_pounce_clip) or 4011)   -- the FAKE POUNCE (lunge that misses)
                         T.snarl_clip_at = now + 0.5
                         S.pclip = nil
+                        -- the two windows must END TOGETHER: the performance guard releases at
+                        -- flinch_until, and if phold outlives it the phold's end-frame pin lands on
+                        -- the freshly-replayed brace idle and parks it as a statue for the gap
                         S.phold = { clip = tonumber(C.player_flinch_clip) or 830, until_t = now + 1.4 }
                         pcall(function()
                             local hdx, hdz = gp.x - pp.x, gp.z - pp.z
@@ -19122,7 +19961,7 @@ re.on_frame(function()
                             hq.x = 0; hq.y = math.sin(hyaw / 2.0); hq.z = 0; hq.w = math.cos(hyaw / 2.0)
                             pgo:call("get_Transform"):call("set_Rotation", hq)
                         end)
-                        T.flinch_until = now + 1.2
+                        T.flinch_until = now + 1.4   -- == S.phold.until_t above, deliberately
                         T.anchor = nil; T.moved = 0.0
                     end
                 elseif T.rush_phase == "snarl" then
@@ -19149,7 +19988,23 @@ re.on_frame(function()
                 -- steel. NOT during the snarl -- the startle clip moves your root and you passed.
                 if T.rush_phase ~= "snarl" then
                     if T.anchor then T.moved = dist(pp, T.anchor) end
-                    if (tonumber(T.moved) or 0.0) > 0.5 or not sheathed_ok then
+                    -- ⛔ A NUDGE IS NOT A FLINCH (08-14). 0.5m with no grace fails on a single
+                    -- frame - a knockback, a collision, or (until this batch) our own per-frame
+                    -- rotation slam producing a turn-in-place step. It has to be SUSTAINED to
+                    -- count as giving ground. Drawing steel still fails instantly: that is a
+                    -- decision, not an accident.
+                    if not sheathed_ok then
+                        S.pclip = nil
+                        play_player_motion(player, tonumber(C.player_flinch_clip) or 830)
+                        trial_fail("you drew steel")
+                        return true
+                    end
+                    if (tonumber(T.moved) or 0.0) > 0.5 then
+                        T.flinch_t = (tonumber(T.flinch_t) or 0.0) + dt
+                    else
+                        T.flinch_t = 0.0
+                    end
+                    if (tonumber(T.flinch_t) or 0.0) > 0.25 then
                         S.pclip = nil
                         play_player_motion(player, tonumber(C.player_flinch_clip) or 830)
                         trial_fail("you flinched")
@@ -19181,11 +20036,12 @@ re.on_frame(function()
                     if T.grace > 8.0 then trial_fail("you would not meet its eyes"); return true end
                 else
                     T.hand_seen = true
-                    local ok_now = hand and facing_ok and sheathed_ok and not moved_fast
+                    local ok_now = hand and facing_ok and sheathed_ok and not player_moved
                     if not ok_now then T.slack = (tonumber(T.slack) or 0.0) + dt else T.slack = math.max(0.0, (tonumber(T.slack) or 0.0) - dt * 0.5) end
                     local elapsed = now - (tonumber(T.t0) or now)
-                    S.status = string.format("IT STARES YOU DOWN - hand up, hold its gaze (%.0fs%s)",
-                        math.max(0, (tonumber(C.stare_secs) or 5.0) - elapsed), T.slack > 1.0 and "  LOSING IT" or "")
+                    iris_prog_hud(elapsed / math.max(0.001, tonumber(C.stare_secs) or 5.0), "The Stare")
+                    S.status = "IT STARES YOU DOWN - hand up, hold its gaze"
+                        .. (T.slack > 1.0 and "  LOSING IT" or "")
                     if T.slack > 2.5 then trial_fail("you broke under its stare"); return true end
                     if elapsed >= (tonumber(C.stare_secs) or 5.0) then
                         S.familiar[ck] = fam + 30.0; T.stare_pt = nil; pick_next(T, now); save_state()
@@ -19216,15 +20072,15 @@ re.on_frame(function()
                     else play_motion(ch, 0, tonumber(C.cue_howl_loop) or 4611) end
                 end
                 local howl_held = false
-                pcall(function() howl_held = iris_kb(math.floor(tonumber(C.howl_key) or 0x48)) end)
+                pcall(function() howl_held = TB.howl_down() end)
                 if not howl_held and not T.hand_seen then
                     T.t0 = now; T.grace = (tonumber(T.grace) or 0.0) + dt
                     if T.cat_sit then
-                        S.status = "HOLD H - kneel; offer it slow calm"
-                        set_prompt("IT SITS", "HOLD [H] - be slow, be calm; let it study you", 0.6)
+                        S.status = "HOLD H (pad: B) - kneel; offer it slow calm"
+                        set_prompt("IT SITS", "HOLD H (pad: B) - be slow, be calm; let it study you", 0.6)
                     else
-                        S.status = "HOLD H - howl back at it"
-                        set_prompt("IT HOWLS", "HOLD [H] - HOWL BACK at it", 0.6)
+                        S.status = "HOLD H (pad: B) - howl back at it"
+                        set_prompt("IT HOWLS", "HOLD H (pad: B) - HOWL BACK at it", 0.6)
                     end
                     if T.grace > 8.0 then trial_fail(T.cat_sit and "it tired of waiting" or "you did not answer its call"); return true end
                 else
@@ -19234,10 +20090,11 @@ re.on_frame(function()
                     -- the sit runs LONGER than the howl: the kneel-down alone takes ~8.5s to
                     -- reach the floor, and the cat should get a beat of held kneeling after
                     local need_secs = T.cat_sit and (tonumber(C.cat_sit_secs) or 11.0) or (tonumber(C.howl_secs) or 4.0)
+                    iris_prog_hud(elapsed / math.max(0.001, need_secs), T.cat_sit and "The Judgment" or "The Howl")
                     if T.cat_sit then
-                        S.status = string.format("IT SITS IN JUDGMENT - hold H, slow and calm (%.0fs)", math.max(0, need_secs - elapsed))
+                        S.status = "IT SITS IN JUDGMENT - hold H or pad B, slow and calm"
                     else
-                        S.status = string.format("IT HOWLS - HOWL BACK (hold H) (%.0fs)", math.max(0, need_secs - elapsed))
+                        S.status = "IT HOWLS - HOWL BACK (hold H or pad B)"
                     end
                     if T.slack > 3.0 then trial_fail("you lowered the hand"); return true end
                     if elapsed >= need_secs then
@@ -19262,6 +20119,41 @@ re.on_frame(function()
 
             elseif T.stage == "laststeps" then
                 -- the crossing: it comes to your held-out hand -- do not waver
+                -- ⭐⭐⭐ 08-14 THE PUSHING LOOP (Aurora: "the wolf just keeps walking into me,
+                -- pushing me back and not reaching the final progress"). Three faults, one symptom:
+                --   1. `moved_fast` was a DISPLACEMENT test, and the wolf's own capsule shoving the
+                --      player IS displacement - so first contact latched it true and renewed it
+                --      every frame. The arrival latch, the lie-down, the pact timer and try_finish
+                --      ALL live below that gate, so the stage could never advance again. A
+                --      livelock, not a slow stage. (Fixed by player_moved, up at the input read.)
+                --   2. That branch was also the only frame on which NOTHING wrote the wolf's
+                --      position, and this wolf's root motion is LIVE (the whole reason travel runs
+                --      on wolf_travel's virtual walker - the bulldozer law). So the looping walk
+                --      clip carried it further into the player, for free, every frame.
+                --   3. Nothing ever silenced its push capsule for the last few metres.
+                -- Now: the latch is tested FIRST and unconditionally, the body is ghosted for the
+                -- crossing, and an arrived wolf is PINNED to the spot it arrived on.
+                if not T.arrived and d <= 3.0 then T.arrived = true end
+                -- NO SHOVING ON THE LAST STEPS. set_ground_glue is the documented lever (GroundFixer
+                -- + CharacterController + PressDetector + CharacterPress), and release_creature
+                -- already turns them all back on down EVERY exit path - fail, abandon, cancel and
+                -- the seal - so this needs no new teardown. 0.25s cadence, never every frame.
+                if d <= 6.0 and now >= (tonumber(T.ghost_at) or 0.0) then
+                    T.ghost_at = now + 0.25
+                    set_ground_glue(go, false)
+                    -- ⛔ AND LEASE IT. The claim "release_creature restores this down every exit"
+                    -- is false for one window: the whole trial body is gated on d <= 30m, but the
+                    -- universal abandon needs 40m held 1s. Walk out between the two and the wolf
+                    -- keeps GroundFixer, its CharacterController and its colliders switched off
+                    -- with nobody left to turn them back on. The watchdog below owns that case.
+                    S.ghost_ch = ch; S.ghost_lease = now + 0.6
+                end
+                -- PINNED BY DEFAULT: root motion may not creep it into your chest during the
+                -- lie-down, nor drift it while your hand is down, and no shove can re-open the
+                -- walk. Zero speed through the same virtual walker the travel uses, so there is
+                -- only ever ONE writer - and when the crossing does want to move, its own
+                -- wolf_travel call later this frame simply overwrites this one.
+                wolf_travel(gp.x, gp.y, gp.z, 0.0)
                 if not hand then
                     if T.hand_seen then
                         T.nohand = (tonumber(T.nohand) or 0.0) + dt
@@ -19274,9 +20166,32 @@ re.on_frame(function()
                         return true
                     end
                     S.status = "SHEATHE. QUICKLY. It is already walking."
-                elseif moved_fast then
+                elseif (not T.arrived) and player_moved then
                     -- movement never fails the last steps (players kept getting trapped by
-                    -- earlier "approach" coaching) -- the wolf simply pauses, wary
+                    -- earlier "approach" coaching) -- the wolf simply pauses, wary.
+                    -- ⛔ IT PAUSES FOR A REAL STEP ONLY, and once it has ARRIVED nothing may
+                    -- interrupt the settle at all. And it must not free-run while it waits:
+                    -- wolf_travel at zero speed re-asserts the virtual walker, which is exactly
+                    -- the pin we need - skip it and the walk clip's root motion walks it into you.
+                    wolf_travel(gp.x, gp.y, gp.z, 0.0)
+                    -- and it will not wait forever: holding the hand while walking away used to
+                    -- park the rite here with no clock at all, which is how a player ends up
+                    -- loitering in the 30-40m band where nothing restores anything.
+                    -- ⛔ BUT THE CLOCK ONLY RUNS WHILE YOU ARE ACTUALLY AWAY (my own round-2 bug,
+                    -- caught in review): it used to tick on ANY input - a strafe, a jump, even
+                    -- walking TOWARD the wolf - with no decay, so eight cumulative seconds of
+                    -- fidgeting inside the crossing failed the rite. And laststeps runs inside
+                    -- 3m, where trial_fail's attack test is always true, so that was a mauling.
+                    -- Past 6m the wolf cannot reach you and nothing else is happening; inside it,
+                    -- fidget all you like. The clock also unwinds twice as fast as it fills.
+                    if d > 6.0 then
+                        T.walked = (tonumber(T.walked) or 0.0) + dt
+                    else
+                        T.walked = math.max(0.0, (tonumber(T.walked) or 0.0) - dt * 2.0)
+                    end
+                    if (tonumber(T.walked) or 0.0) > 8.0 then
+                        trial_fail("you walked away from it"); return true
+                    end
                     S.status = "IT STOPS - stand still and it will come"
                 else
                     T.nohand = 0.0
@@ -19285,8 +20200,8 @@ re.on_frame(function()
                     -- shoves the player backward -> distance grows -> it walks again = an endless
                     -- pushing loop. Stop farther out (its muzzle still reaches the hand) and once
                     -- arrived NEVER resume walking -- the lie-down begins regardless of drift.
-                    if not T.arrived and d > 3.0 then
-                        wolf_clip(tonumber(C.cue_walk_clip) or 200)
+                    if not T.arrived then
+                        wolf_clip(tonumber(C.cue_walk_clip) or 100)
                         local dxl, dzl = gp.x - pp.x, gp.z - pp.z
                         local dll = math.max(0.05, math.sqrt(dxl * dxl + dzl * dzl))
                         wolf_travel(pp.x + dxl / dll * 2.6, gp.y, pp.z + dzl / dll * 2.6, tonumber(C.crossing_speed) or 1.6)
@@ -19337,8 +20252,14 @@ re.on_frame(function()
                                     end)
                                     S.phold = { clip = tonumber(C.player_pact_clip) or 1220, until_t = now + stroke + 0.7 }
                                 end
-                                S.status = string.format("IT SETTLES AT YOUR FEET. Keep the hand there... (%.1fs)", left)
+                                iris_prog_hud(1.0 - (left / math.max(0.001, tonumber(C.pact_hold_secs) or 4.5)), "The Pact")
+                                S.status = "IT SETTLES AT YOUR FEET. Keep the hand there..."
                             else
+                                -- hand the body back WHOLE before the pact registers it: the
+                                -- handover writes companion context, and it should never do that
+                                -- to a body we are still holding ghosted
+                                pcall(function() set_ground_glue(go, true) end)
+                                S.ghost_ch = nil; S.ghost_lease = nil
                                 if try_finish(player, pgo, ch, go, "the trials", true) then
                                     release_creature(ch)
                                     S.trial = nil
@@ -19402,11 +20323,13 @@ re.on_draw_ui(function()
         do
             local hold = _G.IrisTamingHoldWolf
             local lease = (hold and os.clock() <= (tonumber(hold.until_t) or 0.0)) and "LIVE" or "idle"
-            imgui.text(string.format("hooks: strike=%s hold=%s rel=%s | lease=%s relHits=%d | last hit: %s",
+            imgui.text(string.format("hooks: strike=%s hold=%s rel=%s hate=%s | lease=%s relHits=%d hateBlocks=%d swept=%d | last hit: %s",
                 tostring(_G.IrisTamingStrikeHookInstalled == true),
                 tostring(_G.IrisTamingHoldHookInstalled == true),
                 tostring(_G.IrisTamingRelHookInstalled == true),
-                lease, tonumber(S.rel_hits) or 0, tostring(S.strike_dbg or "-")))
+                tostring(_G.IrisTamingHateDoorInstalled == true),
+                lease, tonumber(S.rel_hits) or 0, tonumber(S.hate_door) or 0,
+                tonumber(S.stray_shield_n) or 0, tostring(S.strike_dbg or "-")))
         end
         if imgui.button("reset taming: fam + trial + lockouts (testing)##tame_famreset") then
             S.familiar = {}
@@ -22546,6 +23469,13 @@ re.on_draw_ui(function()
 end)
 
 re.on_script_reset(function()
+    -- a reload while the crossing had the creature ghosted would otherwise orphan a body with no
+    -- ground snap and no collision: S is rebuilt empty, so nobody would ever restore it
+    pcall(function()
+        local g9 = S.ghost_ch and char_go(S.ghost_ch)
+        if g9 then set_ground_glue(g9, true) end
+    end)
+    S.ghost_ch = nil; S.ghost_lease = nil
     S.familiar = {}   -- every reset scripts starts fresh
     rawset(_G, "IrisTamingPerchScaleHold", nil)
     rawset(_G, "IrisTamingPerchGoAddr", nil)

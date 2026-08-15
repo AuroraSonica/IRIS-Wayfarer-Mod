@@ -1044,6 +1044,12 @@ local DEFAULT = {
     -- DOWNED / REVIVE (slice 1, ground). A companion at the floor goes DOWN instead of dying.
     route3_downed_enabled = true,            -- master switch for the whole downed/revive system
     route3_downed_floor_hp = 1.0,            -- ⛔ NEVER 0: a character at 0 HP cannot be revived
+    -- ⭐⭐ FRIENDLY FIRE SHIELD (08-14, Aurora): your summoned companion ignores damage dealt by
+    -- the Arisen and her pawns, and takes everything else normally. Set false for old behaviour.
+    -- ⛔ Scope is deliberately the ACTIVE stable-summoned companion (what griffin_downed_resolve_
+    -- receiver protects) -- wild creatures, homestead residents and the taming courtship are all
+    -- untouched, so IrisTaming's "you struck it -> THE FIGHT IS YOURS" flip still works exactly.
+    route3_friendly_fire_shield = true,
     route3_downed_window_secs = 30.0,        -- how long you have to reach it before it goes to the stable
     route3_downed_revive_key = 0x52,         -- R -- hold near the body to revive
     route3_downed_revive_pad_mask = 0x40080, -- B/Circle (same constant the rodeo uses for gallop)
@@ -1279,6 +1285,28 @@ local DEFAULT = {
     route3_wild_observer_radius = 180.0,
     route3_wild_observer_patterns = "ch253,griffin",
     route3_attack_uses_unleash = false, -- native monster AI path is still experimental; default to the command driver
+    -- ⭐⭐ PASSIVE SPECIES (08-14, Aurora): creatures the ATTACK order refuses outright. Chassis
+    -- ids from IrisSpecies.lua's curated NAMES table. ⚠ ch299011 is BOTH doe AND horse (the horses
+    -- module converts that chassis) so it covers both. Goat (ch299020) and Ox (ch299003) are
+    -- deliberately ABSENT -- both are horned and Aurora leaned toward letting them fight. No pig
+    -- or boar band exists in the registry yet; add the id when one is identified.
+    route3_attack_passive_bands =
+        "ch299011,ch299010,ch299200,ch299210,ch299220,ch299221,ch299400,ch299440,ch299410,ch299420,ch299430",
+    route3_combat_probe_secs = 8.0,     -- how long the native-combat probe samples before reporting
+    -- ⭐⭐⭐ THE COMBAT LEASE (08-15). Attack = become a wild griffin for the fight, then change back.
+    -- ⭐ LEASE ON (08-15). Everything upstream is solved -- faction (crash-free), components, hate
+    -- door, relationship override (enemyList 0-4 -> 14-16), puppet released. The last link is the
+    -- transition out of Locomotion.Wait, and the lease now IGNITES it: griffin_wake_natural_combat
+    -- latches BattleStateCtrl.IsDetectArisenParty (the thing a fresh spawn gets for free) and fires
+    -- a real attack node inside a live window, retrying while she is still idle and standing down
+    -- the moment she stays out. Set false to fall back to the purely driven loop.
+    route3_lease_enabled = true,
+    route3_attack_ignite_swing = true,  -- ignition also fires a real attack node, not just the latch
+    route3_attack_live_window = true,   -- commanded swings run inside a live window (real movement)
+    route3_lease_max_secs = 120.0,      -- hard cap; she always comes home
+    route3_lease_radius = 45.0,         -- no enemy within this of her -> the fight is over
+    route3_lease_quiet_secs = 6.0,      -- ...and it has to stay empty this long before we call it
+    route3_lease_hate_door = true,      -- block hate BOTH ways between her and player/pawns/NPCs
     route3_natural_combat_wake = true, -- write the battle-state bits seen on a real fighting griffin
     route3_natural_wake_action_period = 3.5, -- do not spam battle wake actions; only retry if stuck
     route3_natural_wake_action_nodes = "CombatStateNormal,Ch253TakeoffLong,Ch253GaleAttack,Ch253AirLandingPressStartLoop",
@@ -6781,6 +6809,656 @@ function griffin_ai_state_diag(gch)
         tostring(grp), tostring(el), ts, adm, nav, pup, spd, moved)
 end
 
+-- ⭐⭐⭐ COMBAT ENTRY CENSUS (2026-08-15). The probe has now eliminated the two obvious walls:
+-- she SEES enemies (enemyList 19) and she HATES one (hateRank 2), with the motion FSM un-puppeted
+-- -- and she still never leaves Locomotion.Wait. So neither perception nor hate is what gates the
+-- transition, which retires July's central theory ("an empty hate ranking = nobody to fight")
+-- along with its "enemyList=0" premise.
+-- ⭐ July DID name the real mechanism, though: a freshly spawned enemy is combat-active for free
+-- because its BattleStateController / AttackNoticeRequester run awake()/start() at instantiation,
+-- latch IsDetectArisenParty, and THAT is what makes a body leave Locomotion.Wait. A tamed body had
+-- those components set_Enabled(false)'d at taming, and restore_disabled only flips them back to
+-- true -- update() resumes from frozen, but awake()/start() never re-run, so the combat state
+-- machine stays parked.
+-- ⛔ July also recorded BattleStateController and RetargetController reading as MISSING on her GO.
+-- A component that is not there cannot be woken by anything, so ENUMERATE what she actually has
+-- instead of guessing type names one at a time (the dump-before-guessing law).
+-- ⛔ Lives HERE, not in orders.lua: get_component is a file-local of this script and is NOT among
+-- the names context.lua exports. Re-implementing it over there is exactly how the first version of
+-- this probe ended up printing a confident falsehood.
+-- ⭐ shared, read-only: every component type name on a GameObject, sorted.
+-- (Proven enumeration -- the same get_Components walk IrisWildHorses uses on shell instances.)
+function iris_component_names(go)
+    local names = {}
+    if not go then return names end
+    pcall(function()
+        local comps = go:call("get_Components")
+        local n = comps and comps:get_size() or 0
+        for i = 0, n - 1 do
+            local tn = "?"
+            pcall(function() tn = comps[i]:get_type_definition():get_full_name() end)
+            names[#names + 1] = tostring(tn)
+        end
+    end)
+    table.sort(names)
+    return names
+end
+
+-- ⭐⭐⭐ THE DIFF THAT ACTUALLY DECIDES IT (2026-08-15).
+-- Our companion is MISSING BattleStateController / RetargetController / TargetController. That
+-- looks damning -- but `enemyList=0` looked damning too and turned out to be my own broken read,
+-- so this gets checked rather than believed. If a LIVE WILD ENEMY carries those three, then a
+-- fighting body genuinely has something ours lacks and we know exactly what to restore. If a wild
+-- enemy ALSO lacks them, they were never the mechanism and the answer is elsewhere (most likely
+-- app.CombatStateControl, which she HAS and which is ENABLED).
+-- ⛔ READ-ONLY. Enumerates and compares; writes nothing to either body.
+function griffin_enemy_census()
+    local mine = S.route3_companion_comps
+    if not mine then
+        local _, mygo = reacquire_griffin()
+        mine = iris_component_names(mygo)
+        S.route3_companion_comps = mine
+    end
+    local foe = griffin_find_enemy(60.0)
+    local fgo = foe and char_go(foe)
+    if not fgo then
+        S.route3_enemy_census = "no enemy within 60m to compare against"
+        return S.route3_enemy_census
+    end
+    local theirs = iris_component_names(fgo)
+    local have = {}
+    for _, n in ipairs(mine) do have[n] = true end
+    local mineset = {}
+    for _, n in ipairs(theirs) do mineset[n] = true end
+    local only_foe, only_us = {}, {}
+    for _, n in ipairs(theirs) do if not have[n] then only_foe[#only_foe + 1] = n end end
+    for _, n in ipairs(mine) do if not mineset[n] then only_us[#only_us + 1] = n end end
+    local fname = tostring(go_name(fgo) or "?")
+    pcall(function()
+        json.dump_file(MOD .. "_enemy_components.json", {
+            enemy = fname, enemy_count = #theirs, companion_count = #mine,
+            only_on_enemy = only_foe, only_on_companion = only_us,
+            enemy_components = theirs, time = os.date("%H:%M:%S"),
+        })
+    end)
+    -- ⭐⭐⭐ THE ENABLED DIFF -- the question the presence diff just proved is the RIGHT one.
+    -- The cyclops's "only on it" list is pure species dressing (Ch250000, CharacterSlouch,
+    -- ClimbPointController, MonsterPartsDispCtrl, IkBodyRig, SwingWind), and the three combat
+    -- types July called missing are on NEITHER body -- so they never existed on monsters and were
+    -- a red herring, exactly like enemyList=0. Her body is STRUCTURALLY COMPLETE for combat.
+    -- ⇒ The wall must therefore be STATE. So: for every component both bodies share, compare
+    -- get_Enabled. Anything ENABLED ON THE FIGHTER and DISABLED ON OURS is a thing taming switched
+    -- off and restore_disabled never switched back -- which is precisely the shape of
+    -- AttackNoticeRequester=false in the census. Read-only: get_Enabled writes nothing.
+    local shared_off = {}
+    pcall(function()
+        for _, n in ipairs(theirs) do
+            if have[n] then
+                local ce, fe = nil, nil
+                pcall(function()
+                    local c = get_component(char_go(reacquire_griffin()), n)
+                    if c then ce = c:call("get_Enabled") end
+                end)
+                pcall(function()
+                    local f = get_component(fgo, n)
+                    if f then fe = f:call("get_Enabled") end
+                end)
+                if fe == true and ce == false then
+                    shared_off[#shared_off + 1] = tostring(n):gsub("^app%.", "")
+                end
+            end
+        end
+    end)
+    -- ⭐⭐⭐ THE GROUP QUESTION (2026-08-15) -- the one read that decides how much work native
+    -- combat is. Crash 3 proved her identity is CONTRADICTORY: player GroupHash + CharacterKind 8,
+    -- which makes a battle group the engine cannot represent. Aurora's fix is a bounded COMBAT
+    -- LEASE (give her a coherent identity for the fight, restore it after), so the question is
+    -- WHICH coherent identity.
+    --   * If her true WILD group differs from this enemy's group -> restoring her wild identity
+    --     makes them natural enemies. Native combat with NO relationship hacking and no malformed
+    --     group. The clean outcome.
+    --   * If they SHARE a group -> a wild griffin sees this enemy as an ALLY (July: griffin and
+    --     goblin are both 1895570358, "same group = allies", which is why wild griffins ignore
+    --     goblins). Then the lease also needs a BMI-style relationship override on top.
+    -- ⛔ Read-only. route3_ally_orig is the stash route3_ally_join_party takes BEFORE overwriting
+    -- her group -- ⚠ memory records it can be poisoned with the party hash on reclaim, so it is
+    -- REPORTED here, never trusted; a real lease must snapshot fresh at entry.
+    -- ⛔⛔ STEP-WISE, AND IT REPORTS WHICH STEP FAILED. The first version of this block printed
+    -- "foe=-1 (kind ?) ourStashedWild=sol.api::sdk::ValueType: 000000103..." and then confidently
+    -- concluded "wild identity would be HOSTILE to it" -- a verdict built by comparing a BOXED
+    -- OBJECT against a failure sentinel. Same disease as the el=-1 lie earlier tonight.
+    -- The handover doc's own trap #5: "probes returned zero because the FILTER never matched, not
+    -- because the event never happened -- always log what the probe DOES see before concluding
+    -- absence." So: every step is named, and nothing is compared unless both sides are numbers.
+    local function group_of(ch, tag, go)
+        local r = { tag = tag }
+        local ctx, gc = nil, nil
+        pcall(function() ctx = ch and ch:get_field("<Context>k__BackingField") end)
+        if not ctx then pcall(function() ctx = ch and ch:call("get_Context") end) end
+        -- ⛔ 08-15: the foe read died at ctx=false. app.EnemyManager's list items are NOT the same
+        -- kind of object as our companion Character -- they expose position (char_go/transform_pos
+        -- work on them) but carry no readable Context. The body's GameObject definitely holds a
+        -- real app.Character though: it is right there in the component enumeration for both the
+        -- goblin and the cyclops. So resolve the Character off the GameObject and retry.
+        if not ctx and go then
+            pcall(function()
+                local real = get_component(go, "app.Character")
+                if not real then return end
+                r.via_go = true
+                pcall(function() ctx = real:get_field("<Context>k__BackingField") end)
+                if not ctx then pcall(function() ctx = real:call("get_Context") end) end
+            end)
+        end
+        r.ctx = (ctx ~= nil)
+        if ctx then pcall(function() gc = ctx:get_field("GroupContext") end) end
+        r.gc = (gc ~= nil)
+        if gc then
+            local box = nil
+            pcall(function() box = gc:get_field("GroupHash") end)
+            r.box = (box ~= nil)
+            if box then
+                local v = nil
+                pcall(function() v = box:get_field("_Value") end)
+                if v == nil then pcall(function() v = box:get_field("Value") end) end
+                r.value = (type(v) == "number") and v or nil
+                r.vtype = type(v)
+            end
+        end
+        -- CharacterKind lives on the CONTEXT, not the GroupContext (that was the other bug:
+        -- route3_ally_group_ctx returns ctx FIRST, and the kind read was given the wrong one).
+        if ctx then pcall(function() r.kind = ctx:get_field("CharacterKind") end) end
+        return r
+    end
+    local mych, mygo = reacquire_griffin()
+    local us = group_of(mych, "us", mygo)
+    local fo = group_of(foe, "foe", fgo)
+    -- the stash is a BOXED Nullable<uint> -- unbox it the same way, never tostring() the box
+    local orig_v, orig_note = nil, "(nothing stashed)"
+    pcall(function()
+        local o = S.route3_ally_orig
+        local b = o and o.group
+        if b == nil then return end
+        if type(b) == "number" then orig_v = b; orig_note = "number"; return end
+        local v = nil
+        pcall(function() v = b:get_field("_Value") end)
+        if v == nil then pcall(function() v = b:get_field("Value") end) end
+        if type(v) == "number" then orig_v = v; orig_note = "unboxed"
+        else orig_note = "stash present but UNREADABLE (" .. type(v) .. ")" end
+    end)
+    local function show(r)
+        if r.value then return tostring(r.value) end
+        return string.format("UNREAD(ctx=%s gc=%s box=%s vtype=%s)",
+            tostring(r.ctx), tostring(r.gc), tostring(r.box), tostring(r.vtype))
+    end
+    local verdict9
+    if not (us.value and fo.value) then
+        verdict9 = "cannot compare -- a group read FAILED (see the UNREAD breakdown)"
+    elseif orig_v == nil then
+        verdict9 = "foe group read OK, but our WILD group is unknown " .. orig_note
+            .. " -- compare needs a wild-griffin reading"
+    elseif orig_v ~= fo.value then
+        verdict9 = "our wild group differs from its -> wild identity is HOSTILE to it (CLEAN LEASE)"
+    else
+        verdict9 = "SAME group as our wild identity -> it would be an ALLY (lease needs a relationship override)"
+    end
+    S.route3_group_diag = string.format("GROUPS us=%s(kind %s) foe=%s(kind %s) ourWild=%s [%s] => %s",
+        show(us), tostring(us.kind), show(fo), tostring(fo.kind),
+        tostring(orig_v or "?"), orig_note, verdict9)
+    log.info("[IrisAttack] " .. S.route3_group_diag)
+    -- ⭐⭐⭐ THE LIVE-COMBAT-STATE DIFF. Press this while the enemy is ACTUALLY FIGHTING (your
+    -- pawns will oblige) and compare its readings to the lease telemetry for our companion. Same
+    -- four numbers, one body that fights and one that will not.
+    pcall(function()
+        local mine9 = griffin_combat_state_diag(nil, nil)
+        local theirs9 = griffin_combat_state_diag(nil, fgo)
+        S.route3_state_diff = "US:  " .. tostring(mine9) .. "   ||   IT: " .. tostring(theirs9)
+        log.info("[IrisAttack] STATE DIFF " .. S.route3_state_diff)
+    end)
+    S.route3_enemy_census = string.format("%s has %d comps (we have %d) | ONLY ON IT: %s",
+        fname, #theirs, #mine,
+        (#only_foe > 0) and table.concat(only_foe, ", ") or "(nothing -- identical set)")
+    S.route3_enemy_offdiff = (#shared_off > 0)
+        and ("ENABLED on it, DISABLED on us: " .. table.concat(shared_off, ", "))
+        or "no shared component differs in enabled-state"
+    log.info("[IrisAttack] enemy census: " .. S.route3_enemy_census)
+    log.info("[IrisAttack] " .. S.route3_enemy_offdiff)
+    pcall(function()
+        json.dump_file(MOD .. "_enemy_enabled_diff.json",
+            { enemy = fname, enabled_on_it_disabled_on_us = shared_off,
+              time = os.date("%H:%M:%S") })
+    end)
+    if #only_us > 0 then
+        log.info("[IrisAttack] only on companion: " .. table.concat(only_us, ", "))
+    end
+    return S.route3_enemy_census
+end
+
+-- ⭐⭐⭐ WAKE THE COMBAT COMPONENTS (2026-08-15). The enabled-diff against a live fighting cyclops
+-- named exactly three combat-relevant components enabled on IT and disabled on HER:
+--   AIDecisionMaker, NavigationAI, AttackNoticeRequester
+-- (the rest of the diff -- MIForceAlphaTestManager, MaterialInterpolationBasic, MaterialValueSetter,
+-- WwiseContainerApp -- is cosmetic/audio and deliberately left alone.)
+-- ⭐ AttackNoticeRequester is THE interesting one: the probe already woke AIDecisionMaker and
+-- NavigationAI on every run (samples read AI=true Nav=true), but AttackNoticeRequester stayed
+-- FALSE throughout, because restore_disabled only restores what IT disabled and nothing ever
+-- touched this. It is the threat-notice/combat-entry component -- the plausible reason a griffin
+-- with 19 visible enemies and hate rank 2 never leaves Locomotion.Wait.
+-- Returns a table of PRIOR states so the caller can put the body back exactly as it found it.
+-- ⛔ Component enables are cheap setter calls, NOT engine-container mutations -- unlike the
+-- relationship-registry writes that CTD'd twice tonight in updateBattleGroupInfo.
+function griffin_wake_combat_components(on, gch)
+    gch = gch or reacquire_griffin()
+    local go = gch and char_go(gch)
+    if not go then return nil end
+    local prior = {}
+    for _, tn in ipairs({ "app.AIDecisionMaker", "app.NavigationAI",
+                          "app.AttackNoticeRequester" }) do
+        pcall(function()
+            local c = get_component(go, tn)
+            if not c then prior[tn] = "missing"; return end
+            local was = nil
+            pcall(function() was = c:call("get_Enabled") end)
+            prior[tn] = was
+            pcall(function() c:call("set_Enabled", on == true) end)
+        end)
+    end
+    return prior
+end
+
+function griffin_restore_combat_components(prior, gch)
+    if type(prior) ~= "table" then return false end
+    gch = gch or reacquire_griffin()
+    local go = gch and char_go(gch)
+    if not go then return false end
+    for tn, was in pairs(prior) do
+        if was == true or was == false then
+            pcall(function()
+                local c = get_component(go, tn)
+                if c then c:call("set_Enabled", was) end
+            end)
+        end
+    end
+    return true
+end
+
+-- ⭐⭐ BOX-COPY A FACTION. GroupHash is a boxed Nullable<uint>; the ONLY reliable write is to
+-- copy the whole box from a body that already has the faction you want (this is exactly how
+-- route3_ally_join_party puts her on the player's team). ⛔ Never construct or assign the number:
+-- the method setters mis-marshal Nullable<uint> and the "GROUP=1" garbage era came from that.
+-- ⛔⛔ RESOLVE A *REAL* app.Character. app.EnemyManager's list items expose position (char_go and
+-- transform_pos work on them) but carry NO readable Context -- proven by the group diag printing
+-- `foe=UNREAD(ctx=false ...)`. The body's GameObject does hold a real app.Character; it is right
+-- there in the component enumeration of every enemy censused. 08-15: I fixed this in the census
+-- and FAILED TO CARRY IT INTO griffin_group_copy_from, which is why the first live lease logged
+-- `group_set=false` and she never became a wild griffin. Fix the shared primitive, not the caller.
+local function iris_real_character(ch)
+    if not ch then return nil end
+    local _, gc = route3_ally_group_ctx(ch)
+    if gc then return ch end
+    local out = ch
+    pcall(function()
+        local go = char_go(ch)
+        local real = go and get_component(go, "app.Character")
+        if real then out = real end
+    end)
+    return out
+end
+
+function griffin_group_copy_from(dst_ch, src_ch)
+    dst_ch = iris_real_character(dst_ch)
+    src_ch = iris_real_character(src_ch)
+    local _, dgc = route3_ally_group_ctx(dst_ch)
+    local _, sgc = route3_ally_group_ctx(src_ch)
+    if not (dgc and sgc) then return false end
+    local wrote = 0
+    for _, f in ipairs({ "GroupHash", "DefaultGroupHash" }) do
+        pcall(function()
+            local box = sgc:get_field(f)
+            if box ~= nil then dgc:set_field(f, box); wrote = wrote + 1 end
+        end)
+    end
+    -- ⭐ READ BACK. A pcall'd set with no readback is a wish, not a fact -- this file says so in
+    -- its own live-window code. Report whether the faction ACTUALLY changed, so `group_set` in the
+    -- lease log means "she is now on the monster team", not merely "the call did not throw".
+    local after, want = nil, nil
+    pcall(function() after = griffin_group_hash_value(nil, dgc) end)
+    pcall(function() want = griffin_group_hash_value(nil, sgc) end)
+    local took = (wrote > 0) and (after ~= nil) and (want ~= nil) and (after == want)
+    return took, after, want
+end
+
+-- ⭐⭐⭐ THE HATE DOOR, LEASE EDITION. While she is a wild monster she is fair game to the world
+-- and the world is fair game to her -- EXCEPT the people we care about. Aurora's requirement:
+-- "attack enemies (and not the player, pawns, stray pawns or NPCs)".
+-- ⛔ addHateParam is THE single method hate is ever written through (proven building the taming
+-- shield). Shut this door and no AI can even begin to want the wrong target, whatever any
+-- relationship or faction says.
+-- ⭐ BIDIRECTIONAL, and it can be: BMI's own add_hate_fn (:419) proves app.HateSystem is a
+-- COMPONENT with a reachable get_GameObject(), so args[2] names the HATER and args[3] the target.
+-- ⭐ "Friendly" = a GameObject whose name does NOT start with "ch2" -- BMI's own convention
+-- (:419/:428). Player ch000000, pawns ch100000/ch11xxxx, NPCs ch3xxxxx are all excluded; bandits
+-- (ch230xxx) stay legitimate targets because they ARE ch2.
+function griffin_install_lease_hate_door()
+    if _G.IrisLeaseHateDoorInstalled then return true end
+    local ok = pcall(function()
+        local td = sdk.find_type_definition("app.HateSystem")
+        local m = td and td:get_method(
+            "addHateParam(via.GameObject, app.HateRecvCategory, app.HateSystem.WriteType, "
+            .. "System.Single, System.Single, System.Single, System.Single)")
+        if not m then return end
+        sdk.hook(m,
+            function(args)
+                -- fast bail FIRST: this fires constantly, all over the game
+                local addr = rawget(_G, "IrisCombatLeaseAddr")
+                if not addr then return end
+                if C.route3_lease_hate_door == false then return end
+                local skip = false
+                pcall(function()
+                    local hs = sdk.to_managed_object(args[2])
+                    local hater = hs and hs:call("get_GameObject")
+                    local tgt = sdk.to_managed_object(args[3])
+                    if not (hater and tgt) then return end
+                    local ha, ta = hater:get_address(), tgt:get_address()
+                    local hn = tostring(hater:call("get_Name") or "")
+                    local tn = tostring(tgt:call("get_Name") or "")
+                    local h_friend = (hn:sub(1, 3) ~= "ch2")
+                    local t_friend = (tn:sub(1, 3) ~= "ch2")
+                    -- our leased companion hating a friendly, or a friendly hating her
+                    if (ha == addr and t_friend) or (ta == addr and h_friend) then skip = true end
+                end)
+                if skip then
+                    S.route3_lease_hate_blocks = (tonumber(S.route3_lease_hate_blocks) or 0) + 1
+                    return sdk.PreHookResult.SKIP_ORIGINAL
+                end
+            end,
+            function(retval) return retval end)
+        _G.IrisLeaseHateDoorInstalled = true
+    end)
+    return ok and _G.IrisLeaseHateDoorInstalled == true
+end
+griffin_install_lease_hate_door()
+
+-- ⭐⭐⭐ THE RELATIONSHIP OVERRIDE (2026-08-15) -- the layer the telemetry finally justified.
+-- Field result: with her on the WILD group her enemyList COLLAPSED from 19-35 to 0-4, because a
+-- monster-faction griffin correctly classifies goblins as ALLIES. The two identities trade off:
+--   party group + kind 8 -> goblins ARE enemies, but the battle group is malformed = the 3 CTDs
+--   wild  group + kind 8 -> coherent and crash-free, but everything is an ally = nothing to fight
+-- ⇒ Keep the crash-free wild identity and change the ANSWER instead. This is precisely how
+-- MonsterInfightingImproved makes same-faction monsters fight each other, and it is live and
+-- working in Aurora's own load order.
+-- ⛔⛔ THE SAFETY DIFFERENCE THAT MATTERS: BMI never WRITES the registry. It post-hooks the QUERY
+-- (getRelationshipFromTo) and returns a different value. All three of tonight's CTDs were inside
+-- app.BattleRelationshipHolder.requestSetRelationshipFromTo / requestSetBidirectionalRelationship
+-- -- WRITES -- reached from EnemyManagerBehavior.update. A query override mutates nothing, so it
+-- cannot corrupt the battle-group structure that has been killing us.
+-- ⛔ Scope is deliberately tiny: ONLY pairs where one side is the LEASED companion and the other
+-- is a genuine ch2 monster. Player (ch000000), pawns (ch100000/ch11*) and NPCs (ch3*) are never
+-- made hostile by this, in either direction -- Aurora's "not the player, pawns, stray pawns or
+-- NPCs" requirement enforced a second time, at a second layer.
+function griffin_install_lease_relationship_hook()
+    if _G.IrisLeaseRelHookInstalled then return true end
+    local ok = pcall(function()
+        local td = sdk.find_type_definition("app.BattleRelationshipHolder")
+        local m = td and td:get_method("getRelationshipFromTo(app.Character, app.Character)")
+        if not m then return end
+        sdk.hook(m,
+            function(args)
+                local st = thread.get_hook_storage()
+                st.iris_pair = nil
+                -- fast bail FIRST: this fires constantly, for every pair in the world
+                if not rawget(_G, "IrisCombatLeaseAddr") then return end
+                if sdk.to_int64(args[3]) == 0 or sdk.to_int64(args[4]) == 0 then return end
+                st.iris_pair = { args[3], args[4] }
+            end,
+            function(retval)
+                local st = thread.get_hook_storage()
+                local pair = st and st.iris_pair
+                if not pair then return retval end
+                local hostile = false
+                pcall(function()
+                    local addr = rawget(_G, "IrisCombatLeaseAddr")
+                    if not addr then return end
+                    local a = sdk.to_managed_object(pair[1])
+                    local b = sdk.to_managed_object(pair[2])
+                    if not (a and b) then return end
+                    local ago = a:call("get_GameObject")
+                    local bgo = b:call("get_GameObject")
+                    if not (ago and bgo) then return end
+                    local aa, ba = ago:get_address(), bgo:get_address()
+                    if aa == ba then return end
+                    local an = tostring(ago:call("get_Name") or "")
+                    local bn = tostring(bgo:call("get_Name") or "")
+                    if aa == addr and bn:sub(1, 3) == "ch2" then hostile = true end
+                    if ba == addr and an:sub(1, 3) == "ch2" then hostile = true end
+                end)
+                if hostile then
+                    S.route3_lease_rel_hits = (tonumber(S.route3_lease_rel_hits) or 0) + 1
+                    return sdk.to_ptr(1)   -- 1 = ENEMY, the value BMI returns for a forced foe
+                end
+                return retval
+            end)
+        _G.IrisLeaseRelHookInstalled = true
+    end)
+    return ok and _G.IrisLeaseRelHookInstalled == true
+end
+griffin_install_lease_relationship_hook()
+
+-- ⭐⭐⭐ WHY WON'T SHE DECIDE? (2026-08-15). The lease has now solved everything upstream:
+--   wild group (crash-free) + 3 components woken + resetActionAndAI + relationship override
+--   -> relForced climbing ~230/s, enemyList RECOVERED 0-4 -> 14-16
+-- ...and node stays Locomotion.Wait. She can see enemies and is told they are enemies; what she
+-- will not do is ACT. July's enum dump named the likely gate: "AIDecisionMaker:
+-- requestSwitchModule(), get_CurrentModuleType() (she fights in module=1)". A body parked in a
+-- non-combat decision module ignores its enemy list no matter how good the list is.
+-- ⛔ Read-only, and it DUMPS the real API once instead of guessing method names -- the same
+-- dump-before-guessing rule that stopped the get_field crash earlier tonight. Every accessor is
+-- checked against the type definition before it is touched.
+-- ⭐ go_override lets this read ANY body, not just our companion. That is the whole point now:
+-- after 22s of module=1 / hate=1 / enemyList=16 / puppet=false / relForced=4779 and STILL
+-- Locomotion.Wait, every lever we know of is set correctly. We have never once measured what a
+-- body that IS fighting looks like on these same readings -- all our "fighter" evidence is
+-- component LISTS. Diff live combat state against a live combatant instead of guessing lever 12.
+function griffin_combat_state_diag(gch, go_override)
+    gch = gch or reacquire_griffin()
+    local go = go_override or (gch and char_go(gch))
+    if not go then return "?" end
+    -- when reading a foreign body, its own app.Character is the right handle for hate
+    if go_override then
+        pcall(function()
+            local real = get_component(go_override, "app.Character")
+            if real then gch = real end
+        end)
+    end
+    local out = {}
+    -- the motion FSM node, read off THIS body (read_griffin_fsm_node is companion-only)
+    pcall(function()
+        local fsm = get_component(go, "via.motion.MotionFsm2")
+        local n = nil
+        if fsm then pcall(function() n = fsm:call("getCurrentNodeName", 0) end) end
+        out[#out + 1] = "node=" .. tostring(n or "?")
+    end)
+    -- one-shot API dump so the next step is informed rather than guessed
+    if (not go_override) and not S.route3_decide_dumped then
+        S.route3_decide_dumped = true
+        pcall(function()
+            local d = {}
+            for _, tn in ipairs({ "app.AIDecisionMaker", "app.CombatStateControl",
+                                  "app.AIBlackBoardController" }) do
+                local c = get_component(go, tn)
+                if c then
+                    local td = c:get_type_definition()
+                    local ms, fs = {}, {}
+                    for _, m in ipairs(td:get_methods() or {}) do
+                        ms[#ms + 1] = tostring(m:get_name())
+                    end
+                    for _, f in ipairs(td:get_fields() or {}) do
+                        fs[#fs + 1] = tostring(f:get_name())
+                    end
+                    table.sort(ms); table.sort(fs)
+                    d[tn] = { methods = ms, fields = fs }
+                end
+            end
+            json.dump_file(MOD .. "_decide_api.json", d)
+            log.info("[IrisAttack] decision API dumped to _decide_api.json")
+        end)
+    end
+    -- MODULE: the suspected gate
+    pcall(function()
+        local c = get_component(go, "app.AIDecisionMaker")
+        if not c then out[#out + 1] = "module=NO-DM"; return end
+        local td = c:get_type_definition()
+        local got = false
+        for _, mn in ipairs({ "get_CurrentModuleType", "getCurrentModuleType" }) do
+            if td:get_method(mn) then
+                local v = nil
+                pcall(function() v = c:call(mn) end)
+                out[#out + 1] = "module=" .. tostring(v)
+                got = true
+                break
+            end
+        end
+        if not got then out[#out + 1] = "module=(no getter on type)" end
+    end)
+    -- ⭐⭐⭐ THE COMMITTED TARGET -- the step we have been skipping (Aurora, 08-15: "are we skipping
+    -- a step somewhere?"). The API dump answers it: AIBlackBoardController exposes
+    -- get_SelfAITarget / set_SelfAITarget alongside get_EnemyActionTargetList. enemyList is the
+    -- list of things she COULD fight; SelfAITarget is the one she has COMMITTED to -- and we have
+    -- filled the former and never touched the latter. That is July's "target-commitment deadlock"
+    -- by name, and on a monster body nothing may ever fill it, because RetargetController (which
+    -- normally picks it) does not exist on monsters at all.
+    -- ⛔ READ THE GETTER BEFORE WRITING THE SETTER. Blind-writing a member of unknown type is the
+    -- law that CTD'd us earlier tonight; report what type comes back so the write can be built from
+    -- evidence. nil here = nothing committed = the hypothesis confirmed.
+    pcall(function()
+        local bb = get_component(go, "app.AIBlackBoardController")
+        if not bb then out[#out + 1] = "selfTarget=NO-BB"; return end
+        local td = bb:get_type_definition()
+        if not (td and td:get_method("get_SelfAITarget")) then
+            out[#out + 1] = "selfTarget=(no getter)"; return
+        end
+        local t = nil
+        pcall(function() t = bb:call("get_SelfAITarget") end)
+        if t == nil then
+            out[#out + 1] = "selfTarget=NIL"
+        else
+            local tn = "?"
+            pcall(function() tn = tostring(t:get_type_definition():get_full_name()) end)
+            local nm = "?"
+            pcall(function() nm = tostring(t:call("get_Name")) end)
+            if nm == "?" then pcall(function() nm = tostring(t:call("get_GameObject"):call("get_Name")) end) end
+            out[#out + 1] = "selfTarget=" .. tn .. "(" .. nm .. ")"
+        end
+    end)
+    -- angry state: AngryCount reads 0.0 and isActiveAngryAttitude may gate the combat attitude
+    pcall(function()
+        local c = get_component(go, "app.CombatStateControl")
+        if not c then return end
+        local td = c:get_type_definition()
+        local bits = {}
+        for _, mn in ipairs({ "get_IsAngry", "isActiveAngryAttitude", "get_CombatStatusFlag" }) do
+            if td:get_method(mn) then
+                local v = nil
+                pcall(function() v = c:call(mn) end)
+                bits[#bits + 1] = mn:gsub("^get_", "") .. "=" .. tostring(v)
+            end
+        end
+        if #bits > 0 then out[#out + 1] = table.concat(bits, " ") end
+    end)
+    -- HATE RANK: does she actually want the target? (character_hate_system is the GLOBAL accessor)
+    pcall(function()
+        local hs = character_hate_system(gch, go)
+        out[#out + 1] = "hate=" .. tostring(hs and griffin_hate_rank_count(hs) or -1)
+    end)
+    -- COMBAT STATE: report every numeric/boolean field the type actually declares
+    pcall(function()
+        local c = get_component(go, "app.CombatStateControl")
+        if not c then out[#out + 1] = "cstate=NO-CSC"; return end
+        local td = c:get_type_definition()
+        local bits = {}
+        for _, f in ipairs(td:get_fields() or {}) do
+            local fn = tostring(f:get_name() or "")
+            if fn:find("Combat") or fn:find("Angry") or fn:find("Battle") or fn:find("State") then
+                local v = nil
+                pcall(function() v = c:get_field(fn) end)
+                if type(v) == "number" or type(v) == "boolean" then
+                    bits[#bits + 1] = fn .. "=" .. tostring(v)
+                end
+            end
+        end
+        out[#out + 1] = "cstate[" .. table.concat(bits, " ") .. "]"
+    end)
+    S.route3_decide_diag = table.concat(out, " ")
+    return S.route3_decide_diag
+end
+
+function griffin_combat_entry_census(gch)
+    gch = gch or reacquire_griffin()
+    local go = gch and char_go(gch)
+    if not go then return "?" end
+    -- always refresh the cached list (the diff below reads it); dump to disk only once
+    local names = iris_component_names(go)
+    S.route3_companion_comps = names
+    if not S.route3_combat_census_dumped then
+        S.route3_combat_census_dumped = true
+        pcall(function()
+            json.dump_file(MOD .. "_combat_components.json",
+                { count = #names, components = names, time = os.date("%H:%M:%S") })
+            log.info("[IrisAttack] companion components (" .. tostring(#names) .. "): "
+                .. table.concat(names, ", "))
+        end)
+    end
+    local out = {}
+    for _, tn in ipairs({ "app.BattleStateController", "app.AttackNoticeRequester",
+                          "app.RetargetController", "app.CombatStateControl",
+                          "app.TargetController" }) do
+        local short = tostring(tn):gsub("^app%.", "")
+        local c = get_component(go, tn)
+        if not c then
+            out[#out + 1] = short .. "=MISSING"
+        else
+            local en = "?"
+            pcall(function() en = tostring(c:call("get_Enabled")) end)
+            out[#out + 1] = short .. "=" .. en
+        end
+    end
+    -- THE LATCH.
+    -- ⛔⛔⛔ 2026-08-15: the first version of this block GUESSED field names --
+    -- get_field("<IsDetectArisenParty>k__BackingField") and get_field("IsDetectArisenParty") --
+    -- and that violates this codebase's oldest crash law, which I had quoted earlier the same
+    -- session: "pcall does NOT catch native AVs or invalid-field/method C++ throws -- NEVER blind
+    -- -write a field of unknown name/type". READS COUNT TOO. Ask the TYPE DEFINITION whether the
+    -- member exists before touching it -- the same guard IrisWildHorses uses before trying a tint
+    -- setter (`if cp:get_type_definition():get_method(setter) then`). If it is not there, say so.
+    local latch = "?"
+    pcall(function()
+        local b = get_component(go, "app.BattleStateController")
+        if not b then latch = "(no BattleStateController)"; return end
+        local td = b:get_type_definition()
+        if not td then return end
+        for _, mn in ipairs({ "get_IsDetectArisenParty", "isDetectArisenParty" }) do
+            if td:get_method(mn) then
+                local v = nil
+                pcall(function() v = b:call(mn) end)
+                latch = tostring(v)
+                return
+            end
+        end
+        -- fields: only ones the type actually declares, discovered not guessed
+        for _, fl in ipairs(td:get_fields() or {}) do
+            local fn = tostring(fl:get_name() or "")
+            if fn:find("DetectArisen", 1, true) then
+                local v = nil
+                pcall(function() v = b:get_field(fn) end)
+                latch = fn .. "=" .. tostring(v)
+                return
+            end
+        end
+        latch = "(no DetectArisen member on this type)"
+    end)
+    S.route3_combat_entry = table.concat(out, " ") .. " detectArisen=" .. latch
+    return S.route3_combat_entry
+end
+
 function griffin_unleash_point_hate()
     -- lightweight target-pointing for unleash: make HER hate the target.
     -- Battle registration is handled separately so it can be toggled while
@@ -8250,6 +8928,24 @@ function griffin_swing_once(name)
         if sgo then set_motion_fsm_puppet(sgo, false) end
     end)
     local leaf = name:match("([^%.]+)$") or name
+    -- ⭐⭐⭐ THE LIVE WINDOW ON A COMMANDED SWING (Aurora's call, 2026-08-15: "look at what we do to
+    -- allow the forced use of nodes for the griffin mount and apply that to attack").
+    -- This is the synthesis the whole night was pointing at. Her AI will not DECIDE to fight --
+    -- module=1, hate=1, enemyList=16, puppet=false and she still sits in Locomotion.Wait -- but
+    -- FIRING a node has always worked. What was missing is that a fired node lands on a body whose
+    -- root motion is suppressed by the mount law (RootPlayMode=None, re-applied at every paint),
+    -- so it animates IN PLACE with no travel and no real hitboxes.
+    -- ⭐ griffin_attack_live_window_open is exactly the fix, and it is FIELD-PROVEN: it restores
+    -- RootPlayMode=Continuance(2), frees the FSM and think, and it is what made the pounce real
+    -- ("7.4m dashed, planted through the whole windup, arrived dead on the goblin" -> Aurora: "it
+    -- works just as I want it to now"). Same machinery, pointed at a commanded ground swing.
+    -- ⛔ Open BEFORE the fire: the node must START with root motion already live, and nothing may
+    -- paint a clip during the window or it re-suppresses (the painter law).
+    -- The window carries its own watchdog + close, so a swing can never leave the brakes off.
+    if C.route3_attack_live_window ~= false then
+        local secs = (tonumber(C.route3_attack_commit_seconds) or 1.25) + 0.5
+        pcall(function() griffin_attack_live_window_open(leaf, secs) end)
+    end
     request_griffin_action(leaf, 0)
     if name:find(".", 1, true) then
         set_griffin_fsm_node_silent(name, 0)
@@ -8264,7 +8960,21 @@ function griffin_body_is_ours(ch)
     -- no longer be used as the ownership marker. The copied player group hash
     -- is the stable discriminator: a wild same-species body keeps its monster
     -- group, while our parked/active body keeps the party group.
+    -- ⛔⛔ 08-15 -- THE COMBAT LEASE BREAKS THAT DISCRIMINATOR ON PURPOSE. During a lease she is
+    -- put back on the WILD group so the engine will let her fight, which means the party-hash test
+    -- below returns FALSE for our own companion at exactly the moment she is in a fight and most
+    -- likely to be taking hits. Every ownership-gated system (friendly-fire shield, downed, the
+    -- HUD) would stop recognising her mid-combat. The lease publishes its address for precisely
+    -- this reason; check it FIRST.
     local ours = false
+    do
+        local lease = rawget(_G, "IrisCombatLeaseAddr")
+        if lease then
+            local a = nil
+            pcall(function() a = char_go(ch):get_address() end)
+            if a and a == lease then return true end
+        end
+    end
     pcall(function()
         local _, hgc = route3_ally_group_ctx(ch)
         local _, pgc = route3_ally_group_ctx(get_player())
@@ -20585,7 +21295,29 @@ function griffin_efx_reaper_tick()
             -- GENERAL: grounded but stuck in ANY air node (Fly.*) or attack node = stuck (covers the
             -- WingThunder gust AND any rise/dive node like Fly.Hovering.HoverUpward). A grounded griffin
             -- belongs in Locomotion.* -- a Fly./Attack node while grounded is always a stuck-node float.
-            if not (griffin_gustair_active() or griffin_gatk_active() or griffin_grab_active()
+            -- ⛔⛔⛔ 2026-08-15 -- THIS GUARD IS WHY SHE "WOULD NOT LEAVE Locomotion.Wait".
+            -- It force-parks a grounded griffin into Locomotion.Wait every 0.3s whenever her node
+            -- contains "Attack". A commanded swing fires Attack01... and 215ms later this slammed
+            -- her straight back. The log caught it exactly:
+            --     request Attack01 layer=0 ok=true      <- our ignition
+            --     request Wait     layer=4/0 ok=true    <- this, 215ms later
+            -- Thirty-two ignitions in one lease, every one overwritten. Her AI was never refusing;
+            -- WE were undoing it. The exclusion list knew about gust/gatk/grab/drake and had never
+            -- heard of the combat lease or a commanded swing.
+            -- ⭐ THE RIGHT TEST IS "does someone own this attack right now", and the live window is
+            -- exactly that ownership marker: griffin_attack_live_window_open sets S.route3_live_window
+            -- for the life of every deliberate node fire (pounce, gale, commanded swing), and its own
+            -- watchdog guarantees it clears -- so this can never be disabled indefinitely.
+            -- ⛔⛔ SCOPE THIS TO THE LIVE WINDOW ONLY -- NOT the whole lease. First attempt excluded
+            -- the entire 120s lease and she promptly stuck in Fly.FlightAttack.Ch253GaleAttack for
+            -- 68 seconds straight, grounded, because nothing was left to pull her out. That is the
+            -- exact "stuck-node float" this guard was written for; I disabled the cure and got the
+            -- disease. The live window is time-boxed (~1.75s) and watchdog-backed, so standing down
+            -- for its duration is safe: the node gets to play with real root motion, then the guard
+            -- resumes and recovers her for the next swing.
+            local owned9 = (S.route3_live_window ~= nil)
+            if not owned9
+                and not (griffin_gustair_active() or griffin_gatk_active() or griffin_grab_active()
                 or type(S.route3_drake_attack) == "table")
                 and (node:find("^Fly%.") or node:find("Attack", 1, true) or node:find("SubUnique", 1, true)) then
                 local nfull = tostring(C.native_climb_calm_fsm_node or "Locomotion.Wait")
@@ -37416,6 +38148,82 @@ re.on_draw_ui(function()
                     tonumber(iv9.spd) or 0, tonumber(iv9.size) or 0, tonumber(iv9.luck) or 0))
             end
         end)
+
+        imgui.separator()
+        -- ⭐⭐ THE NATIVE-COMBAT PROBE (08-14). One button, one number: does her AI ever
+        -- classify a nearby enemy as an enemy (enemyList > 0)? July read 0 with the griffin
+        -- standing ON a goblin and that killed the native attack path. Re-testing it with the
+        -- current toolkit is Aurora's call. ⚠ Stand near a real enemy, in the FIELD not a
+        -- village, and press. Verdict lands in the log + _combat_probe.json.
+        do
+            local pr9 = S.route3_combat_probe
+            -- ⭐ SAFE BY DEFAULT (08-15). The mutating probe CTD'd twice in a row -- both times
+            -- c0000005 in app.EnemyManager.updateBattleGroupInfo <- EnemyManagerBehavior.update,
+            -- preceded by repeated BattleRelationshipHolder.requestSet*Relationship*. The common
+            -- factor across the crashing runs is PERSISTENT COMPANION HATE (we suppress the calm
+            -- burst so the ranking survives), which suggests the calm burst may be LOAD-BEARING
+            -- rather than merely in the way. So the obvious button is now the read-only one.
+            -- This census mutates NOTHING: it enumerates components and reads enabled flags.
+            if imgui.button("Combat census (read-only)##c_census") then
+                pcall(function() griffin_combat_entry_census(nil) end)
+            end
+            if S.route3_combat_entry then
+                imgui.text("  " .. tostring(S.route3_combat_entry))
+            end
+            imgui.text("  (full list dumped once to _combat_components.json + the log)")
+            -- ⭐ THE DIFF: what does a body that CAN fight have that ours does not? Read-only.
+            imgui.same_line()
+            if imgui.button("Diff vs nearest enemy##c_diff") then
+                pcall(function() griffin_enemy_census() end)
+            end
+            if S.route3_enemy_census then
+                imgui.text("  " .. tostring(S.route3_enemy_census))
+            end
+            if S.route3_enemy_offdiff then
+                imgui.text("  " .. tostring(S.route3_enemy_offdiff))
+            end
+            if S.route3_group_diag then
+                imgui.text("  " .. tostring(S.route3_group_diag))
+            end
+            if S.route3_state_diff then
+                imgui.text("  " .. tostring(S.route3_state_diff))
+            end
+            -- ⛔ The SAVED json overrides the code DEFAULT table, so flipping the default to false
+            -- does nothing for an existing config (Aurora's already says true). This toggle is the
+            -- only way to change it live -- the same config-clobber law that has bitten the clip
+            -- fields and the pace sliders before.
+            local cl9, clv9 = imgui.checkbox(
+                "Native LEASE (experimental: she will not engage -- leave OFF)##c_lease_on",
+                C.route3_lease_enabled ~= false)
+            if cl9 then
+                C.route3_lease_enabled = clv9
+                pcall(function() if griffin_combat_lease_active() then griffin_combat_lease_end("toggled off") end end)
+            end
+            local lw9, lwv9 = imgui.checkbox(
+                "Live window on commanded swings (real root motion + hitboxes)##c_atk_lw",
+                C.route3_attack_live_window ~= false)
+            if lw9 then C.route3_attack_live_window = lwv9 end
+            local ch9, chg9 = imgui.checkbox("I accept the mutating probe may CRASH##c_probe_ok",
+                S.route3_combat_probe_armed == true)
+            if ch9 then S.route3_combat_probe_armed = chg9 end
+            if S.route3_combat_probe_armed ~= true then
+                imgui.text("  (mutating probe disarmed)")
+            elseif imgui.button(pr9 and "Probing..." or "Probe native combat (RISKY)##c_probe") then
+                if not pr9 then griffin_combat_probe_start() end
+            end
+            if S.route3_combat_probe_verdict then
+                imgui.text("  last probe: " .. tostring(S.route3_combat_probe_verdict))
+            end
+            -- guarded: both fns live in IrisGriffin/orders.lua, and a module that failed to
+            -- load must not take the whole panel down with it.
+            local pgo9 = select(2, reacquire_griffin())
+            if pgo9 and type(griffin_species_is_passive) == "function" then
+                local passive9, band9 = griffin_species_is_passive(pgo9)
+                if passive9 then
+                    imgui.text("  (passive species " .. tostring(band9) .. " -- attack order refused)")
+                end
+            end
+        end
 
         imgui.separator()
         imgui.text("Orders: " .. tostring(S.companion_order or "stay"))

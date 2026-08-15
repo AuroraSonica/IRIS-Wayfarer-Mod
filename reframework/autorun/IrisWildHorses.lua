@@ -1815,8 +1815,41 @@ local function world_ready()
     return ready == true
 end
 
+-- ⛔⛔⛔ THE DOWNED GATE (2026-08-14 -- Aurora's unicorn CTD).
+-- A DOWNED IRIS companion is NOT a hurt animal. It is a body the downed system has PINNED:
+-- HP held at route3_downed_floor_hp, AI off, and parked inside the native action node
+-- Damage.Damage_Root.DmgDownLoop, which it re-asserts EVERY FRAME. app.ActionManager.updateAction
+-- is the engine code that runs that node -- and that is exactly where the game died, 120ms after
+-- an aura pulse wrote HP into Epona while she lay in it. Two writers, one pinned body: the same
+-- "actinter move crash" that IrisHorseRodeo:8220 and GriffinRideProbe:24745 already refuse to
+-- MOUNT a downed companion to avoid. This module simply never learned the lesson.
+-- ⛔ WHY THE OLD `hp <= 0` TEST COULD NEVER CATCH IT: the downed floor is 1.0, not 0. A downed
+-- companion reads as ALIVE AT 1 HP -- indistinguishable from one that is merely injured.
+-- Receipt: the clamp floored Epona 225 -> 1, the pulse wrote 1 + (250 * 0.08), and
+-- companion_damage_diag.json caught hp=21.0 in the very second of the fault.
+-- ⭐ _G.IrisDownedAddrs is the cross-file registry downed.lua publishes at :1236 for precisely
+-- this question (GAMEOBJECT address -> true; verified via griffin_downed_protected_refresh, which
+-- builds its set from go:get_address()). Five other modules already gate on it.
+local function iris_body_is_downed(game_object)
+    if not game_object then return false end
+    local downed = false
+    pcall(function()
+        local d = rawget(_G, "IrisDownedAddrs")
+        if type(d) ~= "table" then return end
+        local a = game_object:get_address()
+        if a and d[a] then downed = true end
+    end)
+    return downed
+end
+
 -- setHp cascade (griffin-proven overload ladder)
 local function set_hp(game_object, value)
+    -- THE ONE CHOKE POINT: heal_full, tick_heal, apply_native_hp and the registration
+    -- hp_boost all write through here, so one gate covers every heal this module owns.
+    -- ⛔ Safe by inspection: NONE of those four callers is the downed system's HP pin --
+    -- that pin lives in IrisGriffin/downed.lua and uses its own writer, so this can never
+    -- fight it. The second return value lets callers log the honest reason.
+    if iris_body_is_downed(game_object) then return false, "downed -- heal withheld" end
     local hc = get_component(game_object, "app.HitController")
     if not hc then return false end
     for _, attempt in ipairs({
@@ -2665,6 +2698,30 @@ local function read_layer(layer)
     return sample
 end
 
+-- ⭐ 08-15 SPD GENE ON HORSES + a DEV forcing dial (Aurora: "change the speed IV to 1 and
+-- to 30 so I can see the difference").
+-- ⛔ FINDING WORTH KEEPING: the SPD gene was NEVER reaching a ridden horse. It is consumed
+-- in exactly two places, both of which belong to the GRIFFIN/companion drive -- the `pace`
+-- scalar in GriffinRideProbe (~13643) and the follow/chase steps in IrisGriffin/orders.lua.
+-- A horse does not use either: its travel comes from bank-901 clip ROOT MOTION, so the
+-- LAYER PLAYBACK SPEED *is* the travel speed (the line below). Wiring the gene in here is
+-- what makes the dial mean anything on a horse at all.
+-- ⚠ The gene's authority is only 1.0 + gene/30 * 0.10, so gene 1 vs 30 is ~9.7% -- subtle
+-- by design. That spread is exactly what this dial exists to judge.
+local function iv_speed_mult(state)
+    local forced = tonumber(S.dev_spd_gene)
+    if forced then
+        return 1.0 + (math.max(1.0, math.min(30.0, forced)) / 30.0) * 0.10
+    end
+    local st = rawget(_G, "IrisIVState")
+    local mult = st and tonumber(st.spd)
+    if not mult then return 1.0 end
+    -- only the ACTIVE COMPANION body carries its own genes; wild horses stay stock
+    local addr = state and state.game_object and object_address(state.game_object)
+    if addr and st.addr and tostring(addr) ~= tostring(st.addr) then return 1.0 end
+    return mult
+end
+
 local function issue_custom(state, motion_id, interpolation)
     if not (state and register_bank(state, state.motion) and valid(state.layer)) then
         return false
@@ -2678,13 +2735,21 @@ local function issue_custom(state, motion_id, interpolation)
             CUSTOM_BANK, motion_id, 0.0, interpolation or 0.0, 1, 1)
         -- Movement comes from clip root motion, so playback speed IS travel
         -- speed; the frame-synced hoofbeats track it automatically.
-        pcall(function() state.layer:call("set_Speed", C.horse_speed) end)
+        pcall(function()
+            state.layer:call("set_Speed", C.horse_speed * iv_speed_mult(state))
+        end)
     end)
     return ok
 end
 
 local function maintain_locomotion(state)
     if not C.custom_locomotion_enabled then return end
+    -- ⛔ 08-15 (Aurora: "you can move it in photo mode if you're riding it"): the gait
+    -- machine runs off re.on_frame, which KEEPS TICKING while the game is paused, so a
+    -- ridden mount carried on walking around a frozen world. Stand down on paused frames
+    -- -- the same pattern the pause-revive CTD guard already uses. S.game_paused is
+    -- computed in the 20 Hz maintenance loop and covers PauseManager + photo mode.
+    if S.game_paused then return end
     if not (state and valid(state.layer)) then return end
     -- The rodeo owns the horse's body while active (it drives the native
     -- hop clip our AUTO_MAP would otherwise replace with a trot).
@@ -3818,7 +3883,13 @@ rawset(_G, "__iris_wild_horses_api", {
 -- (200-local ceiling law); cooldowns persist OUTSIDE the per-ritual table.
 -- ---------------------------------------------------------------------------
 
-RP.cooldowns = RP.cooldowns or {}   -- addr -> {t, rec}; rec identity catches address reuse
+-- addr -> {t, go}. ⛔⛔ 08-15 (Aurora: "I set the cooldown to 180s but I can still do it
+-- whenever"): this used to store the REGISTRY RECORD TABLE and compare it by identity.
+-- The record is rebuilt whenever the reaper/stable-restore re-registers a body, so the
+-- comparison silently failed and the cooldown was skipped entirely. Store the GAME OBJECT
+-- instead: it is the same userdata for the same live creature across record rebuilds, and
+-- it still catches address REUSE (a recycled address carries a different GameObject).
+RP.cooldowns = RP.cooldowns or {}
 RP.blessing = nil
 RP.blessing_status = "idle"
 
@@ -4028,6 +4099,13 @@ function RP.tick_heal(go, center)
         local max = RP.native_max_hp(go)
         if not (hp and max) then why = "no hp/max read"; return end
         if hp <= 0 then why = "dead"; return end
+        -- ⛔ THE DOWNED GATE, checked HERE and not only inside set_hp: the loss-gauge block
+        -- below calls set_ReducedMaxHp straight on the HitController and never passes through
+        -- set_hp, so it would otherwise still write max-HP authority into a pinned body.
+        -- (Aurora 08-14: withhold the heal outright -- the blessing is strong enough as it is,
+        -- and a revive-from-aura would have to unwind the down action through
+        -- griffin_downed_release, never through a raw setHp.)
+        if iris_body_is_downed(go) then why = "downed -- heal withheld"; return end
         -- ⭐ 08-12 (Aurora: "Lyra didn't get healed... she's got the lowered
         -- total HP -- maybe the blessing could fix that, seeing as it's
         -- special?"): the LOSS GAUGE. When current hp sits at a REDUCED
@@ -4055,9 +4133,10 @@ function RP.tick_heal(go, center)
             return
         end
         local amount = max * (C.blessing_hot_pct or 0.08)
-        healed = set_hp(go, math.min(max, hp + amount))
+        local ok_hp, why_hp = set_hp(go, math.min(max, hp + amount))
+        healed = ok_hp
         why = healed and (mended and "gauge mended + healed" or "healed")
-            or "set_hp refused"
+            or (why_hp or "set_hp refused")
     end)
     return healed, why
 end
@@ -4118,10 +4197,17 @@ function RP.hot_pulse()
         if diag then log("blessing: NO pawn-list getter answered") end
     end)
     -- the unicorns too -- a blessing warms its caster
+    -- ⛔ 08-14: this branch was the ONLY target class that logged NOTHING. The whole crash
+    -- ran through here -- "HoT pulse healed 1" every half second was Epona healing herself,
+    -- and nothing in the log said so (the player read "already full", the pawn "outside the
+    -- circle"). It reports like every other target now.
     for _, rec in pairs(REGISTRY) do
         if rec.variant == "unicorn" and valid(rec.game_object) then
-            if RP.tick_heal(rec.game_object, h.pos) then
-                healed = healed + 1
+            local ok3, why3 = RP.tick_heal(rec.game_object, h.pos)
+            if ok3 then healed = healed + 1 end
+            if diag then
+                log(string.format("blessing: unicorn %s -> %s",
+                    tostring(rec.name or "?"), tostring(why3)))
             end
         end
     end
@@ -4381,7 +4467,7 @@ function RP.try_cast()
         return false
     end
     local cd = RP.cooldowns[addr]
-    if cd and cd.rec == rec
+    if cd and cd.go == rec.game_object
         and os.clock() - cd.t < (C.blessing_cooldown or 120) then
         RP.blessing_status = string.format("cooling down (%.0fs left)",
             (C.blessing_cooldown or 120) - (os.clock() - cd.t))
@@ -4403,7 +4489,7 @@ function RP.try_cast()
         return false
     end
     RP.blessing = {
-        addr = addr, rec = rec, layer = layer,
+        addr = addr, rec = rec, go = rec.game_object, layer = layer,
         pos = pos, rot = rot,
         phase = "gather", t0 = os.clock(), struck = false,
     }
@@ -4418,8 +4504,11 @@ function RP.blessing_cleanup(aborted)
     local b = RP.blessing
     RP.blessing = nil
     if not b then return end
-    if not aborted then
-        RP.cooldowns[b.addr] = {t = os.clock(), rec = b.rec}
+    -- The cooldown is normally charged at the strike (see the thrust phase). This is the
+    -- backstop for a clean finish, and it must NOT overwrite a strike-time stamp with a
+    -- later one -- that would silently extend every cooldown by the ritual's own length.
+    if not aborted and not (RP.cooldowns[b.addr] and RP.cooldowns[b.addr].go == b.go) then
+        RP.cooldowns[b.addr] = { t = os.clock(), go = b.go }
     end
     RP.blessing_status = aborted and "aborted" or "complete"
     log("blessing: " .. RP.blessing_status)
@@ -4495,7 +4584,11 @@ function RP.blessing_tick()
     local b = RP.blessing
     if not b then return end
     local rec = REGISTRY[b.addr]
-    if rec ~= b.rec or not (rec and valid(rec.game_object)) then
+    -- ⛔ 08-15: this compared the RECORD TABLE (rec ~= b.rec). The stable restore and the
+    -- 30 s reaper rebuild records, so a rebuild MID-RITUAL aborted the blessing -- and an
+    -- aborted blessing records no cooldown, which is half of why it was always ready.
+    -- Compare the GameObject, which survives a record rebuild.
+    if not (rec and valid(rec.game_object)) or rec.game_object ~= b.go then
         return RP.blessing_cleanup(true)
     end
     local go = rec.game_object
@@ -4520,6 +4613,12 @@ function RP.blessing_tick()
     elseif b.phase == "thrust" then
         if not b.struck and ((frame and t > 0.3 and frame >= 36) or t > 0.7) then
             b.struck = true
+            -- ⭐ 08-15: START THE COOLDOWN THE MOMENT THE EFFECT LANDS, not at cleanup.
+            -- The ritual runs ~7.7 s (gather+thrust+linger) and ANY abort in that window
+            -- used to leave no cooldown at all -- so a heal could be delivered and then
+            -- immediately re-cast. Charge it here; a failure BEFORE this point still
+            -- costs nothing, which is the fair split.
+            RP.cooldowns[b.addr] = { t = os.clock(), go = b.go }
             local circle = nil
             pcall(function()
                 local fwd = UNI.qrot(b.rot, Vector3f.new(0.0, 0.0, 1.0), false)
@@ -5149,6 +5248,37 @@ re.on_draw_ui(function()
     changed, value = imgui.slider_float(
         "Horse speed", C.horse_speed, 0.8, 1.5, "%.2f")
     if changed then C.horse_speed = value; save_config() end
+
+    -- ⭐ DEV: force the SPD gene so the difference is feelable. NOT persisted and NOT
+    -- written to the stable record -- it only overrides the multiplier at the layer
+    -- set_Speed, so "Off" is a true revert with nothing to undo in the save.
+    do
+        local forced = tonumber(S.dev_spd_gene)
+        local function mult_of(g) return 1.0 + (g / 30.0) * 0.10 end
+        local function force(g)
+            S.dev_spd_gene = g
+            -- re-assert immediately on every live horse so it is felt without
+            -- waiting for the next gait boundary
+            for _, st in pairs(S.horses) do
+                if valid(st.layer) then
+                    pcall(function()
+                        st.layer:call("set_Speed", C.horse_speed * iv_speed_mult(st))
+                    end)
+                end
+            end
+        end
+        imgui.text(string.format(
+            "DEV speed gene: %s   (x%.3f -> effective %.3f)",
+            forced and string.format("FORCED %d", forced) or "off (real IV)",
+            forced and mult_of(forced) or 1.0,
+            C.horse_speed * (forced and mult_of(forced) or 1.0)))
+        if imgui.button("SPD gene 1##devspd1") then force(1.0) end
+        imgui.same_line()
+        if imgui.button("SPD gene 30##devspd30") then force(30.0) end
+        imgui.same_line()
+        if imgui.button("Off (revert)##devspdoff") then force(nil) end
+        imgui.text("gene 1 vs 30 is only ~9.7% -- ride the same stretch both ways.")
+    end
 
     changed, value = imgui.checkbox(
         "Custom walk / trot / gallop", C.custom_locomotion_enabled)

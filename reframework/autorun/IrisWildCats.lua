@@ -1430,6 +1430,35 @@ pcall(function()
     api.is_cat = function(game_object)
         return registered_cat_ancestor(game_object) ~= nil
     end
+    -- ⭐ 08-14 (Aurora: a wild puma's native B prompt read "Tame the Dog"). IrisTaming's
+    -- creature_label has asked __iris_wild_cats_api.cat_kind since 08-05 - and this side never
+    -- exported it, so the ask was DEAD every frame and every ch223001 body fell through to the
+    -- "Dog" rung of the ladder. It also silently killed is_cat() over there, which is what has
+    -- kept the whole FELINE rite (THE SIT instead of the howl) from ever running.
+    -- REGISTRY FIRST (truth for any body a sweep has seen), CHASSIS ID second - and the id rung
+    -- is not a guess, it is the identical rule refresh_cats builds the registry from: with the
+    -- IRIS cat pak the Redwolf prefabs ARE the cats, _00 puma, _01 panther. The id rung also
+    -- covers the sweep's lag (a full pass every 300 frames), so a cat you walk up to the instant
+    -- it streams in still names itself.
+    api.cat_kind = function(game_object)
+        local host = registered_cat_ancestor(game_object) or game_object
+        if not valid(host) then return nil end
+        local address = object_address(host)
+        local record = address and REGISTRY[address]
+        if record and (record.kind == "puma" or record.kind == "panther") then
+            return record.kind
+        end
+        local id = nil
+        pcall(function()
+            local character = get_component(host, "app.Character")
+            id = character and character:call("get_CharaIDString") or nil
+        end)
+        if id == nil then pcall(function() id = host:call("get_Name") end) end
+        id = tostring(id or "")
+        if id:find(PANTHER_NAME, 1, true) then return "panther" end
+        if id:find(PUMA_NAME, 1, true) then return "puma" end
+        return nil
+    end
     api.play_wolf_call = function(target_go)
         local dispatcher = get_component(target_go, "app.WwiseContainerApp")
         local trigger = nil
@@ -1441,11 +1470,9 @@ pcall(function()
             trigger = native_trigger_for_id(target_go, A.wolf_howl_trigger_id)
         end
         if dispatcher and trigger then return post_request(dispatcher, trigger, target_go) end
-        -- Give the direct 4610 howl clip time to emit its own event. The hook
-        -- below learns that exact trigger. If this think-stopped body emits no
-        -- event, fall back to an imported long attack roar—not an arbitrary
-        -- native vocal and therefore never another pain cry.
-        if not A.registration then pcall(audio_prepare) end
+        -- Give a native howl action time to emit and teach us its exact trigger.
+        -- Never substitute a feline bank for a wolf: silence is preferable to
+        -- Shadow roaring like Mia, and Horse Rodeo now wakes the real howl node.
         A.pending_wolf_calls[#A.pending_wolf_calls + 1] = {
             target = target_go, since = os.clock(), at = os.clock() + 0.48,
         }
@@ -1570,8 +1597,6 @@ local function drain_direct_audio()
                     item.target, A.wolf_howl_trigger_id)
                 if dispatcher and trigger then
                     post_request(dispatcher, trigger, item.target)
-                elseif C.audio_enabled and audio_ready() then
-                    play_category("attack", item.target)
                 elseif now < (tonumber(item.since) or now) + 4.0 then
                     item.at = now + 0.10
                     keep[#keep + 1] = item

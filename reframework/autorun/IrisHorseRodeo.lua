@@ -108,7 +108,13 @@ local C = {
     -- Ch223_Bite action node (and therefore its real AttackUserData/collider)
     -- instead of painting the visually matching atlas clip + synthetic HP hit.
     -- Cats stay on the shipping path until the wolf proves this ownership lease.
-    wyrm_native_bite_test = true,
+    -- Off after the first field test: the raw node translated Shadow backwards
+    -- without taking visible motion ownership.  Re-enable deliberately from the
+    -- panel for the corrected native-collider + deterministic-visual test.
+    wyrm_native_bite_test = false,
+    -- Separate because this is a paired-body catch, not an ordinary strike.
+    -- The lease always requests HoldDownCatchFinish before it parks the wolf.
+    wyrm_native_maul_test = false,
 }
 
 local S = rawget(_G, "__iris_horse_rodeo_v1") or {}
@@ -183,6 +189,8 @@ S.costume = nil
 S.ride_pose_on = false
 S.wyrm_atk_until, S.wyrm_atk_hold, S.wyrm_btn_prev = nil, nil, nil
 S.wyrm_native_lease = nil
+S.wyrm_native_pending = nil
+S.wyrm_native_recover_until = nil
 -- 08-13 Shadow-mount CTD guard: the costume is gone, so release the scale easer too
 _G.IrisScaleHoldAddr = nil
 
@@ -1597,6 +1605,7 @@ local function costume_stop()
     end
     S.wyrm_attack, S.wyrm_atk_until = nil, nil
     S.wyrm_atk_hold, S.wyrm_btn_prev = nil, nil
+    S.wyrm_native_pending, S.wyrm_native_recover_until = nil, nil
     S.mounted_combat_off = nil
     rawset(_G, "IrisWyrmMounted", nil)
     if costume then costume.force_hold = nil end
@@ -1705,8 +1714,12 @@ local function costume_stop()
         pcall(function()
             local hc = get_component(costume.horse_go, "app.HitController")
             if hc then
-                hc:call("set_IsInvincible", false)
-                hc:call("set_IsNoDie", false)
+                -- Mounting temporarily hardens the body.  Restore what the
+                -- companion actually had before mounting; blindly writing
+                -- false made a previously protected Shadow player-damageable.
+                hc:call("set_IsInvincible",
+                    costume.native_was_invincible == true)
+                hc:call("set_IsNoDie", costume.native_was_no_die == true)
             end
         end)
         if staged_puppet_release then
@@ -1944,6 +1957,7 @@ end
 -- does terrain/gravity/walls, the job the ox used to do.
 local function costume_start_oxless(record)
     local character = get_component(record.game_object, "app.Character")
+    local native_was_invincible, native_was_no_die = nil, nil
     pcall(function() character:call("set_IsThinkStop", true) end)
     pcall(function()
         local ai = get_component(record.game_object, "app.AIDecisionMaker")
@@ -1962,6 +1976,8 @@ local function costume_start_oxless(record)
     pcall(function()
         local hc = get_component(record.game_object, "app.HitController")
         if hc then
+            pcall(function() native_was_invincible = hc:call("get_IsInvincible") end)
+            pcall(function() native_was_no_die = hc:call("get_IsNoDie") end)
             hc:call("set_IsInvincible", true)
             hc:call("set_IsNoDie", true)
         end
@@ -1971,10 +1987,12 @@ local function costume_start_oxless(record)
                  horse_go = record.game_object,
                  horse_character = character, last_gait = nil,
                  oxless = true, record = record, muted_wwise = {},
-                 native_ai = get_component(record.game_object, "app.AIDecisionMaker"),
-                 native_nav = get_component(record.game_object, "app.NavigationAI"),
-                 native_fsm = get_component(record.game_object, "via.motion.MotionFsm2"),
-                 native_wwise = get_component(record.game_object, "app.WwiseContainerApp")}
+                  native_ai = get_component(record.game_object, "app.AIDecisionMaker"),
+                  native_nav = get_component(record.game_object, "app.NavigationAI"),
+                  native_fsm = get_component(record.game_object, "via.motion.MotionFsm2"),
+                  native_wwise = get_component(record.game_object, "app.WwiseContainerApp"),
+                  native_was_invincible = native_was_invincible,
+                  native_was_no_die = native_was_no_die}
     -- ⛔ 08-13 Shadow-mount CTD, ladder step 1 (v2 - TIMED): the easer's LocalScale
     -- write at the exact mount moment was the last mod action before the crash. v1
     -- held for the whole costume life - but auto-arm keeps a costume on any nearby
@@ -2148,8 +2166,10 @@ function iris_wyrm_ownership_tick()
     -- lease.  AIDecisionMaker and NavigationAI remain OFF throughout: waking
     -- those is what previously let the wolf take the reins and run into water.
     local lease = S.wyrm_native_lease
-    local native_live = lease and lease.costume == costume
-        and now < (tonumber(lease.until_t) or 0.0)
+    local native_live = (lease and lease.costume == costume
+        and now < (tonumber(lease.until_t) or 0.0))
+        or (S.wyrm_native_recover_until
+            and now < S.wyrm_native_recover_until)
     pcall(function()
         local fsm = costume.native_fsm
         if fsm then
@@ -2219,9 +2239,18 @@ function iris_wyrm_attack_target(costume, atk)
                 local along = dx * fx + dz * fz
                 local across = math.abs(dx * fz - dz * fx)
                 local radial2 = dx * dx + dz * dz
+                local aim_ok = true
+                local aim_deg = tonumber(atk.aim_deg)
+                if aim_deg and not voice then
+                    local flat_d = math.sqrt(math.max(0.0001, radial2))
+                    local aim_dot = along / flat_d
+                    aim_ok = along > 0.0
+                        and aim_dot >= math.cos(math.rad(aim_deg))
+                end
                 local inside = voice and radial2 <= reach * reach
                     or (along >= -1.25 and along <= reach
-                        and across <= width and math.abs(dy) <= 6.0)
+                        and across <= width and math.abs(dy) <= 6.0
+                        and aim_ok)
                 if not inside then return end
                 local score = voice and radial2
                     or (across * across * 3.0
@@ -2324,10 +2353,314 @@ function iris_wyrm_native_action_name(action_manager)
     pcall(function()
         local list = action_manager.CurrentActionList
             or action_manager:get_field("CurrentActionList")
-        local entry = list and list[0] or nil
-        name = entry and tostring(entry.Name or entry:get_field("Name")) or nil
+        local entry = list and (list[0] or list:call("get_Item", 0)) or nil
+        local raw = entry and (entry.Name or entry:get_field("Name")) or nil
+        if raw ~= nil then name = tostring(raw) end
+        -- Several ActionEntry variants expose no Name field at all; ToString is
+        -- the proven read used by the down-node probe.
+        if entry and (not name or name == "nil" or name == "") then
+            name = tostring(entry:call("ToString()") or "")
+        end
     end)
+    if name == "" or name == "nil" then return nil end
     return name
+end
+
+-- Front-cone assist, not lock-on. Selection comes from the mount's nose rather
+-- than the camera, turns only through a bounded forward angle, and finishes
+-- before contact. It never translates or acquires behind the rider.
+function iris_wyrm_native_prepare_aim(costume, target, lease, max_deg, secs)
+    if not (costume and valid(costume.horse_go) and valid(target) and lease) then
+        return false
+    end
+    local op, tp = universal_pos(costume.horse_go), nil
+    pcall(function()
+        local tgo = target:call("get_GameObject")
+        tp = tgo and universal_pos(tgo) or nil
+    end)
+    if not (op and tp) then return false end
+    local dx = (tonumber(tp.x) or 0.0) - (tonumber(op.x) or 0.0)
+    local dz = (tonumber(tp.z) or 0.0) - (tonumber(op.z) or 0.0)
+    if dx * dx + dz * dz < 0.01 then return false end
+    local from = tonumber(costume.wyrm_yaw)
+    if not from then
+        pcall(function()
+            local az = costume.horse_go:call("get_Transform"):call("get_AxisZ")
+            from = math.atan(tonumber(az.x) or 0.0, tonumber(az.z) or 1.0)
+        end)
+    end
+    if not from then return false end
+    local wanted = math.atan(dx, dz)
+    local delta = wanted - from
+    while delta > math.pi do delta = delta - 2.0 * math.pi end
+    while delta < -math.pi do delta = delta + 2.0 * math.pi end
+    if math.abs(math.deg(delta)) > (tonumber(max_deg) or 38.0) then
+        return false
+    end
+    lease.aim_from = from
+    lease.aim_delta = delta
+    lease.aim_secs = tonumber(secs) or 0.12
+    return true
+end
+
+-- Live attack origin. ch223's native bite VFX and collision are authored around
+-- mouthLowerMid; measuring from the body root guessed several metres wrong on
+-- a Wyrmlife-scaled wolf and could pull the target beneath Shadow's chest.
+function iris_wyrm_native_mouth_positions(costume)
+    if not (costume and valid(costume.horse_go)) then return nil, nil end
+    local up, rp, jp = nil, nil, nil
+    pcall(function()
+        local tf = costume.horse_go:call("get_Transform")
+        up = tf:call("get_UniversalPosition")
+        rp = tf:call("get_Position")
+        for _, name in ipairs({ "mouthLowerMid", "Tongue_0", "Head", "Neck_0" }) do
+            local joint = tf:call("getJointByName", name)
+            if joint then jp = joint:call("get_Position"); break end
+        end
+    end)
+    if not (up and rp and jp) then return nil, nil end
+    return {
+        x = up.x + jp.x - rp.x,
+        y = up.y + jp.y - rp.y,
+        z = up.z + jp.z - rp.z,
+    }, jp
+end
+
+-- A native bite owns its collider, so the wolf has to be at the authored jaw
+-- distance when that collider opens.  Aim alone cannot solve a 3-4m gap.  This
+-- helper measures WORLD obstruction in render space (the ray API's space) so
+-- the bounded attack step below never becomes the old through-wall homing pin.
+function iris_wyrm_native_go_under(game_object, ancestor)
+    if not (valid(game_object) and valid(ancestor)) then return false end
+    local wanted = object_address(ancestor)
+    local current = game_object
+    for _ = 1, 8 do
+        if object_address(current) == wanted then return true end
+        local parent_go = nil
+        pcall(function()
+            local tf = current:call("get_Transform")
+            local parent = tf and tf:call("get_Parent") or nil
+            parent_go = parent and parent:call("get_GameObject") or nil
+        end)
+        if not valid(parent_go) then break end
+        current = parent_go
+    end
+    return false
+end
+
+function iris_wyrm_native_clear_forward(costume, wanted, target_go)
+    -- Contact assist may only advance towards the selected target. Backwards
+    -- correction was geometrically valid when the goblin sat under the jaws,
+    -- but visibly made Shadow retreat from the enemy on every point-blank bite.
+    local magnitude = math.max(0.0, tonumber(wanted) or 0.0)
+    if magnitude <= 0.001 or not (costume and valid(costume.horse_go)) then
+        return 0.0
+    end
+    local clear = 0.0
+    pcall(function()
+        local ray = rawget(_G, "route3_ray")
+        local ensure = rawget(_G, "route3_ensure_ray")
+        if not (ray and ensure and ensure()) then
+            clear = 0.0 -- no collision proof, no scripted translation
+            return
+        end
+        local tf = costume.horse_go:call("get_Transform")
+        local _, mouth_rp = iris_wyrm_native_mouth_positions(costume)
+        local fwd = tf and tf:call("get_AxisZ")
+        if not (mouth_rp and fwd) then clear = 0.0; return end
+        local fx, fz = tonumber(fwd.x) or 0.0, tonumber(fwd.z) or 0.0
+        local fl = math.sqrt(fx * fx + fz * fz)
+        if fl < 0.01 then clear = 0.0; return end
+        fx, fz = fx / fl, fz / fl
+        -- Cast beyond the intended step and retain a nose buffer.  Layer 2 is
+        -- the same scenery-only query used by the proven mount jump wall test.
+        local cast = magnitude + 0.30
+        local sx, sy, sz = mouth_rp.x, mouth_rp.y, mouth_rp.z
+        ray.filter:set_Group(0)
+        ray.filter:set_Layer(2)
+        ray.filter:set_MaskBits(0)
+        ray.result:clear()
+        ray.query:call("setRay(via.vec3, via.vec3)",
+            rodeo_vec3(sx, sy, sz),
+            rodeo_vec3(sx + fx * cast, sy, sz + fz * cast))
+        ray.method:call(ray.system, ray.query, ray.result)
+        local contacts = tonumber(ray.result:get_NumContactPoints() or 0) or 0
+        if contacts <= 0 then
+            clear = magnitude
+            return
+        end
+        -- All-hits ray: ignore Shadow and the selected victim. Treat only the
+        -- first unrelated collidable as a wall. The old first-hit rule often
+        -- saw the goblin itself and stopped the jaws short of its hit volume.
+        for i = 0, contacts - 1 do
+            local hit_go = nil
+            pcall(function()
+                local col = ray.result:call(
+                    "getContactCollidable(System.UInt32)", i)
+                hit_go = col and col:call("get_GameObject") or nil
+            end)
+            if not (iris_wyrm_native_go_under(hit_go, costume.horse_go)
+                or iris_wyrm_native_go_under(hit_go, target_go)) then
+                local contact = ray.result:call(
+                    "getContactPoint(System.UInt32)", i)
+                local hp = contact and sdk.get_native_field(
+                    contact, ray.contact_td, "Position")
+                if hp then
+                    local hx, hz = hp.x - sx, hp.z - sz
+                    clear = math.max(0.0, math.min(magnitude,
+                        math.sqrt(hx * hx + hz * hz) - 0.20))
+                    return
+                end
+            end
+        end
+        clear = magnitude
+    end)
+    return clear
+end
+
+-- Read rather than manufacture the catch prerequisite.  Different character
+-- classes expose slightly different down flags, so preserve "unknown" when no
+-- usable flag exists and include the target's native action node as evidence.
+function iris_wyrm_native_target_down_state(target)
+    if not valid(target) then return nil, "no target" end
+    local saw, down = false, false
+    local flags = {}
+    for _, getter in ipairs({
+        "get_IsDown", "get_IsDowned", "get_IsFall", "get_IsUnconscious",
+    }) do
+        local ok, value = pcall(function() return target:call(getter) end)
+        if ok and type(value) == "boolean" then
+            saw = true
+            flags[#flags + 1] = getter:gsub("get_", "") .. "=" .. tostring(value)
+            if value then down = true end
+        end
+    end
+    local node = nil
+    pcall(function()
+        local go = target:call("get_GameObject")
+        local am = go and get_component(go, "app.ActionManager") or nil
+        node = am and iris_wyrm_native_action_name(am) or nil
+    end)
+    if node then
+        flags[#flags + 1] = "node=" .. tostring(node)
+        local lower = tostring(node):lower()
+        if lower:find("down", 1, true) or lower:find("fall", 1, true)
+            or lower:find("blown", 1, true) then
+            saw, down = true, true
+        end
+    end
+    local detail = (#flags > 0 and table.concat(flags, ", ") or "state unknown")
+    if saw then return down, detail end
+    return nil, detail
+end
+
+-- The opener is still the real Ch223 bite and the receiver still owns its real
+-- HP/contact/material transaction.  Once that transaction is proven by an HP
+-- delta, add only the poise/down reaction that the catch prerequisite needs.
+-- This never enters HitController.damageProc and never fabricates extra damage.
+function iris_wyrm_native_knockdown_after_hit(lease)
+    if not (lease and valid(lease.target) and valid(lease.target_go)
+        and lease.costume and valid(lease.costume.horse_go)) then return false end
+    local hs = nil
+    pcall(function()
+        local find_hs = rawget(_G, "character_hate_system")
+        hs = find_hs and find_hs(lease.target, lease.target_go) or nil
+    end)
+    local di = nil
+    if hs then
+        pcall(function() di = sdk.create_instance("app.HitController.DamageInfo") end)
+        if not di then
+            pcall(function() di = sdk.create_instance(
+                "app.HitController.DamageInfo", true) end)
+        end
+    end
+    local fired = false
+    if di and hs then pcall(function()
+        di:set_field("Damage", 0.0)
+        di:set_field("FixedDamage", 0.0)
+        -- Strong poise break, zero HP damage. Downward force keeps the prey at
+        -- Shadow's mouth instead of launching it out of the catch volume.
+        di:set_field("BlowDamage", 50.0)
+        di:set_field("IsBlowAttack", true)
+        di:set_field("BlownReactionRate", 1.0)
+        di:set_field("AttackVec", rodeo_vec3(0.0, -1.0, 0.0))
+        di:set_field("<DamageGameObject>k__BackingField", lease.target_go)
+        di:set_field("<AttackGameObject>k__BackingField", lease.costume.horse_go)
+        di:set_field("<AttackOwnerObject>k__BackingField", lease.costume.horse_go)
+        hs:call("onReceiveForce(app.HitController.DamageInfo)", di)
+        hs:call("onDamageReaction(app.HitController.DamageInfo)", di)
+        local tp2 = universal_pos(lease.target_go)
+        if tp2 then
+            hs:call("onUnbalance(via.vec3, via.GameObject, via.GameObject)",
+                rodeo_vec3(tp2.x, tp2.y, tp2.z),
+                lease.costume.horse_go, lease.target_go)
+        end
+        fired = true
+    end) end
+    -- Generic unbalance is not synonymous with the catchable down state: the
+    -- goblin accepted the force yet stayed in locomotion in Aurora's receipt.
+    -- Request the proven native damage-down node on the victim itself. This is
+    -- the imposed state; the wolf still needs a real opener HP delta first.
+    local down_requested = false
+    pcall(function()
+        local am = get_component(lease.target_go, "app.ActionManager")
+        if not am then return end
+        am:call(
+            "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+            0, "Damage.Damage_Root.DmgDownLoop", 0)
+        lease.down_action_manager = am
+        lease.down_node_requested = "Damage.Damage_Root.DmgDownLoop"
+        down_requested = true
+    end)
+    return fired or down_requested
+end
+
+function iris_wyrm_native_maul_stages()
+    return {
+        { at = 0.08, bank = 20, clip = 4010 },
+        { at = 0.42, bank = 20, clip = 4012 },
+        { at = 0.86, bank = 20, clip = 4000 },
+        { at = 1.62, bank = 20, clip = 4020 },
+    }
+end
+
+-- Convert the still-live action lease from opener to paired catch without ever
+-- waking decision/navigation AI.  The relationship pair and target remain the
+-- same; only ActionManager advances from bite to the wolf's hold-down branch.
+function iris_wyrm_native_begin_maul(lease, now, direct)
+    if not (lease and lease.action_manager and valid(lease.target)) then
+        return false
+    end
+    -- HoldDownCatchAttack is deliberately NOT fired here.  Bestiary's own
+    -- ch223 action table marks that branch non-requestable, and the field receipt
+    -- proved it: the victim entered DmgDownLoop but Shadow's node became Invalid
+    -- and CatchController.startCatch never ran.  Painting the catch atlas after
+    -- that rejection merely looked like eating and poisoned later X/Y requests.
+    -- Keep the genuine bite + genuine knockdown as a bounded takedown while the
+    -- species-specific CatchController transaction is still being recovered.
+    lease.phase = "takedown"
+    lease.label = "maul setup"
+    lease.native_catch_unavailable = true
+    lease.catch_move = false
+    lease.release_node = nil
+    lease.cancel_node = nil
+    lease.release_requested = nil
+    lease.visual_stages = nil
+    lease.t0 = now
+    lease.until_t = now + 0.80
+    lease.approach_secs = 0.0
+    lease.approach_moved = tonumber(lease.approach_max) or 2.2
+    S.wyrm_atk_until = lease.until_t
+    rawset(_G, "IrisWyrmNativeAttackLease", {
+        mount_addr = object_address(lease.costume.horse_character),
+        target_addr = object_address(lease.target),
+        until_t = lease.until_t,
+    })
+    S.wyrm_native_status = direct
+        and "native takedown: target already down; unsafe catch branch withheld"
+        or "native takedown: opener connected and target down; unsafe catch branch withheld"
+    log(S.wyrm_native_status)
+    return true
 end
 
 function iris_wyrm_native_bite_finish(reason)
@@ -2339,6 +2672,17 @@ function iris_wyrm_native_bite_finish(reason)
     S.wyrm_atk_until = nil
     S.wyrm_atk_hold = nil
     local costume = lease.costume
+    -- If our imposed down node never crossed into a real paired catch, hand the
+    -- victim back to its native locomotion rather than leaking DmgDownLoop.
+    if lease.down_action_manager
+        and (tonumber(lease.catch_start_seen) or 0) == 0 then
+        pcall(function()
+            lease.down_action_manager:call(
+                "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                0, "Locomotion", 0)
+            lease.down_released = true
+        end)
+    end
     if costume then
         costume.force_hold = nil
         costume.last_gait = nil
@@ -2347,20 +2691,50 @@ function iris_wyrm_native_bite_finish(reason)
         costume.drive_step = nil
         costume.wyrm_prev_upos = nil
         costume.ownership_at = 0.0
+        local can_recover = S.ride_pose_on == true and S.costume == costume
+            and reason ~= "mount released" and reason ~= "ride ended"
         pcall(function()
+            -- Early dismount/kill-switch during a paired catch: tell the native
+            -- graph to release its victim before parking motion. Normal mauls
+            -- have already requested HoldDownCatchFinish in the live tick.
+            if lease.catch_move and not lease.release_requested
+                and lease.action_manager then
+                lease.action_manager:call(
+                    "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                    0, lease.cancel_node or "HoldDownCatchCancel", 0)
+            end
             local ai = costume.native_ai
             if ai then ai:call("set_Enabled", false) end
             local nav = costume.native_nav
             if nav then nav:call("set_Enabled", false) end
             local fsm = costume.native_fsm
-            if fsm then fsm:call("set_Enabled", false) end
-            if costume.horse_character then
-                costume.horse_character:call("set_IsThinkStop", true)
+            if can_recover then
+                -- Never park ch223 on the attack (or Invalid) node.  Give the
+                -- graph a short live frame-window to accept its proven idle leaf;
+                -- the ownership tick then think-stops it again with AI/nav off.
+                if fsm then fsm:call("set_Enabled", true) end
+                if costume.horse_character then
+                    costume.horse_character:call("set_IsThinkStop", false)
+                end
+                if lease.action_manager then
+                    lease.action_manager:call(
+                        "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                        0, "NormalLocomotion", 0)
+                end
+                S.wyrm_native_recover_until = os.clock() + 0.22
+                costume.ownership_at = 0.0
+            else
+                S.wyrm_native_recover_until = nil
+                if fsm then fsm:call("set_Enabled", false) end
+                if costume.horse_character then
+                    costume.horse_character:call("set_IsThinkStop", true)
+                end
             end
         end)
     end
     local hp1 = iris_wyrm_native_target_hp(lease.target)
-    local result = "native bite " .. tostring(reason or "finished")
+    local result = "native " .. tostring(lease.label or "bite") .. " "
+        .. tostring(reason or "finished")
     if lease.hp0 and hp1 then
         result = result .. string.format(" | target HP %.0f -> %.0f (delta %.0f)",
             lease.hp0, hp1, hp1 - lease.hp0)
@@ -2372,35 +2746,115 @@ function iris_wyrm_native_bite_finish(reason)
     if lease.observed_node then
         result = result .. " | node=" .. tostring(lease.observed_node)
     end
+    if lease.catch_move then
+        result = result .. " | target start=" .. tostring(lease.target_down_detail or "unknown")
+            .. " | startCatch=" .. tostring(tonumber(lease.catch_start_seen) or 0)
+    end
+    if lease.combo_maul then
+        result = result .. " | phase=" .. tostring(lease.phase or "opener")
+            .. " | openerHit=" .. tostring(lease.opener_hit == true)
+            .. " | knockdownAssist=" .. tostring(lease.knockdown_assist == true)
+            .. " | forcedDownNode=" .. tostring(lease.down_node_requested or "none")
+            .. " | forcedDownReleased=" .. tostring(lease.down_released == true)
+    end
+    if lease.native_catch_unavailable then
+        result = result .. " | nativeCatch=withheld(non-requestable branch)"
+    end
+    if lease.contact_retry then
+        result = result .. " | nativeColliderRetry=true"
+    end
+    if (tonumber(lease.approach_moved) or 0.0) > 0.001
+        or lease.approach_blocked then
+        result = result .. string.format(" | contact step=%.2fm%s",
+            tonumber(lease.approach_moved) or 0.0,
+            lease.approach_blocked and " (blocked)" or "")
+    end
     S.wyrm_native_status = result
     log(result)
 end
 
-function iris_wyrm_native_bite_start(costume, now)
+function iris_wyrm_native_bite_start(costume, now, spec)
     if not (costume and costume.wyrm_kind == "wolf"
         and costume.wyrm_chassis == "ch223"
         and valid(costume.horse_go) and valid(costume.horse_character)) then
         return false
     end
+    if S.wyrm_native_recover_until
+        and now < S.wyrm_native_recover_until then
+        -- Button edges must not be lost during the neutral settle. Queue exactly
+        -- one latest request; it will start once NormalLocomotion has had a frame.
+        S.wyrm_native_pending = {
+            costume = costume,
+            spec = spec,
+            at = S.wyrm_native_recover_until + 0.02,
+        }
+        S.wyrm_native_status = "native attack queued while Shadow returns to neutral"
+        return true
+    end
+    spec = spec or {
+        label = "bite", slot = "light", node = "Ch223_Bite",
+        duration = 1.45, range = 5.5, width = 4.0,
+        aim_deg = 65.0, aim_secs = 0.08,
+        approach_stop = 0.12, approach_max = 4.5,
+        approach_secs = 0.58, approach_speed = 18.0,
+        visual_stages = { { at = 0.08, bank = 50, clip = 50 } },
+    }
     local action_manager = get_component(costume.horse_go, "app.ActionManager")
     if not action_manager then
         S.wyrm_native_status = "native bite refused: no ActionManager"
         log(S.wyrm_native_status)
         return false
     end
-    local probe = { slot = "light", range = 5.5, width = 2.8 }
-    local target = iris_wyrm_attack_target(costume, probe)
+    local probe = {
+        slot = spec.slot or "light",
+        range = tonumber(spec.range) or 5.5,
+        width = tonumber(spec.width) or 2.8,
+        aim_deg = tonumber(spec.aim_deg) or 65.0,
+    }
+    local target, target_go = iris_wyrm_attack_target(costume, probe)
+    local target_down, target_down_detail =
+        iris_wyrm_native_target_down_state(target)
+    if spec.requires_downed == true and target and target_down ~= true then
+        S.wyrm_native_status = "native maul held: target is not down/catchable | "
+            .. tostring(target_down_detail)
+        log(S.wyrm_native_status)
+        return true
+    end
     local lease = {
         native = true,
         costume = costume,
         target = target,
+        target_go = target_go,
         hp0 = iris_wyrm_native_target_hp(target),
         action_manager = action_manager,
         t0 = now,
-        until_t = now + 1.45,
-        node = "Ch223_Bite",
+        until_t = now + (tonumber(spec.duration) or 1.45),
+        node = spec.node or "Ch223_Bite",
+        label = spec.label or "bite",
+        visual_stages = spec.visual_stages,
+        aim_deg = tonumber(spec.aim_deg) or 65.0,
+        aim_secs = tonumber(spec.aim_secs) or 0.12,
+        release_node = spec.release_node,
+        release_at = spec.release_at,
+        cancel_node = spec.cancel_node,
+        catch_move = spec.catch_move == true,
+        combo_maul = spec.combo_maul == true,
+        phase = spec.combo_maul == true and "opener" or nil,
+        target_down = target_down,
+        target_down_detail = target_down_detail,
+        -- Horizontal gap from live mouth joint to victim root, not body-centre
+        -- distance. A goblin at ~0.55m is directly in the jaw collider.
+        approach_stop = tonumber(spec.approach_stop) or 0.12,
+        approach_max = tonumber(spec.approach_max) or 4.5,
+        approach_secs = tonumber(spec.approach_secs) or 0.58,
+        approach_speed = tonumber(spec.approach_speed) or 18.0,
+        approach_moved = 0.0,
     }
+    -- Even when the target is already prone, enter through the proven native
+    -- bite collider. HoldDownCatchAttack is not a public/requestable leaf.
     S.wyrm_native_lease = lease
+    iris_wyrm_native_prepare_aim(costume, target, lease,
+        lease.aim_deg, lease.aim_secs)
     rawset(_G, "IrisWyrmNativeAttackLease", {
         mount_addr = object_address(costume.horse_character),
         target_addr = object_address(target),
@@ -2412,8 +2866,10 @@ function iris_wyrm_native_bite_start(costume, now)
     costume.force_hold = true
     costume.cur_speed = 0.0
     costume.idle_anchor = nil
-    costume.drive_step = nil
-    costume.wyrm_prev_upos = nil
+    costume.drive_step = { x = 0.0, z = 0.0 }
+    local native_p0 = universal_pos(costume.horse_go)
+    costume.wyrm_prev_upos = native_p0
+        and { x = native_p0.x, z = native_p0.z } or nil
     costume.ownership_at = 0.0
     local requested = false
     pcall(function()
@@ -2437,7 +2893,8 @@ function iris_wyrm_native_bite_start(costume, now)
         iris_wyrm_native_bite_finish("request FAILED")
         return true -- consume X; never fall through to disguised synthetic damage
     end
-    S.wyrm_native_status = "native bite requested: Ch223_Bite (waiting for node)"
+    S.wyrm_native_status = "native " .. tostring(lease.label)
+        .. " requested: " .. tostring(lease.node) .. " (waiting for node)"
     log(S.wyrm_native_status)
     return true
 end
@@ -2456,6 +2913,7 @@ function iris_wyrm_attack_tick()
             end)
         end
         S.wyrm_btn_prev = nil
+        S.wyrm_native_pending, S.wyrm_native_recover_until = nil, nil
         S.wyrm_attack = nil
         S.wyrm_atk_until = nil
         if costume and S.wyrm_atk_hold then costume.force_hold = nil end
@@ -2463,16 +2921,141 @@ function iris_wyrm_attack_tick()
         return
     end
     local now = os.clock()
+    local pending = S.wyrm_native_pending
+    if pending and now >= (tonumber(pending.at) or now) then
+        S.wyrm_native_pending = nil
+        if pending.costume == costume then
+            iris_wyrm_native_bite_start(costume, now, pending.spec)
+            return
+        end
+    end
     local native = S.wyrm_native_lease
     if native then
         costume.cur_speed = 0.0
         costume.force_hold = true
+        local native_age = now - native.t0
+        if native.aim_from and native.aim_delta then
+            local a = math.min(1.0, math.max(0.0,
+                native_age / math.max(0.01,
+                    tonumber(native.aim_secs) or 0.12)))
+            -- Fast ease-out: decisive enough to help, without a one-frame snap.
+            local eased = 1.0 - (1.0 - a) * (1.0 - a)
+            local yaw = native.aim_from + native.aim_delta * eased
+            costume.wyrm_yaw = yaw
+            pcall(function()
+                local tf = costume.horse_go:call("get_Transform")
+                local rot = tf:call("get_Rotation")
+                rot.x, rot.y, rot.z, rot.w =
+                    0.0, math.sin(yaw * 0.5), 0.0, math.cos(yaw * 0.5)
+                tf:call("set_Rotation", rot)
+            end)
+        end
+        -- One real-collider retry after range ownership has settled. This is
+        -- deliberately not direct HP damage: the re-armed Ch223_Bite remains
+        -- responsible for blood, material sound, hit-stop and victim reaction.
+        if native.node == "Ch223_Bite" and not native.contact_retry
+            and native_age >= 0.52 and native.hp0 then
+            local hp_retry = iris_wyrm_native_target_hp(native.target)
+            if hp_retry and hp_retry >= native.hp0 - 0.01 then
+                native.contact_retry = true
+                pcall(function()
+                    native.action_manager:call(
+                        "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                        0, "Ch223_Bite", 0)
+                end)
+                S.wyrm_native_status = "native bite collider re-armed after contact correction"
+                log(S.wyrm_native_status)
+            end
+        end
+        if native.combo_maul and native.phase == "opener" then
+            local hp_now = iris_wyrm_native_target_hp(native.target)
+            if native.hp0 and hp_now
+                and hp_now < native.hp0 - 0.01 then
+                native.opener_hit = true
+            end
+            if native.opener_hit then
+                local is_down, detail =
+                    iris_wyrm_native_target_down_state(native.target)
+                native.target_down_detail = detail
+                if is_down == true then
+                    iris_wyrm_native_begin_maul(native, now, false)
+                    return
+                end
+                if not native.knockdown_attempted then
+                    native.knockdown_attempted = true
+                    native.knockdown_assist =
+                        iris_wyrm_native_knockdown_after_hit(native)
+                    S.wyrm_native_status = native.knockdown_assist
+                        and "native maul: opener hit; imposed zero-damage knockdown"
+                        or "native maul: opener hit; knockdown request FAILED"
+                    log(S.wyrm_native_status)
+                end
+                if native.knockdown_attempted and not native.down_leaf_retried
+                    and native_age >= 0.78 then
+                    native.down_leaf_retried = true
+                    pcall(function()
+                        local am = native.down_action_manager
+                            or get_component(native.target_go, "app.ActionManager")
+                        if am then
+                            am:call(
+                                "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                                0, "DmgDownLoop", 0)
+                            native.down_action_manager = am
+                            native.down_node_requested = "DmgDownLoop (leaf retry)"
+                        end
+                    end)
+                end
+                -- The reaction changes the victim's action on its next update,
+                -- so keep sampling briefly rather than requesting catch in the
+                -- same frame as onUnbalance.
+                if native_age >= 1.35 then
+                    iris_wyrm_native_bite_finish(
+                        "opener hit but target never entered down state")
+                    return
+                end
+            elseif native_age >= 1.35 then
+                iris_wyrm_native_bite_finish("opener missed; maul cancelled")
+                return
+            end
+        end
         if not native.observed_node and now - native.t0 >= 0.06 then
             native.observed_node = iris_wyrm_native_action_name(native.action_manager)
             if native.observed_node then
-                S.wyrm_native_status = "native bite live: " .. native.observed_node
+                S.wyrm_native_status = "native " .. tostring(native.label)
+                    .. " live: " .. native.observed_node
                 log(S.wyrm_native_status)
             end
+        end
+        -- Field test 1 proved that requesting the node alone moved the root but
+        -- never gave the mounted render layer a bite.  Keep ActionManager as
+        -- the damage/collider owner, then paint the exact atlas motion once the
+        -- action has had a frame to enter.  This is still native contact; only
+        -- the mounted visual is deterministic.
+        for _, stage in ipairs(native.visual_stages or {}) do
+            if not stage.done and native_age >= (tonumber(stage.at) or 0.08) then
+                stage.done = true
+                pcall(function()
+                    local motion = costume.horse_character:call("get_Motion")
+                    local layer = motion and motion:call("getLayer", 0)
+                    if layer then
+                        layer:call(
+                            "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                            stage.bank, stage.clip, 0.0,
+                            tonumber(stage.blend) or 6.0, 1, 1)
+                        layer:call("set_Speed", tonumber(stage.speed) or 1.0)
+                        costume.cmd_bank, costume.cmd_clip = stage.bank, stage.clip
+                    end
+                end)
+            end
+        end
+        if native.release_node and not native.release_requested
+            and native_age >= (tonumber(native.release_at) or 1.5) then
+            native.release_requested = true
+            pcall(function()
+                native.action_manager:call(
+                    "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+                    0, native.release_node, 0)
+            end)
         end
         if now >= native.until_t then
             iris_wyrm_native_bite_finish("completed")
@@ -2588,10 +3171,59 @@ function iris_wyrm_attack_tick()
     end
     for _, slot in ipairs({ "heavy", "light", "voice" }) do
         if down[slot] and not prev[slot] then
+            if slot == "voice" and costume.wyrm_kind == "wolf"
+                and costume.wyrm_chassis == "ch223" then
+                -- Native action ownership is what emits the semantic wolf
+                -- howl. The old manual clip was think-stopped, heard nothing,
+                -- then Wild Cats supplied a feline fallback to Shadow.
+                iris_wyrm_native_bite_start(costume, now, {
+                    label = "howl",
+                    slot = "voice",
+                    node = "Ch223HowlingStartLoop",
+                    duration = 2.65,
+                    range = 0.0,
+                    width = 0.0,
+                    approach_max = 0.0,
+                    release_node = "Ch223HowlingEnd",
+                    release_at = 2.00,
+                    visual_stages = {
+                        { at = 0.08, bank = 0, clip = 4610 },
+                        { at = 0.52, bank = 0, clip = 4611 },
+                        { at = 2.00, bank = 0, clip = 4612 },
+                    },
+                })
+                break
+            end
             if slot == "light" and C.wyrm_native_bite_test ~= false
                 and costume.wyrm_kind == "wolf"
                 and costume.wyrm_chassis == "ch223" then
                 iris_wyrm_native_bite_start(costume, now)
+                break
+            end
+            if slot == "heavy" and C.wyrm_native_maul_test == true
+                and costume.wyrm_kind == "wolf"
+                and costume.wyrm_chassis == "ch223" then
+                iris_wyrm_native_bite_start(costume, now, {
+                    label = "maul opener",
+                    slot = "heavy",
+                    node = "Ch223_Bite",
+                    duration = 1.45,
+                    range = 5.5,
+                    width = 4.0,
+                    aim_deg = 65.0,
+                    aim_secs = 0.08,
+                    combo_maul = true,
+                    approach_stop = 0.12,
+                    approach_max = 4.5,
+                    approach_secs = 0.58,
+                    approach_speed = 18.0,
+                    -- The proven native bite is the catch initiation. Its
+                    -- zero-damage poise assist and maul transition occur only
+                    -- after the receiver's HP proves this collider connected.
+                    visual_stages = {
+                        { at = 0.08, bank = 50, clip = 50 },
+                    },
+                })
                 break
             end
             local m = moves[slot]
@@ -4404,11 +5036,21 @@ local function costume_tick()
                                     -- takes the kick, it just does not sail.
                                     local heavy = false
                                     pcall(function()
+                                        -- ⭐ 08-14 (Aurora: "the horse knockback shouldn't
+                                        -- affect large creatures like oxen"). ch299003 is the
+                                        -- ox band -- _A the milkable cows, _B the bull, and the
+                                        -- prefix match covers both (IrisSpecies.lua:21,64). It
+                                        -- is the one piece of LIVESTOCK heavy enough that being
+                                        -- punted reads as a bug rather than as comedy; the small
+                                        -- fry deliberately keep flying.
+                                        -- ⚠ To spare another species later, add its chassis
+                                        -- here -- one string, nothing else. Horses (ch299011) and
+                                        -- stags (ch299010) are deliberately still flingable.
                                         local en = tostring(ego:call("get_Name") or "")
                                         for _, hid in ipairs({"ch226", "ch229",
                                             "ch250", "ch251", "ch252", "ch253",
                                             "ch254", "ch255", "ch256", "ch257",
-                                            "ch258", "ch260"}) do
+                                            "ch258", "ch260", "ch299003"}) do
                                             if en:find(hid, 1, true) then
                                                 heavy = true; break
                                             end
@@ -4821,8 +5463,7 @@ local function costume_tick()
                 -- attack root motion in the drive's own phase; the retired
                 -- UpdateBehavior anchor fought the CharacterController and
                 -- caused the persistent 15 fps correction storm.
-                if (cur > 0.02 or (costume.wyrm_kind and S.wyrm_attack
-                        and S.wyrm_attack.native ~= true))
+                if (cur > 0.02 or (costume.wyrm_kind and S.wyrm_attack))
                     and not costume.jump then
                     local fwd = ox_tf:call("get_AxisZ")
                     local pos = ox_tf:call("get_UniversalPosition")
@@ -4849,11 +5490,59 @@ local function costume_tick()
                             end
                         end
                     end
-                    pos.x = pos.x + fwd.x * cur * dt
-                    pos.z = pos.z + fwd.z * cur * dt
+                    -- Native-contact assist: after the bounded yaw correction,
+                    -- advance only along Shadow's nose until the target reaches
+                    -- the authored jaw distance.  Total travel and time are
+                    -- capped, and every step requires a clear scenery ray.
+                    local attack_step = 0.0
+                    local lease = S.wyrm_native_lease
+                    if lease and lease.costume == costume
+                        and valid(lease.target_go)
+                        and (now_d - (tonumber(lease.t0) or now_d))
+                            <= (tonumber(lease.approach_secs) or 0.28)
+                        and (tonumber(lease.approach_moved) or 0.0)
+                            < (tonumber(lease.approach_max) or 2.2) then
+                        local tp = universal_pos(lease.target_go)
+                        local mouth = iris_wyrm_native_mouth_positions(costume)
+                        if tp and mouth then
+                            local fx, fz = tonumber(fwd.x) or 0.0,
+                                tonumber(fwd.z) or 0.0
+                            local fl = math.sqrt(fx * fx + fz * fz)
+                            if fl > 0.01 then
+                                fx, fz = fx / fl, fz / fl
+                                local dx, dz = tp.x - mouth.x, tp.z - mouth.z
+                                local along = dx * fx + dz * fz
+                                local across = math.abs(dx * fz - dz * fx)
+                                local remaining = (tonumber(lease.approach_max) or 2.2)
+                                    - (tonumber(lease.approach_moved) or 0.0)
+                                local error = along
+                                    - (tonumber(lease.approach_stop) or 0.12)
+                                local cap = math.min(
+                                    math.max(0.0, remaining),
+                                    (tonumber(lease.approach_speed) or 18.0) * dt)
+                                local wanted = math.max(0.0, math.min(cap, error))
+                                -- Advance only. A target already inside the jaw
+                                -- range is held in place and gets the bounded
+                                -- native collider retry; the mount never retreats.
+                                if wanted > 0.001 and across <= 1.8 then
+                                    attack_step = iris_wyrm_native_clear_forward(
+                                        costume, wanted, lease.target_go)
+                                    if attack_step <= 0.0001 then
+                                        lease.approach_blocked = true
+                                    end
+                                    lease.approach_moved =
+                                        (tonumber(lease.approach_moved) or 0.0)
+                                        + attack_step
+                                end
+                            end
+                        end
+                    end
+                    local commanded = cur * dt + attack_step
+                    pos.x = pos.x + fwd.x * commanded
+                    pos.z = pos.z + fwd.z * commanded
                     ox_tf:call("set_UniversalPosition", pos)
-                    costume.drive_step = { x = fwd.x * cur * dt,
-                                           z = fwd.z * cur * dt }
+                    costume.drive_step = { x = fwd.x * commanded,
+                                           z = fwd.z * commanded }
                     costume.wyrm_prev_upos = { x = pos.x, z = pos.z }
                 else
                     costume.drive_step = nil
@@ -8075,6 +8764,15 @@ rawset(_G, "IrisHorseMount", {
 -- motion and suppressed components, leaving the player exactly where the boss
 -- found them.
 rawset(_G, "__iris_rodeo_surrender_to_catch", function(prey)
+    -- Native Shadow maul proof.  This callback already sits on the engine's
+    -- real CatchController.startCatch boundary, so a count here distinguishes
+    -- an actual paired catch from the wolf merely playing its half of a clip.
+    local lease = S.wyrm_native_lease
+    if lease and lease.catch_move
+        and object_address(prey) == object_address(lease.target) then
+        lease.catch_start_seen = (tonumber(lease.catch_start_seen) or 0) + 1
+        lease.catch_prey_addr = object_address(prey)
+    end
     if not S.ride_pose_on then return false end
     local player = player_character()
     if not (prey and player
@@ -9981,9 +10679,13 @@ local function kick_flights_tick()
         local fl = fls[i]
         local te = nowf - (tonumber(fl.t0) or nowf)
         local done = false
+        -- ⛔⛔⛔ 08-14: WHY a flight ends decides whether we may still TOUCH the victim.
+        -- Both endings below mean the engine owns/owned the body -- see the cleanup block.
+        local gone = false
         local okt = pcall(function()
             if not valid(fl.go) then
                 done = true
+                gone = true   -- despawned mid-arc: every wrapper we hold is now stale
                 return
             end
             local hpq = nil
@@ -9992,6 +10694,18 @@ local function kick_flights_tick()
             end)
             if hpq ~= nil and hpq <= 0 then
                 done = true   -- death: native ragdoll takes the corpse
+                -- ⚠⚠ get_Hp IS NOT A TRUSTWORTHY DEATH ORACLE HERE. This function's own r34
+                -- note (below) records that on enemies it is "usually the WRONG getter ...
+                -- read 0 there and BAILED" -- i.e. it returns 0 for bodies that are alive.
+                -- Ending the arc on that reading is fine (it always did), but declaring the
+                -- body UNTOUCHABLE on it is not: a false positive would skip the component
+                -- restore in the cleanup and leave a LIVE enemy frozen forever with its AI,
+                -- nav and CharacterController disabled and ragdoll forced on. Confirm with
+                -- get_IsDead -- the same second signal doe_is_alive uses
+                -- (IrisWildHorses.lua:1878) -- and only then stop touching it.
+                pcall(function()
+                    if fl.ch:call("get_IsDead") == true then gone = true end
+                end)
                 return
             end
             if fl.rag_pause_at and nowf >= fl.rag_pause_at then
@@ -10038,8 +10752,26 @@ local function kick_flights_tick()
             pos.x, pos.y, pos.z = nx, ny, nz
             tf:call("set_UniversalPosition", pos)
         end)
-        if not okt then done = true end
-        if done then
+        -- a throw from inside the arc means one of our wrappers already misbehaved -- treat the
+        -- body as gone rather than poking it further to find out.
+        if not okt then done = true; gone = true end
+        if done and gone then
+            -- ⛔⛔⛔ THE VICTIM IS DEAD OR DESPAWNED. TOUCH NOTHING.
+            -- The block below this one restores components, un-ragdolls and applies damage -- all
+            -- of it CALLS INTO the body. Running that against a corpse the engine is tearing down
+            -- is what corrupted the heap tonight: 7x "REManagedObject:release attempted to release
+            -- an object that was not managed by our Lua state" over 8 minutes of kick-spam, then a
+            -- c0000005 with RIP=0 (a call through a freed vtable).
+            -- ⭐ There is nothing to restore anyway: a dead body's AI/nav/controller state is the
+            -- engine's problem now, and the damage that would be applied is moot -- it is already
+            -- dead. Drop every wrapper THIS INSTANT and force one batched collect, per the law the
+            -- 08-12 blessing shell CTD established: never let a lazy GC release a wrapper against
+            -- an object the engine has already freed.
+            fl.go, fl.ch, fl.hc, fl.disabled, fl.ragdolled = nil, nil, nil, nil, nil
+            S.kick_gc_at = math.min(tonumber(S.kick_gc_at) or math.huge, nowf + 0.10)
+            log("kick flight: victim died/despawned mid-arc -- refs dropped, body untouched")
+            table.remove(fls, i)
+        elseif done then
             pcall(function()
                 if fl.ragdolled then
                     fl.ch:call("set_IsForceEnableRagdoll", false)
@@ -10080,6 +10812,14 @@ local function kick_flights_tick()
         end
     end
     if #fls == 0 then S.kick_flights = nil end
+    -- ⭐ THE FORCED COLLECT (law from the 08-12 blessing shell CTD: any Lua that wraps a
+    -- short-lived engine object must force-collect right after dropping it -- lazy GC + engine
+    -- lifetime is exactly the double-release signature above). Deadline-batched so a scrum where
+    -- six things die at once still costs ONE collection, not six.
+    if S.kick_gc_at and os.clock() >= S.kick_gc_at then
+        S.kick_gc_at = nil
+        collectgarbage("collect")
+    end
 end
 
 re.on_frame(function()
@@ -11272,6 +12012,17 @@ re.on_draw_ui(function()
         end
         if S.wyrm_native_status then
             imgui.text("  " .. tostring(S.wyrm_native_status))
+        end
+        local nmc, nmv = imgui.checkbox(
+            "EXPERIMENT: Shadow Y uses native pin/maul##wyrm_native_maul",
+            C.wyrm_native_maul_test == true)
+        if nmc then
+            C.wyrm_native_maul_test = nmv
+            if not nmv and S.wyrm_native_lease
+                and S.wyrm_native_lease.label == "maul" then
+                iris_wyrm_native_bite_finish("disabled in panel")
+            end
+            save_config()
         end
         -- ⭐ 08-13 (Aurora: "I don't know where these sliders are"): ALWAYS visible,
         -- own section, and rider position split per species - wolf's tune is the
