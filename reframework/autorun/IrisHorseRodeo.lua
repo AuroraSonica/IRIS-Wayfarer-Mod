@@ -242,6 +242,16 @@ if S.wyrm_native_lease and S.wyrm_native_lease.native_jaw_tracks then
     pcall(function() S.wyrm_native_lease.native_jaw_tracks:release() end)
     S.wyrm_native_lease.native_jaw_tracks = nil
 end
+-- r8: a reload mid-pinned-maul must not leave a think-stopped goblin statue.
+-- The retained wrapper may be dead (wrappers DIE across reloads) -- pcall.
+if S.wyrm_native_lease and S.wyrm_native_lease.pin_maul then
+    pcall(function()
+        local target = S.wyrm_native_lease.target
+        target:call("set_IsThinkStop", false)
+        local motion = target:call("get_Motion")
+        if motion then motion:call("set_PlaySpeed", 1.0) end
+    end)
+end
 -- gait overrides are session-only lab levers — every load returns to the
 -- baked defaults (bank 901: walk 1 / trot 2 / gallop 3)
 S.gait_walk_bank, S.gait_walk_id = nil, nil
@@ -3624,9 +3634,15 @@ function iris_wyrm_clear_travel(costume, wanted, dir_x, dir_z,
         if airborne_clearance == true then
             ray_specs = {{ height = 1.55, lead = 1.28, stop = 1.10 }}
         elseif is_wyrm then
+            -- r13 (Aurora: "the wolf is struggling to walk up a hill"): the
+            -- old low ray (0.48m height, 1.28m lead) intersected any uphill
+            -- slope past ~20 deg and armed the wall latch -- the exact trap
+            -- the horse specs below document. Rebalanced to the horse law:
+            -- short low lead clears hillsides, still catches fences (vertical
+            -- faces trigger at any lead).
             ray_specs = {
-                { height = 0.48, lead = 1.28, stop = 1.10 },
-                { height = 1.55, lead = 1.28, stop = 1.10 },
+                { height = 0.85, lead = 0.55, stop = 0.42 },
+                { height = 1.55, lead = 1.15, stop = 0.95 },
             }
         else
             ray_specs = {
@@ -3701,7 +3717,10 @@ function iris_wyrm_clear_travel(costume, wanted, dir_x, dir_z,
         local ay = ahead and tonumber(ahead.y)
         if ay then
             local rise = ay - by
-            local slope_limit = costume.wyrm_kind and 38.0 or 50.0
+            -- r13: 38 deg stalled the wolf on ordinary DD2 hillsides; 50 deg
+            -- = the native CharacterController's own SlopeLimit and the value
+            -- horses ride with.
+            local slope_limit = 50.0
             local allowed = math.max(0.30,
                 probe * math.tan(math.rad(slope_limit)))
             if rise > allowed then
@@ -4558,6 +4577,205 @@ function iris_wyrm_apply_bonus_damage(lease, native_delta, label)
     iris_wyrm_combat_trace(lease, "bonus-damage", S.wyrm_dmg_amp_last)
 end
 
+-- ⭐ 08-18 r8: full scripted damage for the PINNED maul's chomps. The native
+-- transaction routes are conclusively walled here (parked-graph clips own no
+-- events for the hold-down set; the mounted ActionManager rejects every
+-- request even in a live window with the catch paired -- receipts 16:31/16:32,
+-- retainedEnds=317, maulContacts=0). A pinned victim physically in the jaws
+-- cannot be a miss, so the honesty contract holds: this only ever runs at a
+-- chomp contact frame on a held target. Same setHp ladder + 1-HP kill floor.
+function iris_wyrm_apply_direct_damage(lease, label)
+    local costume = lease and lease.costume or nil
+    local mult = iris_wyrm_damage_multiplier(costume)
+    local base = math.max(1.0, tonumber(C.wyrm_maul_chomp_damage) or 45.0)
+    local total = base * mult
+    local target = lease.target
+    if not valid(target) then return false end
+    local hc = nil
+    pcall(function() hc = target:call("get_HitController") end)
+    if not hc and valid(lease.target_go) then
+        hc = get_component(lease.target_go, "app.HitController")
+    end
+    if not hc then return false end
+    local hp = nil
+    pcall(function() hp = tonumber(hc:call("get_Hp")) end)
+    if not hp or hp <= 0.0 then return false, false end
+    local new = math.max(0.0, hp - total)
+    -- r9: a chomp that would take HP to 0 is LETHAL. The engine refuses direct
+    -- HP writes to 0 (run 11 receipt), so the caller finishes with the proven
+    -- kill lever instead of stranding the prey at the 1-HP floor -- run 11
+    -- field report: "goblin stands up as if nothing happened" at hp 1.
+    local lethal = new <= 0.0
+    local applied = false
+    local function try(fn)
+        if applied then return end
+        pcall(fn)
+        local rb = nil
+        pcall(function() rb = tonumber(hc:call("get_Hp")) end)
+        if rb and rb <= new + 0.5 then applied = true end
+    end
+    local function ladder()
+        try(function() hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+            new, true, 0) end)
+        try(function() hc:call("setHp(System.Single, System.Boolean)", new, true) end)
+        try(function() hc:call("setHp(System.Single)", new) end)
+        try(function() hc:call("set_Hp(System.Single)", new) end)
+    end
+    ladder()
+    if not applied and new < 1.0 then
+        new = 1.0
+        ladder()
+    end
+    S.wyrm_dmg_amp_last = string.format(
+        "%s: %.0f dealt (x%.1f of %.0f base) hp %.0f -> %.0f%s%s",
+        tostring(label or "chomp"), total, mult, base, hp,
+        applied and new or hp, applied and "" or " | REFUSED",
+        lethal and " | LETHAL" or "")
+    iris_wyrm_combat_trace(lease, "pin-damage", S.wyrm_dmg_amp_last)
+    return applied, lethal
+end
+
+-- ⭐⭐ 08-18 r9 CHOMP PRESENTATION -- replay a REAL packet, never a synthetic.
+-- Field verdict today: the mount's incoming-hit blood WORKS, and that route's
+-- only difference from every failed blood attempt is the packet -- an
+-- engine-RESOLVED DamageInfo replayed into the victim's own EPV damage-trigger
+-- unit paints; DismemberLab's reconstructed packets never did (four rounds,
+-- including a field-captured sword hit copied field-for-field). The wolf's
+-- genuine X bites on this prey supply the template: the incoming-fx PRE hook
+-- stashes the resolved packet when the receiver is the current lease target,
+-- POST retains it in _G.IrisWyrmPreyPkt (add_ref -- managed retention, the
+-- same pattern DismemberLab:504 uses; released on replacement).
+function iris_wyrm_prey_paint_chomp(lease)
+    local pkt = rawget(_G, "IrisWyrmPreyPkt")
+    if not (pkt and pkt.di and valid(lease.target_go)) then
+        S.wyrm_maul_fx_status = "no captured prey packet yet"
+        return false
+    end
+    if pkt.addr ~= object_address(lease.target_go) then
+        S.wyrm_maul_fx_status = "prey packet is for another body"
+        return false
+    end
+    local unit = get_component(lease.target_go,
+        "app.EPVExpertCharacterDamageTriggerUnit")
+    if not unit then
+        pcall(function()
+            local budget = 0
+            local function walk(tf)
+                if not tf or unit or budget > 200 then return end
+                budget = budget + 1
+                local cgo = tf:call("get_GameObject")
+                if cgo then
+                    unit = get_component(cgo,
+                        "app.EPVExpertCharacterDamageTriggerUnit")
+                    if unit then return end
+                end
+                local c = tf:call("get_Child")
+                while c and not unit do
+                    walk(c)
+                    c = c:call("get_Next")
+                end
+            end
+            walk(lease.target_go:call("get_Transform"))
+        end)
+    end
+    if not unit then
+        S.wyrm_maul_fx_status = "prey EPV unit missing"
+        return false
+    end
+    -- r11: the packet's spray direction is baked from the ORIGINAL hit (the
+    -- pounce), and by chomp time it points through the wolf's own body --
+    -- field verdict: "the blood was coming from the wolf". Re-aim the spray
+    -- out in front of the jaws on every replay. One pcall per set_field
+    -- (blood_fire law) so a throw can't skip the paint below.
+    pcall(function()
+        local tf = lease.costume and valid(lease.costume.horse_go)
+            and lease.costume.horse_go:call("get_Transform") or nil
+        local fwd = tf and tf:call("get_AxisZ") or nil
+        if fwd then
+            local vec = Vector3f.new(
+                (tonumber(fwd.x) or 0.0) * 0.85, 0.5,
+                (tonumber(fwd.z) or 0.0) * 0.85)
+            pcall(function() pkt.di:set_field("AttackVec", vec) end)
+            pcall(function() pkt.di:set_field("HitBackVec", vec) end)
+        end
+    end)
+    -- r13: DamageInfo has NO position field at all (il2cpp: 81 fields, the
+    -- only vec3s are the two direction vectors) -- the paint anchors to the
+    -- packet's OBJECT references, and ours name the WOLF as attacker, which
+    -- is the remaining suspect for "the blood is coming from Shadow's body".
+    -- Re-point the attack side at the victim itself; if the painter throws
+    -- on that shape (HitHistory is keyed per attacker), fall back to the
+    -- original wolf-anchored shape so a chomp never loses its paint.
+    local function fire()
+        return pcall(function()
+            -- post-proc packets can carry a zeroed Damage (companion clamp
+            -- law); the painter skips zero-damage packets as non-hits.
+            local d = tonumber(pkt.di:get_field("Damage")) or 0
+            if d <= 0 and tonumber(pkt.dmg) then
+                pkt.di:set_field("Damage", pkt.dmg)
+            end
+            unit:call("callbackHit(app.HitController.DamageInfo)", pkt.di)
+        end)
+    end
+    local shape = "self-anchored"
+    pcall(function()
+        pkt.di:set_field("<AttackGameObject>k__BackingField", lease.target_go)
+    end)
+    pcall(function()
+        pkt.di:set_field("<AttackOwnerObject>k__BackingField", lease.target_go)
+    end)
+    local ok = fire()
+    if not ok and lease.costume and valid(lease.costume.horse_go) then
+        shape = "wolf-anchored fallback"
+        pcall(function()
+            pkt.di:set_field("<AttackGameObject>k__BackingField",
+                lease.costume.horse_go)
+        end)
+        pcall(function()
+            pkt.di:set_field("<AttackOwnerObject>k__BackingField",
+                lease.costume.horse_go)
+        end)
+        ok = fire()
+    end
+    S.wyrm_maul_fx_status = ok
+        and ("chomp painted (" .. shape .. ")")
+        or "chomp paint THREW (both shapes)"
+    iris_wyrm_combat_trace(lease, "chomp-fx", S.wyrm_maul_fx_status)
+    return ok
+end
+
+-- r10: the deferred maul death blow. r9 killed at the chomp that broke the HP
+-- and run 13's field verdict was "kills the goblin instantly before the wolf
+-- even took a bite" -- the ragdoll erased the whole savaging. Now the floor
+-- holds the prey at 1 HP through the chomps and THIS fires at the release
+-- fling (or any early lease exit that still owes a death). Unpin FIRST -- a
+-- think-stopped body cannot run its die loop -- then the proven kill lever
+-- (NicksDevtools/CombatTools.lua:78, Nick's own kill button).
+function iris_wyrm_pin_kill(lease)
+    pcall(function()
+        if valid(lease.target) then
+            lease.target:call("set_IsThinkStop", false)
+            local m = lease.target:call("get_Motion")
+            if m then m:call("set_PlaySpeed", 1.0) end
+        end
+    end)
+    lease.pin_maul = nil
+    lease.pin_jolt_until = nil
+    local killed = false
+    pcall(function()
+        if valid(lease.target) then
+            lease.target:call("killAndSetDieLoop", nil)
+            killed = true
+        end
+    end)
+    S.wyrm_native_status = killed
+        and "pinned maul: prey slain (release fling)"
+        or "pinned maul: kill lever threw (left at 1 HP)"
+    log(S.wyrm_native_status)
+    iris_wyrm_combat_trace(lease, "maul-kill", S.wyrm_native_status)
+    return killed
+end
+
 -- ⭐ 08-18 r5 INCOMING-HIT PRESENTATION, POST-PROC. Round 3/4 called the EPV
 -- painter (app.EPVExpertCharacterDamageTriggerUnit.callbackHit) at damageProc
 -- ENTRY and it threw KeyNotFoundException inside the engine on every hit --
@@ -4572,6 +4790,9 @@ function iris_wyrm_install_incoming_fx()
         local storage = thread.get_hook_storage()
         storage.iris_wyrm_fx_di = nil
         storage.iris_wyrm_fx_dmg = nil
+        storage.iris_wyrm_prey_di = nil
+        storage.iris_wyrm_prey_dmg = nil
+        storage.iris_wyrm_prey_addr = nil
         local costume = S.costume
         if not (costume and costume.wyrm_kind and valid(costume.horse_go)) then
             return
@@ -4584,7 +4805,32 @@ function iris_wyrm_install_incoming_fx()
             local this_hc = sdk.to_managed_object(args[2])
             receiver = this_hc and this_hc:call("get_GameObject") or nil
         end)
-        if not iris_wyrm_go_under_mount(receiver, mount_addr) then return end
+        if not iris_wyrm_go_under_mount(receiver, mount_addr) then
+            -- r9: not the mount -- but if it IS the current prey, stash the
+            -- engine's own resolved packet for chomp-time replay (real
+            -- resolved packets PAINT; synthetics never did). No attacker
+            -- filter: the wolf's own bite packet is the best template.
+            local lease = S.wyrm_native_lease
+            local prey_go = lease and lease.target_go or nil
+            if prey_go and valid(prey_go) and valid(receiver)
+                and object_address(receiver) == object_address(prey_go) then
+                local pdmg = nil
+                pcall(function() pdmg = tonumber(di:get_field("Damage")) end)
+                if pdmg and pdmg > 0.0 then
+                    storage.iris_wyrm_prey_di = di
+                    storage.iris_wyrm_prey_dmg = pdmg
+                    storage.iris_wyrm_prey_addr = object_address(receiver)
+                    -- r14: open the hurt-vocal watch window -- the prey's
+                    -- native pain cry posts within a breath of a real hit;
+                    -- IrisWildCats' trigger hook records it for the maul.
+                    rawset(_G, "IrisWyrmPreyVocalWatch", {
+                        addr = object_address(receiver),
+                        until_t = os.clock() + 0.4,
+                    })
+                end
+            end
+            return
+        end
         local attacker = iris_wyrm_damage_attacker_go(di)
         if iris_wyrm_go_under_mount(attacker, mount_addr) then return end
         if iris_wyrm_damage_go_is_party(attacker) then return end
@@ -4606,6 +4852,25 @@ function iris_wyrm_install_incoming_fx()
     end)
     rawset(_G, "__iris_wyrm_incoming_fx_post", function()
         local storage = thread.get_hook_storage()
+        -- r9: retain the prey's resolved packet for chomp replay. add_ref is
+        -- the managed-retention pattern (DismemberLab:504); the previous
+        -- packet is released on replacement so only one ref is ever held.
+        local pdi = storage.iris_wyrm_prey_di
+        if pdi then
+            local pdmg = storage.iris_wyrm_prey_dmg
+            local paddr = storage.iris_wyrm_prey_addr
+            storage.iris_wyrm_prey_di = nil
+            storage.iris_wyrm_prey_dmg = nil
+            storage.iris_wyrm_prey_addr = nil
+            if pcall(function() pdi:add_ref() end) then
+                local old = rawget(_G, "IrisWyrmPreyPkt")
+                if old and old.di then
+                    pcall(function() old.di:release() end)
+                end
+                rawset(_G, "IrisWyrmPreyPkt",
+                    { di = pdi, dmg = pdmg, addr = paddr, t = os.clock() })
+            end
+        end
         local di = storage.iris_wyrm_fx_di
         local dmg = storage.iris_wyrm_fx_dmg
         storage.iris_wyrm_fx_di = nil
@@ -4898,6 +5163,99 @@ function iris_wyrm_native_maul_window_close(costume)
     end)
 end
 
+-- ⭐⭐ 08-18 r8 THE PINNED MAUL -- the shipping RT maul. Field receipts killed
+-- both native wolf-side routes: parked-graph hold-down clips own no attack
+-- events, and the mounted ActionManager rejects every request even inside a
+-- live window with the catch paired (Action=Invalid, retainedEnds=317,
+-- maulContacts=0; the C_PropA attach also parks the prey standing under the
+-- belly at wyrm scale). What IS achievable: PIN the downed prey via think-stop
+-- in its own native down pose (slow PlaySpeed = struggling), play the wolf's
+-- authored maul choreography, and land scripted damage + the victim's own EPV
+-- blood callback at every chomp. The prey is physically under the jaws, so a
+-- chomp can never be a miss.
+function iris_wyrm_pin_maul_start(lease, now)
+    local costume = lease.costume
+    if not (costume and valid(lease.target)) then return false end
+    lease.direct_maul = true
+    lease.pin_maul = true
+    lease.phase = "maul"
+    lease.label = "pinned maul"
+    -- r10: keep converging through the push-down so the slam lands ON the
+    -- body even when RT fired from the 1.0-1.6m edge of the contact ring.
+    lease.maul_converge_until = now + 0.55
+    -- r12: PIN THE POSITION, not just the pose. Field video 18-52: the chomp
+    -- flinch restarts replay the damage clip's root-motion shove (and the
+    -- replayed packet may add engine knockback), sliding the prey ~20m out
+    -- of the jaws while the wolf mauled bare ground. The anchor is clamped
+    -- every tick below; unpin frees it for the death fling.
+    pcall(function()
+        local ap = universal_pos(lease.target_go)
+        if ap then
+            lease.pin_anchor = { x = ap.x, y = ap.y, z = ap.z }
+        end
+    end)
+    pcall(function()
+        lease.target:call("set_IsThinkStop", true)
+        local motion = lease.target:call("get_Motion")
+        if motion then motion:call("set_PlaySpeed", 0.30) end
+    end)
+    -- r13 (Aurora: "can the goblin be lying down"): capture the LYING frame.
+    -- The r11 flinch restarted the damage clip at frame 0 -- the STANDING
+    -- start of the reaction -- which is what kept sitting him up. The chomp
+    -- flinch now rewinds a few frames and plays back toward this anchor, and
+    -- the tick clamps the clip so it can never advance past it.
+    pcall(function()
+        local motion = lease.target:call("get_Motion")
+        local layer = motion and motion:call("getLayer", 0)
+        if layer then
+            lease.pin_frame = tonumber(layer:call("get_Frame"))
+        end
+    end)
+    -- r13 POSE-SEEK window: knockdown/lie/get-up are ONE clip (trace: node
+    -- DmgShrinkLLL through the whole arc), so RT during the get-up tail
+    -- anchors a half-standing frame. The tick walks the anchor BACKWARD
+    -- until the head joint is actually near the ground.
+    lease.pin_seek_until = now + 0.45
+    -- Lyra's captured hold-down choreography: push-down, ADD start/hit, then
+    -- the shake/chomp loop and release. Every chomp stage deals + bleeds.
+    lease.visual_stages = {
+        { at = 0.00, bank = 30, clip = 810, blend = 8.0 },
+        { at = 0.42, bank = 20, clip = 4010, blend = 6.0 },
+        { at = 0.86, bank = 20, clip = 4012, blend = 5.0 },
+        { at = 1.20, bank = 20, clip = 4000, blend = 5.0,
+            maul_contact = true, pin_damage = true, result_at = 0.30 },
+        { at = 1.58, bank = 20, clip = 4040, blend = 6.0 },
+        { at = 1.92, bank = 20, clip = 4041, blend = 4.0 },
+        { at = 2.26, bank = 20, clip = 4043, blend = 4.0,
+            maul_contact = true, pin_damage = true, result_at = 0.30 },
+        { at = 2.66, bank = 20, clip = 4041, blend = 4.0 },
+        { at = 3.00, bank = 20, clip = 4043, blend = 4.0,
+            maul_contact = true, pin_damage = true, result_at = 0.30 },
+        { at = 3.40, bank = 20, clip = 4041, blend = 4.0 },
+        { at = 3.74, bank = 20, clip = 4043, blend = 4.0,
+            maul_contact = true, pin_damage = true, result_at = 0.30 },
+        { at = 4.14, bank = 20, clip = 4050, blend = 8.0 },
+    }
+    lease.t0 = now
+    lease.until_t = now + 4.75
+    if S.wyrm_down_release
+        and S.wyrm_down_release.target_addr == object_address(lease.target) then
+        S.wyrm_down_release.at = lease.until_t + 0.15
+    end
+    lease.approach_secs = 0.0
+    lease.approach_done = true
+    S.wyrm_atk_until = lease.until_t
+    rawset(_G, "IrisWyrmNativeAttackLease", {
+        mount_addr = object_address(costume.horse_character),
+        target_addr = object_address(lease.target),
+        until_t = lease.until_t,
+    })
+    S.wyrm_native_status = "pinned maul: prey held, savaging"
+    log(S.wyrm_native_status)
+    iris_wyrm_combat_trace(lease, "maul-start", S.wyrm_native_status)
+    return true
+end
+
 -- Convert the still-live opener lease into the captured paired catch.  AI and
 -- navigation stay disabled, but the action FSM and both CatchControllers remain
 -- live: they own the predator animation, victim reaction, C_PropA attachment,
@@ -4905,6 +5263,11 @@ end
 function iris_wyrm_native_begin_maul(lease, now, direct)
     if not (lease and lease.action_manager and valid(lease.target)) then
         return false
+    end
+    -- r8: RT routes to the pinned maul (panel toggle wyrm_native_maul);
+    -- unchecked falls through to the scripted stationary maul below.
+    if direct and C.wyrm_native_maul ~= false then
+        if iris_wyrm_pin_maul_start(lease, now) then return true end
     end
     local function arm_stationary_maul(paired)
         -- Mounted ch223 does not own Puppeteer's complete action graph.  Keep the
@@ -4967,17 +5330,14 @@ function iris_wyrm_native_begin_maul(lease, now, direct)
         iris_wyrm_combat_trace(lease, "maul-start", S.wyrm_native_status)
         return true
     end
-    -- The ~300-abort-retry storm was a catch held on a PARKED (Invalid) action
-    -- graph. The r7 native maul instead runs inside a LIVE WINDOW (helpers
-    -- above): the real HoldDownCatchAttack owns animation, chomp cadence,
-    -- damage, blood and prey reactions, and the finish path re-parks. Every
-    -- refusal on the way still falls back to the scripted stationary maul.
+    -- ⛔ r7 POST-MORTEM: the live-window catch paired successfully (victim
+    -- entered Caught_TakeAwayWolf_StartLoop_D) but the wolf-side action stayed
+    -- Invalid through the whole window and the engine fought the pairing ~300
+    -- times in 6s. The catch machinery below remains only for the non-direct
+    -- combo path; RT now uses the pinned maul above.
     local full_native = lease.costume
         and lease.costume.native_controller_live == true
-    local native_maul = direct and C.wyrm_native_maul ~= false
-    if direct and not (full_native or native_maul) then
-        return arm_stationary_maul(false)
-    end
+    if direct and not full_native then return arm_stationary_maul(false) end
     local setting = iris_wyrm_native_catch_setting()
     local catch_controller = nil
     pcall(function()
@@ -5005,12 +5365,6 @@ function iris_wyrm_native_begin_maul(lease, now, direct)
         local motion = lease.target:call("get_Motion")
         if motion then motion:call("set_PlaySpeed", 1.0) end
     end)
-    -- The catcher-side CatchStartAction needs a live graph to enter; open the
-    -- window BEFORE startCatch or the handshake starts against Invalid.
-    if native_maul then
-        iris_wyrm_native_maul_window_open(lease.costume, now, 6.8)
-    end
-
     lease.catch_move = true -- arm the startCatch receipt before the synchronous call
     lease.retain_catch = true -- terminal callbacks can occur inside startCatch
     lease.catch_controller = catch_controller
@@ -5029,9 +5383,6 @@ function iris_wyrm_native_begin_maul(lease, now, direct)
         lease.retain_catch = false
         lease.catch_controller = nil
         lease.caught_controller = nil
-        if native_maul then
-            iris_wyrm_native_maul_window_close(lease.costume)
-        end
         if direct then return arm_stationary_maul(false) end
         S.wyrm_native_status = "native maul startCatch refused"
             .. (call_error and (": " .. tostring(call_error)) or "")
@@ -5056,12 +5407,9 @@ function iris_wyrm_native_begin_maul(lease, now, direct)
     lease.release_node = nil
     lease.cancel_node = "HoldDownCatchCancel"
     lease.release_requested = nil
-    if direct and (full_native or native_maul) then
-        -- Both catch controllers are paired and the graph is LIVE for this
-        -- window: ch223's real HoldDownCatchAttack owns animation, blood,
-        -- damage cadence and prey reactions. The finish path re-parks.
+    if direct and full_native then
+        -- Retired-controller branch only; RT never reaches this since r8.
         lease.direct_maul = true
-        lease.native_maul_window = native_maul and not full_native or nil
         lease.phase = "catch"
         lease.label = "native paired hold-down maul"
         lease.visual_stages = nil
@@ -5141,6 +5489,22 @@ function iris_wyrm_native_bite_finish(reason)
     if S.wyrm_attack == lease then S.wyrm_attack = nil end
     S.wyrm_atk_until = nil
     S.wyrm_atk_hold = nil
+    -- r8: UNPIN on every exit path -- a think-stopped goblin outliving its
+    -- maul would be a frozen statue. PlaySpeed restored with it.
+    -- r10: an early exit that still owes the deferred death pays it here
+    -- (pin_kill unpins on its own).
+    if lease.pin_kill_pending and not lease.pin_kill_done then
+        lease.pin_kill_done = true
+        iris_wyrm_pin_kill(lease)
+    elseif lease.pin_maul then
+        pcall(function()
+            if valid(lease.target) then
+                lease.target:call("set_IsThinkStop", false)
+                local motion = lease.target:call("get_Motion")
+                if motion then motion:call("set_PlaySpeed", 1.0) end
+            end
+        end)
+    end
     local costume = lease.costume
     if lease.native_jaw_tracks then
         pcall(function() lease.native_jaw_tracks:release() end)
@@ -5563,12 +5927,18 @@ function iris_wyrm_native_bite_start(costume, now, spec)
                 -- of the victim rather than driving the torso over them.
                 local dx, dz = tp.x - mouth.x, tp.z - mouth.z
                 local dist = math.sqrt(dx * dx + dz * dz)
-                -- Leave the scaled wolf's chest behind the victim rather than
-                -- putting its root on the victim root.  Contact is resolved by
-                -- the locked strike volume, so the leap no longer needs to sail
-                -- through a goblin merely to make the native jaw collider cross.
-                lease.pounce_travel = math.max(0.0,
-                    math.min(2.8, dist - 1.35))
+                -- r13 ENGAGE POUNCE (Aurora: "the main benefit of pounce is
+                -- the range, which it doesn't really have"): the old
+                -- min(2.8, dist - 1.35) hop landed metres short of anything
+                -- past spitting distance. Fuel the leap to REACH the victim
+                -- plus a carry-through; airtime stays fixed, so a longer
+                -- leap is a faster leap. The homing stops the drive once the
+                -- mouth has carried just past the body, and the RT converge
+                -- lines the maul up from wherever the prey ends up.
+                lease.pounce_travel = math.max(2.2,
+                    math.min(8.5, dist + 1.4))
+                lease.pounce_height = math.max(0.48,
+                    math.min(1.0, 0.42 + lease.pounce_travel * 0.06))
             end
         end
     end
@@ -5962,6 +6332,14 @@ function iris_wyrm_attack_tick()
             local in_contact = distance and distance <= 1.35
                 and across and across <= 1.05
                 and along and along >= -0.75 and along <= 1.20
+            -- r10: the PIN maul needs the mouth NEAR the body, not bracketing
+            -- it -- damage is scripted and the slam covers the last half
+            -- metre, whichever side the prey fell on. Post-pounce it lies
+            -- under the belly (run 12: along=-0.94 withheld), so RT contact
+            -- is pure distance; the converge drive closes it from any side.
+            if native.direct_maul then
+                in_contact = distance and distance <= 1.0
+            end
             local timed_out = acquire_age >=
                 (tonumber(native.approach_secs) or 0.58)
             if aimed and in_contact then
@@ -5975,6 +6353,15 @@ function iris_wyrm_attack_tick()
                 return
             end
             if timed_out then
+                -- r10: RT only -- close enough at the deadline still slams;
+                -- withholding here is what broke the Y->RT one-two punch.
+                if native.direct_maul and distance and distance <= 1.6 then
+                    local why = string.format(
+                        "converge close enough (%.2fm) - slamming", distance)
+                    iris_wyrm_combat_trace(native, "acquire-ready", why)
+                    iris_wyrm_native_fire_bite(native, now, why)
+                    return
+                end
                 local why = string.format(
                     "mouth=%.2fm across=%.2fm along=%.2fm blocked=%s",
                     tonumber(distance) or -1.0, tonumber(across) or -1.0,
@@ -6207,23 +6594,180 @@ function iris_wyrm_attack_tick()
                 and native_age >= (tonumber(stage.at) or 0.0)
                     + (tonumber(stage.result_at) or 0.28) then
                 stage.result_checked = true
-                local hp1 = iris_wyrm_native_target_hp(native.target)
-                local landed = stage.hp0 and hp1 and hp1 < stage.hp0 - 0.01
-                if landed then
-                    iris_wyrm_apply_bonus_damage(native,
-                        stage.hp0 - hp1, "maul chomp")
+                if stage.pin_damage then
+                    -- r8 pinned maul: the prey is held under the jaws -- deal
+                    -- the chomp and fire its own EPV blood callback. No HP
+                    -- delta to measure; this IS the damage.
+                    local landed_pin, lethal_pin =
+                        iris_wyrm_apply_direct_damage(native,
+                            "pinned maul chomp")
+                    -- r9: real-packet replay first (the route that paints);
+                    -- the synthetic pulse only as a last resort.
+                    if not iris_wyrm_prey_paint_chomp(native) then
+                        pcall(function()
+                            local pulse = rawget(_G, "IrisNativeBloodPulse")
+                            if pulse and valid(native.target_go) then
+                                pulse(native.target_go)
+                            end
+                        end)
+                    end
+                    -- r14: the pain cry -- post the prey's own captured hurt
+                    -- vocal on its own container. Think-stop mutes native
+                    -- FSM vocals, but a manual post plays (the ridden-cat
+                    -- voice is the standing proof).
+                    pcall(function()
+                        local store = rawget(_G, "IrisWyrmPreyHurtVocal")
+                        local rec = store and valid(native.target_go)
+                            and store[object_address(native.target_go)]
+                        local capi = rawget(_G, "__iris_wild_cats_api")
+                        if rec and capi and capi.play_trigger_on then
+                            local voiced = capi.play_trigger_on(
+                                native.target_go, rec.trigger_id)
+                            S.wyrm_maul_voice_status = voiced
+                                and "pain cry posted"
+                                or "pain cry post FAILED"
+                        else
+                            S.wyrm_maul_voice_status =
+                                "no hurt vocal captured yet"
+                        end
+                    end)
+                    -- r13: the r11 frame-0 clip restart SAT THE GOBLIN UP
+                    -- (frame 0 of a damage clip is the standing start of the
+                    -- reaction) and replayed the clip's root-motion shove.
+                    -- Flinch = rewind a few frames behind the captured LYING
+                    -- anchor and play back toward it at speed -- a squirm
+                    -- that stays on the ground. No changeMotion, no root
+                    -- restart, no guessed ids.
+                    if native.pin_maul then
+                        pcall(function()
+                            if valid(native.target) then
+                                local m = native.target:call("get_Motion")
+                                local layer = m and m:call("getLayer", 0)
+                                if layer and tonumber(native.pin_frame) then
+                                    layer:call("set_Frame", math.max(0.0,
+                                        (tonumber(native.pin_frame) or 0.0)
+                                            - 12.0))
+                                end
+                                if m then m:call("set_PlaySpeed", 1.4) end
+                                native.pin_jolt_until = now + 0.30
+                            end
+                        end)
+                    end
+                    native.maul_contacts =
+                        (tonumber(native.maul_contacts) or 0) + 1
+                    S.wyrm_native_status = "pinned maul chomp "
+                        .. tostring(native.maul_contacts)
+                        .. (landed_pin and "" or " (damage REFUSED)")
+                    log(S.wyrm_native_status)
+                    iris_wyrm_combat_trace(native, "maul-hit",
+                        S.wyrm_native_status)
+                    if lethal_pin and not native.pin_kill_pending then
+                        -- r10: DON'T kill at the chomp that breaks the HP --
+                        -- run 13 field verdict: killAndSetDieLoop at chomp 1
+                        -- ragdolled the prey before any of the savaging read.
+                        -- The floor holds it at 1 HP; the release fling is
+                        -- the death blow (iris_wyrm_pin_kill below).
+                        native.pin_kill_pending = true
+                        iris_wyrm_combat_trace(native, "maul-kill-pending",
+                            "HP exhausted - kill deferred to the release fling")
+                    end
+                else
+                    local hp1 = iris_wyrm_native_target_hp(native.target)
+                    local landed = stage.hp0 and hp1 and hp1 < stage.hp0 - 0.01
+                    if landed then
+                        iris_wyrm_apply_bonus_damage(native,
+                            stage.hp0 - hp1, "maul chomp")
+                    end
+                    native.maul_contacts = (tonumber(native.maul_contacts) or 0)
+                        + (landed and 1 or 0)
+                    S.wyrm_native_status = landed
+                        and ("genuine ch223 maul contact "
+                            .. tostring(native.maul_contacts))
+                        or "maul jaw window missed"
+                    log(S.wyrm_native_status)
+                    iris_wyrm_combat_trace(native,
+                        landed and "maul-hit" or "maul-miss",
+                        S.wyrm_native_status)
                 end
-                native.maul_contacts = (tonumber(native.maul_contacts) or 0)
-                    + (landed and 1 or 0)
-                S.wyrm_native_status = landed
-                    and ("genuine ch223 maul contact "
-                        .. tostring(native.maul_contacts))
-                    or "maul jaw window missed"
-                log(S.wyrm_native_status)
-                iris_wyrm_combat_trace(native,
-                    landed and "maul-hit" or "maul-miss",
-                    S.wyrm_native_status)
             end
+        end
+        -- r13 POSE-SEEK: while the seek window is open, measure the head
+        -- joint's height over the root; if the body reads half-standing,
+        -- step the anchor frame backward (earlier in the clip = closer to
+        -- the ground for the get-up tail) until it lies. Head_0 is the
+        -- proven joint name on ch220 (DismemberLab lever C).
+        if native.pin_maul and tonumber(native.pin_frame)
+            and native.pin_seek_until and now <= native.pin_seek_until
+            and valid(native.target_go) and valid(native.target) then
+            pcall(function()
+                local tf = native.target_go:call("get_Transform")
+                local hj = tf and tf:call("getJointByName", "Head_0")
+                local hp = hj and hj:call("get_Position")
+                local rp = tf and tf:call("get_Position")
+                if hp and rp
+                    and (tonumber(hp.y) or 0.0) - (tonumber(rp.y) or 0.0)
+                        > 0.45
+                    and (tonumber(native.pin_frame) or 0.0) > 8.0 then
+                    native.pin_frame = math.max(8.0,
+                        (tonumber(native.pin_frame) or 0.0) - 6.0)
+                    local m = native.target:call("get_Motion")
+                    local layer = m and m:call("getLayer", 0)
+                    if layer then
+                        layer:call("set_Frame",
+                            tonumber(native.pin_frame) + 0.0)
+                    end
+                end
+            end)
+        end
+        -- r13: the frame clamp -- the pinned clip may never advance past the
+        -- captured lying frame, so the goblin stays DOWN between flinches.
+        if native.pin_maul and tonumber(native.pin_frame)
+            and valid(native.target) then
+            pcall(function()
+                local m = native.target:call("get_Motion")
+                local layer = m and m:call("getLayer", 0)
+                local f = layer and tonumber(layer:call("get_Frame"))
+                if f and f > (tonumber(native.pin_frame) or 0.0) then
+                    layer:call("set_Frame",
+                        tonumber(native.pin_frame) + 0.0)
+                end
+            end)
+        end
+        -- r12: the position clamp -- re-assert the pin anchor every tick so
+        -- no root motion or knockback can slide the prey out of the jaws.
+        -- Dies with pin_maul, so the death fling ragdolls free.
+        if native.pin_maul and native.pin_anchor
+            and valid(native.target_go) then
+            pcall(function()
+                local tf = native.target_go:call("get_Transform")
+                local p = tf and tf:call("get_UniversalPosition")
+                if p then
+                    p.x = native.pin_anchor.x
+                    p.y = native.pin_anchor.y
+                    p.z = native.pin_anchor.z
+                    tf:call("set_UniversalPosition", p)
+                end
+            end)
+        end
+        -- r10: the deferred death blow -- the release fling (stage at 4.14)
+        -- IS the kill. Fires just before it so the body ragdolls out of the
+        -- throw.
+        if native.pin_kill_pending and not native.pin_kill_done
+            and native.direct_maul and native_age >= 4.10 then
+            native.pin_kill_done = true
+            iris_wyrm_pin_kill(native)
+        end
+        -- r9: end of a chomp jolt -- settle the pinned body back into the
+        -- slow struggle.
+        if native.pin_maul and native.pin_jolt_until
+            and now >= native.pin_jolt_until then
+            native.pin_jolt_until = nil
+            pcall(function()
+                if valid(native.target) then
+                    local m = native.target:call("get_Motion")
+                    if m then m:call("set_PlaySpeed", 0.30) end
+                end
+            end)
         end
         -- 08-18 r5: the r4 release polled the down FLAG and killed run 20's
         -- maul at 0.9s -- before the first chomp -- because IsDown flipped
@@ -6368,10 +6912,14 @@ function iris_wyrm_attack_tick()
                 direct_maul = true,
                 -- RT used to skip target acquisition entirely, so Shadow could
                 -- maul the ground while the prone victim lay outside his mouth.
+                -- r10: forward approach OFF for RT -- it can only close a
+                -- positive along, and post-pounce the prey lies BEHIND the
+                -- mouth (run 12: along=-0.94 withheld). The omnidirectional
+                -- converge in the drive loop owns all RT movement now.
                 approach_stop = 0.30,
                 approach_max = 3.6,
-                approach_secs = 0.85,
-                approach_speed = 10.0,
+                approach_secs = 1.25,
+                approach_speed = 0.0,
                 visual_stages = {},
             })
             return
@@ -6457,7 +7005,9 @@ function iris_wyrm_attack_tick()
                     impact_at = 0.52,
                     force_contact = true,
                     pounce_motion = true,
-                    pounce_travel = 2.8,
+                    -- r13: targetless default raised too -- an empty-air
+                    -- pounce is still a travel leap.
+                    pounce_travel = 4.2,
                     pounce_height = 0.48,
                     pounce_airtime = 0.50,
                     pounce_launch_delay = 0.06,
@@ -7396,9 +7946,14 @@ local function costume_tick()
                 if not S.ride_pose_on or mounting then
                     costume.cur_speed = 0.0
                 end
-                local up = can_drive and iris_kb(0x26)
-                local left = can_drive and iris_kb(0x25)
-                local right = can_drive and iris_kb(0x27)
+                -- 08-18 (Aurora): keyboard reins = WASD as well as the
+                -- arrows, matching the gamepad stick. Safe while mounted:
+                -- the player puppet's FSM is parked, so native WASD
+                -- movement never fights the reins (same reason the stick
+                -- never did on pad).
+                local up = can_drive and (iris_kb(0x26) or iris_kb(0x57))
+                local left = can_drive and (iris_kb(0x25) or iris_kb(0x41))
+                local right = can_drive and (iris_kb(0x27) or iris_kb(0x44))
                 -- CONTROLLER reins (Aurora 07-23), active only while
                 -- SEATED: left stick = ride/turn (light tilt walk, full
                 -- tilt trot — the doe has no native trot, so trot is just
@@ -9008,7 +9563,7 @@ local function costume_tick()
                     and (tonumber(costume.cur_speed) or 0) <= 0.6
                     and ((stick_y < -0.45 and math.abs(stick_x) < 0.5
                           and not up)
-                        or iris_kb(0x28)) then
+                        or iris_kb(0x28) or iris_kb(0x53)) then
                     costume.reversing = true
                     target_speed, gait = 0.0, 0
                 end
@@ -9287,7 +9842,9 @@ local function costume_tick()
                                     local dz = tp.z - mouth.z
                                     local along = dx * dirx + dz * dirz
                                     local dl = math.sqrt(dx * dx + dz * dz)
-                                    if along <= 0.05 and dl <= 2.8 then
+                                    -- r13: carry ~0.9m PAST the body (engage
+                                    -- feel), not a dead stop at the nose.
+                                    if along <= -0.9 and dl <= 3.4 then
                                         remaining = 0.0
                                         lease.pounce_moved =
                                             tonumber(lease.pounce_travel) or 0.0
@@ -9314,9 +9871,39 @@ local function costume_tick()
                             + 4.0 * (tonumber(lease.pounce_height) or 1.35)
                                 * u * (1.0 - u)
                     end
+                    -- r10 RT CONVERGE: walk the MOUTH onto the downed prey in
+                    -- ANY direction, backwards included, through acquire and
+                    -- the push-down. The forward approach can only close a
+                    -- positive along, so post-pounce (prey under the belly,
+                    -- run 12: along=-0.94) it stood still and RT withheld.
+                    local maul_dx, maul_dz = 0.0, 0.0
+                    if lease and lease.direct_maul
+                        and not lease.full_native_controller
+                        and (lease.phase ~= "maul"
+                            or now_d <= (tonumber(lease.maul_converge_until)
+                                or 0.0))
+                        and valid(lease.target_go) then
+                        local mtp = universal_pos(lease.target_go)
+                        local mmouth =
+                            iris_wyrm_native_mouth_positions(costume)
+                        if mtp and mmouth then
+                            local mdx = mtp.x - mmouth.x
+                            local mdz = mtp.z - mmouth.z
+                            local mdl = math.sqrt(mdx * mdx + mdz * mdz)
+                            if mdl > 0.12 then
+                                local wanted = math.min(mdl, 6.5 * dt)
+                                local dirx, dirz = mdx / mdl, mdz / mdl
+                                local clear = iris_wyrm_clear_travel(costume,
+                                    wanted, dirx, dirz)
+                                maul_dx, maul_dz = dirx * clear, dirz * clear
+                            end
+                        end
+                    end
                     local commanded = locomotion + attack_step
                     local step_x = fwd.x * commanded + dodge_x + pounce_dx
+                        + maul_dx
                     local step_z = fwd.z * commanded + dodge_z + pounce_dz
+                        + maul_dz
                     pos.x = pos.x + step_x
                     pos.z = pos.z + step_z
                     if pounce_y then pos.y = pounce_y end
@@ -9510,9 +10097,39 @@ local function costume_tick()
                             -- started, step off a cliff and it just hung there
                             -- until something else moved it. Seed the fall here
                             -- so the next frame's branch takes over properly.
-                            costume.fall_v = 0.5
-                            costume.fall_from = pos.y
-                            log("fall: long drop (no ground within 30m)")
+                            -- r13 UNBURY (video 19-34): a jump can land INSIDE
+                            -- a rock mass -- the probe then starts inside the
+                            -- mesh, misses backfaces, and this branch seeded a
+                            -- FALL that sank the wolf through the boulder. A
+                            -- surface well ABOVE the root means inside
+                            -- geometry, not over a void: roll back to the last
+                            -- proven ground instead of falling.
+                            local high = ground and ground(
+                                pos.x, pos.y + 6.0, pos.z, 1.2, 12.0)
+                            local hy = high and tonumber(high.y)
+                            local safe2 = S.mount_last_safe_ground
+                            if hy and hy > pos.y + 1.2 and safe2
+                                and tonumber(safe2.x)
+                                and now_d - (tonumber(safe2.at) or 0.0)
+                                    < 10.0 then
+                                pos.x = tonumber(safe2.x)
+                                pos.y = tonumber(safe2.y)
+                                pos.z = tonumber(safe2.z)
+                                costume.cur_speed = 0.0
+                                costume.jump = nil
+                                costume.fall_v, costume.fall_from = nil, nil
+                                costume.drive_step = { x = 0.0, z = 0.0 }
+                                costume.wyrm_prev_upos =
+                                    { x = pos.x, z = pos.z }
+                                changed = true
+                                log(string.format(
+                                    "wyrm unbury: surface %.1fm overhead - rolled back",
+                                    hy - pos.y))
+                            else
+                                costume.fall_v = 0.5
+                                costume.fall_from = pos.y
+                                log("fall: long drop (no ground within 30m)")
+                            end
                         end
                         if changed then
                             ox_tf:call("set_UniversalPosition", pos)
@@ -16454,6 +17071,14 @@ re.on_draw_ui(function()
                 imgui.text("  incoming-hit FX: "
                     .. tostring(S.wyrm_incoming_fx_status))
             end
+            if S.wyrm_maul_fx_status then
+                imgui.text("  maul chomp FX: "
+                    .. tostring(S.wyrm_maul_fx_status))
+            end
+            if S.wyrm_maul_voice_status then
+                imgui.text("  maul pain cry: "
+                    .. tostring(S.wyrm_maul_voice_status))
+            end
             if S.wyrm_last_press then
                 imgui.text("  last combat press: "
                     .. tostring(S.wyrm_last_press))
@@ -16465,11 +17090,15 @@ re.on_draw_ui(function()
                     os.clock() - (tonumber(S.mounted_weapon_forced_at) or 0)))
             end
             local wnm, wnmv = imgui.checkbox(
-                "RT maul = NATIVE paired hold-down##wyrm_native_maul",
+                "RT maul = PINNED maul##wyrm_native_maul",
                 C.wyrm_native_maul ~= false)
             if wnm then C.wyrm_native_maul = wnmv; save_config() end
-            imgui.text("  Real catch + HoldDownCatchAttack in a scoped live window;")
-            imgui.text("  uncheck to fall back to the scripted stationary maul.")
+            imgui.text("  Prey held in its native down pose; authored maul choreography;")
+            imgui.text("  damage + blood per chomp. Uncheck for the old scripted maul.")
+            local wmcd, wmcdv = imgui.slider_float(
+                "maul chomp damage (x dial x IV)##wyrm_maul_chomp_damage",
+                tonumber(C.wyrm_maul_chomp_damage) or 45.0, 5.0, 200.0)
+            if wmcd then C.wyrm_maul_chomp_damage = wmcdv; save_config() end
             local wreac, wreav = imgui.slider_float(
                 "enemy reaction weight##wyrm_reaction_scale",
                 tonumber(C.wyrm_reaction_scale) or 2.0, 1.0, 10.0)

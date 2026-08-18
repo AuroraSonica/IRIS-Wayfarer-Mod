@@ -1999,6 +1999,19 @@ pcall(function()
         return played == true
     end
     api.play_wolf_howl = play_exact_wolf_howl
+    -- 08-18 wyrm maul pain cries: post one of the TARGET's own triggers on
+    -- its own container. Manual posts play on think-stopped bodies -- the
+    -- ridden-cat voice above is the standing proof.
+    api.play_trigger_on = function(target_go, trigger_id)
+        if not (valid(target_go) and tonumber(trigger_id)) then
+            return false, "bad args"
+        end
+        local dispatcher = get_component(target_go, "app.WwiseContainerApp")
+        if not dispatcher then return false, "no WwiseContainerApp" end
+        local trig = native_trigger_for_id(target_go, trigger_id)
+        if not trig then return false, "trigger not on target's lists" end
+        return post_request(dispatcher, trig, target_go, true)
+    end
     api.get_wolf_howl_status = function()
         return A.wolf_howl_last_post, A.wolf_trigger_trace
     end
@@ -2044,7 +2057,15 @@ local function install_trigger_hook()
     A.vocal_ids = nil
     sdk.hook(trigger_method, function(args)
         if S.generation ~= GENERATION then return end
-        if not (C.enabled and C.replace_wolf_vocals) then return end
+        -- 08-18 wyrm maul pain cries: the rodeo opens a short watch window
+        -- after each real hit on its prey; those posts must be seen even
+        -- with wolf-vocal replacement off.
+        local prey_watch = rawget(_G, "IrisWyrmPreyVocalWatch")
+        local prey_hot = prey_watch ~= nil
+            and os.clock() <= (tonumber(prey_watch.until_t) or 0.0)
+        if not (C.enabled and C.replace_wolf_vocals) and not prey_hot then
+            return
+        end
         local container, request = nil, nil
         pcall(function() container = sdk.to_managed_object(args[2]) end)
         pcall(function() request = sdk.to_managed_object(args[3]) end)
@@ -2057,6 +2078,87 @@ local function install_trigger_hook()
             trigger_id = normal_u32(request:call("get_TriggerId")) or 0
             event_id = normal_u32(request:call("get_EventId")) or 0
         end)
+        -- 08-18 PREY HURT-VOCAL CAPTURE: inside the rodeo's watch window,
+        -- a post whose owner is the current prey AND whose trigger lives on
+        -- a "_vo" list is that species' pain cry -- record it so the pinned
+        -- maul (think-stop mutes native FSM vocals) can speak for the prey,
+        -- exactly the way the ridden-cat voice speaks for a parked cat.
+        if prey_hot and container and event_id ~= 0 then
+            local matched = false
+            local probe = owner
+            for _ = 1, 5 do
+                if not probe then break end
+                if object_address(probe) == prey_watch.addr then
+                    matched = true
+                    break
+                end
+                local parent = nil
+                pcall(function()
+                    local tf = probe:call("get_Transform")
+                    local ptf = tf and tf:call("get_Parent")
+                    parent = ptf and ptf:call("get_GameObject")
+                end)
+                probe = parent
+            end
+            if matched then
+                -- targeted "_vo" check on the poster's OWN lists -- never
+                -- through ensure_vocal_ids, whose cache is the wolf's
+                -- catalogue and must not be polluted with goblin ids.
+                local is_vo = false
+                pcall(function()
+                    local user_data = container._UserDataList
+                    for bank_index = 0, collection_count(user_data) - 1 do
+                        local lists = nil
+                        pcall(function()
+                            lists = user_data[bank_index]._UserDataList
+                        end)
+                        for list_index = 0, collection_count(lists) - 1 do
+                            local list = lists[list_index]
+                            local triggers = nil
+                            pcall(function()
+                                triggers = list._TriggerInfoList
+                            end)
+                            for index = 0, collection_count(triggers) - 1 do
+                                local id = nil
+                                pcall(function()
+                                    id = normal_u32(
+                                        triggers[index]._TriggerId)
+                                end)
+                                if id == trigger_id then
+                                    local path = ""
+                                    pcall(function()
+                                        path = tostring(
+                                            list:call("get_Path"))
+                                    end)
+                                    is_vo = string.find(
+                                        string.lower(path), "_vo", 1, true)
+                                        ~= nil
+                                    return
+                                end
+                            end
+                        end
+                    end
+                end)
+                if is_vo then
+                    local store = rawget(_G, "IrisWyrmPreyHurtVocal")
+                    if type(store) ~= "table" then store = {} end
+                    local keys = 0
+                    for _ in pairs(store) do keys = keys + 1 end
+                    if keys > 32 then store = {} end
+                    store[prey_watch.addr] = {
+                        trigger_id = trigger_id, event_id = event_id,
+                        at = os.clock(),
+                    }
+                    rawset(_G, "IrisWyrmPreyHurtVocal", store)
+                    pcall(function()
+                        log.info(string.format(
+                            "[%s] [WYRM-AUDIO] prey HURT vocal captured: trigger=%u event=%u",
+                            MOD, trigger_id, event_id))
+                    end)
+                end
+            end
+        end
+        if not (C.enabled and C.replace_wolf_vocals) then return end
         -- Mounted howl receipt.  Keep the last 32 Wwise requests originating
         -- from a ch223 while a wyrm combat lease is live.  This reveals whether
         -- motion 4610/4611 emitted a real native vocal trigger, and whether our

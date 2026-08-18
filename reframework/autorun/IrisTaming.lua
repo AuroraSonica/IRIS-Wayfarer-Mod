@@ -16,7 +16,49 @@ local HC = {
     -- (2026-08-18); the 3-take bisect container is the live experiment.
     motlist = "character/ch/iris_housecat/iris_housecat_full.motlist",
     motlist_bisect = "character/ch/iris_housecat/iris_housecat_bisect3.motlist",
+    -- Discriminator sources: both CE files pass offline forensics (valid
+    -- murmur3 track hashes, proven-horse-identical structure), so the next
+    -- test swaps CONTENT while keeping the registration path identical.
+    -- Native rabbit = vanilla chain; horse = the installed v2.1 horse pak.
+    bank_sources = {
+        { label = "NATIVE rabbit ch99_200_com (vanilla)", path = "animation/ch/ch99/200/motlist/ch99_200_com.motlist" },
+        { label = "PROVEN horse locomotion (CE, v2.1 pak)", path = "character/ch/ch99_011/horse_locomotion.motlist" },
+        { label = "W3 cat POLISH 17-take (loose)", path = "character/ch/iris_housecat/iris_housecat_full_polish.motlist",
+            loose = "natives/stm/character/ch/iris_housecat/iris_housecat_full_polish.motlist.751" },
+        { label = "W3 cat AXIS-FIX 17-take (loose)", path = "character/ch/iris_housecat/iris_housecat_full_axisfix.motlist",
+            loose = "natives/stm/character/ch/iris_housecat/iris_housecat_full_axisfix.motlist.751" },
+        { label = "W3 cat AXIS-FIX bisect 3-take (loose)", path = "character/ch/iris_housecat/iris_housecat_bisect3_axisfix.motlist",
+            loose = "natives/stm/character/ch/iris_housecat/iris_housecat_bisect3_axisfix.motlist.751" },
+        { label = "W3 cat bisect 3-take (CE) -- known CTD", path = "character/ch/iris_housecat/iris_housecat_bisect3.motlist" },
+        { label = "W3 cat full 17-take (CE) -- known CTD", path = "character/ch/iris_housecat/iris_housecat_full.motlist" },
+    },
     bank_id = 904,
+    -- W3 GAIT PROFILE (08-18, the axis-fixed catalogue field-proven): species_clips()
+    -- serves THIS to the follow driver for the housecat body -- the cat walks, runs
+    -- and idles in Witcher motion and never plays a rabbit clip. Served only while
+    -- bank 904 is actually attached (S.housecat_bank_key), so an unregistered bank
+    -- can never be asked for clips it does not have.
+    -- Contract ids (1-based, field-confirmed): 1 idle 2 walk 3 run 8-11 idles 12-14 eat.
+    species = {
+        ground = true,
+        idle = 1, idle_bank = 904, idle_cycle = "1,1,1,8,9",
+        -- CONTINUOUS GAIT (08-18 r2): travel speed comes from a distance spring,
+        -- PlaySpeed = travel / clip natural speed (cadence married to motion --
+        -- no glide by construction). walk_nat/run_nat are the clips' own m/s at
+        -- 1.0 playback (Aurora's calibration sliders); walk_max = gait switch.
+        walk = 2, walk_bank = 904, walk_nat = 0.55,
+        run = 3, run_bank = 904, run_nat = 3.2,
+        walk_max = 2.0, max_speed = 4.5,
+        eat_bank = 904, eat_start = 12, eat_loop = 13,
+        offer_reach = 24.0, offer_speed = 1.5, offer_timeout = 35.0,
+        hud_rows = {
+            { label = "Return",  pad = "R3",      key = "J" },
+            { label = "Ping",    pad = "Y",       key = "V" },
+            { label = "Collect", pad = "A",       key = "E" },
+            { label = "Dash",    pad = "B",       key = "Shift" },
+            { label = "Run",     pad = "L stick", key = "WASD" },
+        },
+    },
     prefab = "AppSystem/ch/ch299/Prefab/ch299200_A_00.pfb",
     warm_secs = 2.0,
     carry_front_joints = {
@@ -108,7 +150,16 @@ local C = {
     housecat_carry_toe_relax = 0.85,
     housecat_carry_wrist_relax = 0.25,
     housecat_bank_armed = false,   -- session-only crash latch: the W3 motlist exists only in the v0.9+ PAK
-    housecat_bank_use_bisect = true,  -- 3-take container; the 17-take one is a known parser CTD
+    housecat_bank_autoload = true, -- arm automatically when the LOOSE axis-fix motlist is on disk (file check = the safety)
+    housecat_bank_source = 3,  -- index into HC.bank_sources; 3 = AXIS-FIX full catalogue (the ±90° armature/root pair normalized)
+    housecat_natural_scale = 1.2,  -- ground scale dial; Size IV multiplies ON TOP via the one genetics calculator
+    housecat_walk_nat = 0.55,      -- the W3 walk clip's own m/s at 1.0 playback (cadence calibration)
+    housecat_run_nat = 3.2,        -- the W3 run clip's own m/s at 1.0 playback
+    housecat_walk_max = 2.0,       -- switch to the run gait above this travel speed
+    housecat_max_speed = 4.5,      -- chase speed ceiling m/s
+    housecat_height_offset = 0.0,  -- extra ride height above the probed floor (rough-terrain dial)
+    housecat_tail_lift = 0.0,      -- radians, per-frame joint pre-rotation: + lifts / - drops (find the look live)
+    housecat_tail_relax = 0.0,     -- 0 = animated tail, 1 = held at rest pose
     housecat_test_clip = 2,
     oxtame_enabled = true,        -- THE PROPER GRIFFIN TAMING (Aurora's canon scene): kill an ox as the OFFERING
     oxtame_griffin_range = 800.0, -- only a wild griffin genuinely in the area can answer the ox offering
@@ -4520,6 +4571,53 @@ C.housecat_mesh_armed = false
 -- Same create_resource crash class as the mesh latch: the W3 motlist path is
 -- only servable once the v0.9+ pak is mounted, so never restore this from disk.
 C.housecat_bank_armed = false
+-- AUTO-ARM (08-18, after field proof): the axis-fixed motlist ships LOOSE, so
+-- arming is safe exactly when the file is on disk -- check the disk instead of
+-- asking for a click every session. File missing = the latch stays down.
+-- ⛔ io.open with a RELATIVE path depends on the game process CWD (Fluffy/Steam
+-- launches differ) -- always try the absolute game root first.
+HC.game_root = "D:/SteamLibrary/steamapps/common/Dragons Dogma 2/"
+function HC.file_exists(rel)
+    local found = false
+    pcall(function()
+        local fh = io.open(HC.game_root .. rel, "rb") or io.open(rel, "rb")
+        if fh then fh:close(); found = true end
+    end)
+    return found
+end
+pcall(function()
+    if C.housecat_bank_autoload ~= false then
+        for _, lf in ipairs({
+            "natives/stm/character/ch/iris_housecat/iris_housecat_full_polish.motlist.751",
+            "natives/stm/character/ch/iris_housecat/iris_housecat_full_axisfix.motlist.751",
+        }) do
+            if HC.file_exists(lf) then
+                C.housecat_bank_armed = true
+                log.info("[IrisTaming] housecat bank auto-armed (loose motlist present: " .. lf .. ")")
+                break
+            end
+        end
+        if C.housecat_bank_armed ~= true then
+            log.info("[IrisTaming] housecat auto-arm: NO loose motlist found (checked absolute + relative)")
+        end
+    end
+end)
+-- gait dials live in C (persisted, sliders in the House cat tree); the follow
+-- driver reads them through the species profile -- keep the two in step
+function HC.sync_gait()
+    HC.species.walk_nat = tonumber(C.housecat_walk_nat) or 0.55
+    HC.species.run_nat = tonumber(C.housecat_run_nat) or 3.2
+    HC.species.walk_max = tonumber(C.housecat_walk_max) or 2.0
+    HC.species.max_speed = tonumber(C.housecat_max_speed) or 4.5
+end
+HC.sync_gait()
+-- kick the live gait so a new dial applies immediately, not on the next mode change
+function HC.kick_gait()
+    pcall(function()
+        local r0 = S.housecat_ch and S.tamed[S.housecat_ch]
+        if r0 then r0.fmode = nil; r0.hc_anim_spd = nil end
+    end)
+end
 
 local function learn_camp(pp)
     -- record the spot when the player camps (dedup within 30m of a known one)
@@ -5437,6 +5535,16 @@ SPECIES_CLIPS.ch299440 = SPECIES_CLIPS.ch299400   -- the OTHER bat band (Aurora'
                                                   -- two bat variants share the rig; alias the profile)
 
 local function species_clips(go)
+    -- THE HOUSECAT wears the rabbit band (ch299200 chassis) but owns a W3 profile:
+    -- the body match beats the band match. Gated on the FULL catalogue actually
+    -- being attached this session -- an unregistered bank (or the 3-take bisect,
+    -- which lacks ids 8..14) is never asked for clips it does not have.
+    if go and S.housecat_go_addr and S.housecat_bank_key
+        and tostring(S.housecat_bank_path or ""):find("full", 1, true) then
+        local a = nil
+        pcall(function() a = go:get_address() end)
+        if a == S.housecat_go_addr then return HC.species end
+    end
     local band = tostring(go and go_name(go) or ""):match("ch%d+") or ""
     local t = SPECIES_CLIPS[band]
     if t and t.arm_hover then
@@ -13678,8 +13786,18 @@ function HC.load_motlist()
         S.housecat_bank_status = "bank disarmed"
         return false
     end
-    if S.housecat_bank_holder then return true end
-    local path = (C.housecat_bank_use_bisect ~= false) and HC.motlist_bisect or HC.motlist
+    local src = HC.bank_sources[math.floor(tonumber(C.housecat_bank_source) or 1)] or HC.bank_sources[1]
+    local path = src.path
+    if S.housecat_bank_holder and S.housecat_bank_path == path then return true end
+    -- LOOSE sources are guarded by the disk: a deleted file would make
+    -- create_resource the documented instant-CTD -- refuse cleanly instead.
+    if src.loose and not HC.file_exists(src.loose) then
+        S.housecat_bank_status = "loose motlist missing on disk: " .. tostring(src.loose)
+        return false
+    end
+    -- source switched: drop old refs BEFORE loading the new one (UAF law)
+    S.housecat_bank_holder, S.housecat_bank_res = nil, nil
+    collectgarbage("collect")
     log.info("[IrisTaming] hcbank A: create_resource " .. tostring(path))
     local holder = nil
     local ok = pcall(function()
@@ -13695,11 +13813,11 @@ function HC.load_motlist()
     end)
     S.housecat_bank_holder = holder
     if ok and holder then
-        S.housecat_bank_status = "W3 motlist loaded ("
-            .. ((C.housecat_bank_use_bisect ~= false) and "bisect 3-take" or "full 17-take") .. ")"
+        S.housecat_bank_path = path
+        S.housecat_bank_status = "motlist loaded: " .. tostring(src.label)
         return true
     end
-    S.housecat_bank_status = "motlist unavailable -- install the v0.9.3 house-cat PAK first"
+    S.housecat_bank_status = "motlist unavailable: " .. tostring(src.label)
     return false
 end
 
@@ -13713,7 +13831,7 @@ function HC.register_bank()
     log.info("[IrisTaming] hcbank C2: motion component acquired")
     local key = nil
     pcall(function() key = motion:get_address() end)
-    key = tostring(key or motion)
+    key = tostring(key or motion) .. "|" .. tostring(S.housecat_bank_path)
     if S.housecat_bank_key == key then return true end
     local ok, err = pcall(function()
         local count = tonumber(motion:call("getDynamicMotionBankCount")) or 0
@@ -13803,6 +13921,7 @@ function HC.forget_body()
         S.tamed[ch] = nil
     end
     S.housecat_ch = nil
+    S.housecat_go_addr = nil
 end
 
 function HC.delete()
@@ -13834,6 +13953,7 @@ function HC.adopt(ch)
     S.tamed_addrs = S.tamed_addrs or {}
     pcall(function() S.tamed_addrs[tostring(ch:get_address())] = true end)
     S.housecat_ch = ch
+    pcall(function() S.housecat_go_addr = go:get_address() end)   -- species_clips body match
 
     full_pacify(ch)
     strip_hate(ch)
@@ -14000,34 +14120,45 @@ function HC.cure_material_tick()
     end
 end
 
+-- GROUND SCALE = the natural dial x the SIZE gene through the ONE genetics
+-- calculator (iris_size_mult_for, cross-file so rawget -- the dead-rays law).
+-- No gene on the body yet = gene 15 = species-true x1.0, so today the dial is
+-- the whole story and IV blood bites the day a tamed cat carries genes.
+function HC.size_gene()
+    local rec = S.housecat_ch and S.tamed[S.housecat_ch]
+    local g = rec and rec.iv and tonumber(rec.iv.size)
+    if not g then g = tonumber(rawget(_G, "IrisHousecatSizeGene")) end
+    return g or 15
+end
+
+function HC.ground_scale()
+    local nat = tonumber(C.housecat_natural_scale) or 1.2
+    local m = 1.0
+    pcall(function()
+        local f = rawget(_G, "iris_size_mult_for")
+        if type(f) == "function" then m = tonumber(f("ch299200", HC.size_gene(), nat)) or 1.0 end
+    end)
+    return nat * m
+end
+
+-- Scale is COMPUTED fresh each tick (dial x gene, carried multiplies the carry
+-- dial on top) -- no capture/restore dance to go stale. The shoulder-perch
+-- easer owns the body while rec.perch is set; stand down there.
 function HC.carry_scale_tick()
     local ch = S.housecat_ch
     local rec = ch and S.tamed[ch]
     local go = ch and char_go(ch)
     if not (rec and go) then return end
-    local active = rec.carried == true or rec.carried_script == true
-
-    if active then
-        if not rec.housecat_ground_scale then
-            local current = nil
-            pcall(function() current = go:call("get_Transform"):call("get_LocalScale") end)
-            rec.housecat_ground_scale = {
-                x = current and tonumber(current.x) or 1.0,
-                y = current and tonumber(current.y) or 1.0,
-                z = current and tonumber(current.z) or 1.0,
-            }
-        end
-        local b = rec.housecat_ground_scale
-        local m = tonumber(C.housecat_carry_scale) or 0.72
-        pcall(function()
-            go:call("get_Transform"):call("set_LocalScale", Vector3f.new(b.x * m, b.y * m, b.z * m))
+    if rec.perch then rec.hc_scale_now = nil; return end
+    local s = HC.ground_scale()
+    if rec.carried == true or rec.carried_script == true then
+        s = s * (tonumber(C.housecat_carry_scale) or 0.72)
+    end
+    if math.abs((tonumber(rec.hc_scale_now) or 0.0) - s) > 0.0005 then
+        local oks = pcall(function()
+            go:call("get_Transform"):call("set_LocalScale", Vector3f.new(s, s, s))
         end)
-    elseif rec.housecat_ground_scale then
-        local b = rec.housecat_ground_scale
-        pcall(function()
-            go:call("get_Transform"):call("set_LocalScale", Vector3f.new(b.x, b.y, b.z))
-        end)
-        rec.housecat_ground_scale = nil
+        if oks then rec.hc_scale_now = s end
     end
 end
 
@@ -14070,6 +14201,48 @@ function HC.carry_paw_tick()
     end
 end
 
+-- TAIL DIAL (08-18, Aurora: "their tail clips through the ground"): the W3 cat
+-- carries its tail low, so slopes and rocks swallow it. The rabbit rig has ONE
+-- Tail joint -- lift is a per-frame local pre-rotation (carry_paw_tick's proven
+-- pattern), relax blends toward the rest pose. Both are live sliders; the
+-- proper clip-space fix waits for the v09 mesh/anim track.
+function HC.tail_tick()
+    local ch = S.housecat_ch
+    local rec = ch and S.tamed[ch]
+    local go = ch and char_go(ch)
+    if not (rec and go) then return end
+    local lift = tonumber(C.housecat_tail_lift) or 0.0
+    local relax = tonumber(C.housecat_tail_relax) or 0.0
+    if lift == 0.0 and relax <= 0.0 then return end
+    pcall(function()
+        local tf = go:call("get_Transform")
+        local joint = tf and tf:call("getJointByName", "Tail")
+        if not joint then return end
+        local cur = joint:call("get_LocalRotation")
+        if not cur then return end
+        local x, y, z, w = cur.x, cur.y, cur.z, cur.w
+        if relax > 0.0 then
+            local base = joint:call("get_BaseLocalRotation")
+            if base then
+                local bx, by, bz, bw = base.x, base.y, base.z, base.w
+                if x * bx + y * by + z * bz + w * bw < 0.0 then bx, by, bz, bw = -bx, -by, -bz, -bw end
+                local t = math.max(0.0, math.min(1.0, relax))
+                x = x + (bx - x) * t; y = y + (by - y) * t
+                z = z + (bz - z) * t; w = w + (bw - w) * t
+            end
+        end
+        if lift ~= 0.0 then
+            -- child-space pitch: q' = q x rx(lift)
+            local s, c = math.sin(lift * 0.5), math.cos(lift * 0.5)
+            x, y, z, w = w * s + x * c, y * c + z * s, z * c - y * s, w * c - x * s
+        end
+        local n = math.sqrt(x * x + y * y + z * z + w * w)
+        if n > 0.00001 then
+            joint:call("set_LocalRotation", Quaternion.new(x / n, y / n, z / n, w / n))
+        end
+    end)
+end
+
 _G.IrisTaming.spawn_housecat = HC.spawn
 _G.IrisTaming.delete_housecat = HC.delete
 re.on_application_entry("LateUpdateBehavior", function()
@@ -14078,6 +14251,7 @@ re.on_application_entry("LateUpdateBehavior", function()
 end)
 re.on_application_entry("PrepareRendering", function()
     pcall(HC.carry_paw_tick)
+    pcall(HC.tail_tick)
 end)
 -- GRIP AID: the probe's climb-stamina hold extends to WILD GRIFFINS while this is on
 -- (ride the commuter to its nest without falling out of the sky)
@@ -17689,6 +17863,29 @@ re.on_frame(function()
                     -- Step away = the puppet follow resumes on the next tick.
                     set_think_stop(ch, false)
                     pcall(function() set_player_fsm(go, true) end)
+                    if rec.hc_anim_spd and rec.hc_anim_spd ~= 1.0 then
+                        rec.hc_anim_spd = 1.0
+                        set_player_speed(ch, 1.0)   -- the native brain gets a 1.0 body
+                    end
+                    -- W3 IDLE HOLD (08-18, housecat only): this window hands the body back to
+                    -- the native rabbit brain, which repaints layer 0 with RABBIT idles. Put
+                    -- the Witcher idle back whenever the layer drifts off bank 904; if the
+                    -- layer bank is unreadable, degrade to a slow re-pin (never a flicker).
+                    local hcs9 = species_clips(go)
+                    if hcs9 and hcs9.idle_bank and now >= (tonumber(rec.hc_idle_at) or 0.0) then
+                        local bank0 = nil
+                        pcall(function()
+                            local mo9 = ch:call("get_Motion")
+                            local l09 = mo9 and mo9:call("getLayer", 0)
+                            bank0 = l09 and tonumber(l09:call("get_MotionBankID"))
+                        end)
+                        if bank0 == tonumber(hcs9.idle_bank) then
+                            rec.hc_idle_at = now + 0.75
+                        else
+                            rec.hc_idle_at = now + ((bank0 == nil) and 4.0 or 0.75)
+                            play_motion(ch, tonumber(hcs9.idle_bank), tonumber(hcs9.idle) or 1)
+                        end
+                    end
                     -- ⛔ AND GHOST IT. This branch wins over the follow branch below whenever
                     -- she is within 2.2m -- which is EXACTLY the range where the auto-step
                     -- happens -- so the solidity gate down there would never have run when it
@@ -17783,7 +17980,27 @@ re.on_frame(function()
                                 local cu8 = upos(go)
                                 local hit8 = cu8 and ground_probe(cu8.x, cu8.y + 1.0, cu8.z)
                                 if cu8 and hit8 and tonumber(hit8.y) then
-                                    local dyf8 = cu8.y - (tonumber(hit8.y) + 0.02)
+                                    -- RIDE HEIGHT (08-18, housecat dial): plant at floor + offset.
+                                    -- Rough terrain buries the cat's belly/tail -- this is the
+                                    -- compensator. Only within the glue's working band so a leap
+                                    -- or fall is never yanked.
+                                    local off8 = 0.0
+                                    pcall(function()
+                                        if S.housecat_go_addr and go:get_address() == S.housecat_go_addr then
+                                            off8 = tonumber(C.housecat_height_offset) or 0.0
+                                        end
+                                    end)
+                                    if off8 ~= 0.0 then
+                                        local ty8 = tonumber(hit8.y) + 0.02 + off8
+                                        local d8 = cu8.y - ty8
+                                        if math.abs(d8) > 0.015 and d8 < 0.35 then
+                                            local pv8 = ValueType.new(sdk.find_type_definition("via.Position"))
+                                            pv8.x = cu8.x; pv8.y = ty8; pv8.z = cu8.z
+                                            set_upos(go, pv8)
+                                            cu8 = upos(go)
+                                        end
+                                    end
+                                    local dyf8 = cu8.y - (tonumber(hit8.y) + 0.02 + off8)
                                     if dyf8 > 0.35 then
                                         local pv8 = ValueType.new(sdk.find_type_definition("via.Position"))
                                         pv8.x = cu8.x; pv8.y = cu8.y - math.min(dyf8, 0.25); pv8.z = cu8.z
@@ -17803,21 +18020,68 @@ re.on_frame(function()
                                 set_upos(go, pv)
                             end)
                             rec.fmode = nil   -- fresh clip after the catch-up
-                        elseif d2p > (tonumber(C.follow_near) or 4.5) and cp then
-                            if rec.fmode ~= "walk" then
-                                rec.fmode = "walk"
-                                local sw9 = species_clips(go)
-                                -- ch223 wolves/pumas released from a mount use their atlas
-                                -- locomotion, not the small-critter fallback.
-                                play_motion(ch, 0, mount_puppet and 200
-                                    or (sw9 and sw9.walk) or tonumber(C.crow_walk_clip) or 100)
+                        elseif cp and (function()
+                                local sw0 = species_clips(go)
+                                if sw0 and sw0.walk_nat then
+                                    -- spring species start moving just past the hold point
+                                    return d2p > (tonumber(C.follow_near) or 4.5) - 1.35
+                                end
+                                return d2p > (tonumber(C.follow_near) or 4.5)
+                            end)() then
+                            local sw9 = species_clips(go)
+                            if sw9 and sw9.walk_nat then
+                                -- CONTINUOUS GAIT (08-18 r2, housecat): travel speed = distance
+                                -- spring, PlaySpeed = travel / clip natural m/s (glide-free by
+                                -- construction), 0.45 s min-hold on gait switches. Replaces the
+                                -- threshold gaits whose boundary flap restarted a clip every
+                                -- tick (Aurora: "1 frame of something and then stopping").
+                                local hold9 = (tonumber(C.follow_near) or 4.5) - 1.5
+                                local v9 = math.max(0.2, math.min((d2p - hold9) * 1.4,
+                                    tonumber(sw9.max_speed) or 4.5))
+                                local wmax9 = tonumber(sw9.walk_max) or 2.0
+                                local mode9 = (v9 > ((rec.fmode == "run") and wmax9 * 0.8 or wmax9))
+                                    and "run" or "walk"
+                                if mode9 ~= rec.fmode and now >= (tonumber(rec.hc_gait_at) or 0.0) then
+                                    rec.hc_gait_at = now + 0.45
+                                    rec.fmode = mode9
+                                    play_motion(ch, tonumber(mode9 == "run" and sw9.run_bank or sw9.walk_bank) or 0,
+                                        mode9 == "run" and sw9.run or sw9.walk)
+                                    rec.hc_anim_spd = nil
+                                end
+                                if rec.fmode == "walk" or rec.fmode == "run" then
+                                    local nat9 = (rec.fmode == "run") and (tonumber(sw9.run_nat) or 3.2)
+                                        or (tonumber(sw9.walk_nat) or 0.55)
+                                    local aspd9 = math.max(0.5, math.min(2.6, v9 / math.max(nat9, 0.05)))
+                                    if not rec.hc_anim_spd or math.abs(aspd9 - (tonumber(rec.hc_anim_spd) or 0.0)) > 0.07 then
+                                        rec.hc_anim_spd = aspd9
+                                        set_player_speed(ch, aspd9)
+                                    end
+                                    puppet_step(go, cp, pp.x, pp.z, v9, tonumber(dt) or 0.016, hold9)
+                                end
+                            else
+                                if rec.fmode ~= "walk" then
+                                    rec.fmode = "walk"
+                                    -- ch223 wolves/pumas released from a mount use their atlas
+                                    -- locomotion, not the small-critter fallback.
+                                    play_motion(ch, 0, mount_puppet and 200
+                                        or (sw9 and sw9.walk) or tonumber(C.crow_walk_clip) or 100)
+                                end
+                                puppet_step(go, cp, pp.x, pp.z,
+                                    mount_puppet and 4.8 or tonumber(C.critter_follow_speed) or 2.4,
+                                    tonumber(dt) or 0.016, (tonumber(C.follow_near) or 4.5) - 1.5)
                             end
-                            puppet_step(go, cp, pp.x, pp.z,
-                                mount_puppet and 4.8 or tonumber(C.critter_follow_speed) or 2.4,
-                                tonumber(dt) or 0.016, (tonumber(C.follow_near) or 4.5) - 1.5)
                         else
-                            if rec.fmode ~= "idle" then rec.fmode = "idle"; rec.fidle_at = 0.0 end
-                            if now >= (tonumber(rec.fidle_at) or 0.0) then
+                            local swI = species_clips(go)
+                            if rec.fmode ~= "idle"
+                                and not (swI and swI.walk_nat and now < (tonumber(rec.hc_gait_at) or 0.0)) then
+                                rec.hc_gait_at = now + 0.45
+                                rec.fmode = "idle"; rec.fidle_at = 0.0
+                                if rec.hc_anim_spd and rec.hc_anim_spd ~= 1.0 then
+                                    rec.hc_anim_spd = 1.0
+                                    set_player_speed(ch, 1.0)   -- never leave a sped gait behind
+                                end
+                            end
+                            if rec.fmode == "idle" and now >= (tonumber(rec.fidle_at) or 0.0) then
                                 rec.fidle_at = now + (tonumber(C.crow_idle_period) or 3.5)
                                 -- idle repertoire, RANDOM, species-aware; bathe pair per species
                                 -- (bat: none -- its 60:0 is EAT; rat: stand-on-two-legs)
@@ -17828,7 +18092,7 @@ re.on_frame(function()
                                 else
                                     local ids = {}
                                     for s2 in tostring((sp8 and sp8.idle_cycle) or C.crow_idle_clips or "0,1,2"):gmatch("%d+") do ids[#ids + 1] = tonumber(s2) end
-                                    if #ids > 0 then play_motion(ch, 0, ids[math.random(#ids)] or 0) end
+                                    if #ids > 0 then play_motion(ch, (sp8 and tonumber(sp8.idle_bank)) or 0, ids[math.random(#ids)] or 0) end
                                 end
                             end
                         end
@@ -21378,6 +21642,22 @@ re.on_draw_ui(function()
                 local hcchg
                 hcchg, C.housecat_spawn_distance = imgui.drag_float("Spawn distance##tame_housecat_dist", tonumber(C.housecat_spawn_distance) or 2.6, 0.1, 1.0, 8.0)
                 if hcchg then pcall(save_state) end
+                hcchg, C.housecat_natural_scale = imgui.drag_float("Natural scale (x Size IV)##tame_housecat_natscale", tonumber(C.housecat_natural_scale) or 1.2, 0.01, 0.5, 2.5)
+                if hcchg then pcall(save_state) end
+                hcchg, C.housecat_walk_nat = imgui.drag_float("Walk clip natural m/s##tame_housecat_wnat", tonumber(C.housecat_walk_nat) or 0.55, 0.01, 0.1, 1.5)
+                if hcchg then HC.sync_gait(); HC.kick_gait(); pcall(save_state) end
+                hcchg, C.housecat_run_nat = imgui.drag_float("Run clip natural m/s##tame_housecat_rnat", tonumber(C.housecat_run_nat) or 3.2, 0.02, 1.0, 6.0)
+                if hcchg then HC.sync_gait(); HC.kick_gait(); pcall(save_state) end
+                hcchg, C.housecat_walk_max = imgui.drag_float("Walk-to-run at m/s##tame_housecat_wmax", tonumber(C.housecat_walk_max) or 2.0, 0.02, 0.5, 4.0)
+                if hcchg then HC.sync_gait(); HC.kick_gait(); pcall(save_state) end
+                hcchg, C.housecat_max_speed = imgui.drag_float("Max chase m/s##tame_housecat_vmax", tonumber(C.housecat_max_speed) or 4.5, 0.05, 1.0, 8.0)
+                if hcchg then HC.sync_gait(); HC.kick_gait(); pcall(save_state) end
+                hcchg, C.housecat_height_offset = imgui.drag_float("Ride height offset m##tame_housecat_hoff", tonumber(C.housecat_height_offset) or 0.0, 0.005, -0.05, 0.25)
+                if hcchg then pcall(save_state) end
+                hcchg, C.housecat_tail_lift = imgui.drag_float("Tail lift (rad, +/-)##tame_housecat_tlift", tonumber(C.housecat_tail_lift) or 0.0, 0.01, -1.2, 1.2)
+                if hcchg then pcall(save_state) end
+                hcchg, C.housecat_tail_relax = imgui.drag_float("Tail relax (0 anim, 1 rest)##tame_housecat_trelax", tonumber(C.housecat_tail_relax) or 0.0, 0.01, 0.0, 1.0)
+                if hcchg then pcall(save_state) end
                 hcchg, C.housecat_carry_scale = imgui.drag_float("Carry-only scale##tame_housecat_carryscale", tonumber(C.housecat_carry_scale) or 0.72, 0.01, 0.4, 1.0)
                 if hcchg then pcall(save_state) end
                 hcchg, C.housecat_carry_paw_fix = imgui.checkbox("Relax rabbit paw curl while held##tame_housecat_pawfix", C.housecat_carry_paw_fix ~= false)
@@ -21398,11 +21678,13 @@ re.on_draw_ui(function()
                     S.status = "house cat despawned"
                 end
                 imgui.separator()
+                local hc_bank_labels = {}
+                for i = 1, #HC.bank_sources do hc_bank_labels[i] = HC.bank_sources[i].label end
+                hcchg, C.housecat_bank_source = imgui.combo("Bank 904 source##tame_housecat_banksrc", math.floor(tonumber(C.housecat_bank_source) or 1), hc_bank_labels)
+                if hcchg then pcall(save_state) end
                 if C.housecat_bank_armed ~= true then
-                    imgui.text("W3 cat animations: install the v0.9.3 house-cat mod first, then arm.")
-                    hcchg, C.housecat_bank_use_bisect = imgui.checkbox("Use 3-take bisect container (17-take is a known CTD)##tame_housecat_bisect", C.housecat_bank_use_bisect ~= false)
-                    if hcchg then pcall(save_state) end
-                    if imgui.button("ARM W3 motion bank##tame_housecat_bankarm") then
+                    imgui.text("Auto-arm found no loose axis-fix motlist on disk; arm manually if you know it is servable.")
+                    if imgui.button("ARM motion bank##tame_housecat_bankarm") then
                         C.housecat_bank_armed = true
                         HC.register_bank()
                     end

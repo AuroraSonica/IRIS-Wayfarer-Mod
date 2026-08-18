@@ -40407,11 +40407,15 @@ function iris_blessing_cooldown_d2d_draw()
     local function col(a, r, g, b) return griffin_hud_argb(a, r, g, b) end
     local key = math.floor(tonumber(hud.key) or 66)
     local mounted_y = key == 89
-    if mounted_y then
-        local rt = tonumber(rawget(_G, "IrisRideNativeHudVisibleT")) or 0.0
-        if now - rt <= 0.5
-            and rawget(_G, "IrisRideNativeHudVisible") ~= true then return end
-    end
+    -- 08-18 (Aurora): the cooldown ring is a RIDE instrument — draw it only
+    -- while mounted with the native ride HUD actually on screen, whichever
+    -- key charged the cooldown. The rodeo publishes this oracle every
+    -- mounted frame and EXPIRES it on foot, so freshness IS the mount
+    -- state; the old gate only covered ridden-cast cooldowns and fell
+    -- through to visible after dismounting (stale oracle).
+    local rt = tonumber(rawget(_G, "IrisRideNativeHudVisibleT")) or 0.0
+    if now - rt > 0.5
+        or rawget(_G, "IrisRideNativeHudVisible") ~= true then return end
     local base_x, base_y = sw - 270.0 * scale, sh - 154.0 * scale
     -- Mounted Y is the game's own live control. IrisHorseRodeo publishes that
     -- control's transform, so this survives keyboard/controller swaps and UI
