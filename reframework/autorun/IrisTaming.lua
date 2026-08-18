@@ -20,17 +20,14 @@ local HC = {
     -- murmur3 track hashes, proven-horse-identical structure), so the next
     -- test swaps CONTENT while keeping the registration path identical.
     -- Native rabbit = vanilla chain; horse = the installed v2.1 horse pak.
+    -- Aurora's call (08-18): everything ships in the PAK -- easy Fluffy
+    -- enable/disable, no loose-file io weirdness. v0.9.4 serves the POLISH
+    -- catalogue at the canonical full path; diagnostics keep the two proven
+    -- foreign sources.
     bank_sources = {
         { label = "NATIVE rabbit ch99_200_com (vanilla)", path = "animation/ch/ch99/200/motlist/ch99_200_com.motlist" },
         { label = "PROVEN horse locomotion (CE, v2.1 pak)", path = "character/ch/ch99_011/horse_locomotion.motlist" },
-        { label = "W3 cat POLISH 17-take (loose)", path = "character/ch/iris_housecat/iris_housecat_full_polish.motlist",
-            loose = "natives/stm/character/ch/iris_housecat/iris_housecat_full_polish.motlist.751" },
-        { label = "W3 cat AXIS-FIX 17-take (loose)", path = "character/ch/iris_housecat/iris_housecat_full_axisfix.motlist",
-            loose = "natives/stm/character/ch/iris_housecat/iris_housecat_full_axisfix.motlist.751" },
-        { label = "W3 cat AXIS-FIX bisect 3-take (loose)", path = "character/ch/iris_housecat/iris_housecat_bisect3_axisfix.motlist",
-            loose = "natives/stm/character/ch/iris_housecat/iris_housecat_bisect3_axisfix.motlist.751" },
-        { label = "W3 cat bisect 3-take (CE) -- known CTD", path = "character/ch/iris_housecat/iris_housecat_bisect3.motlist" },
-        { label = "W3 cat full 17-take (CE) -- known CTD", path = "character/ch/iris_housecat/iris_housecat_full.motlist" },
+        { label = "W3 cat AXIS-FIX 17-take (v0.9.6)", path = "character/ch/iris_housecat/iris_housecat_full.motlist" },
     },
     bank_id = 904,
     -- W3 GAIT PROFILE (08-18, the axis-fixed catalogue field-proven): species_clips()
@@ -4571,35 +4568,22 @@ C.housecat_mesh_armed = false
 -- Same create_resource crash class as the mesh latch: the W3 motlist path is
 -- only servable once the v0.9+ pak is mounted, so never restore this from disk.
 C.housecat_bank_armed = false
--- AUTO-ARM (08-18, after field proof): the axis-fixed motlist ships LOOSE, so
--- arming is safe exactly when the file is on disk -- check the disk instead of
--- asking for a click every session. File missing = the latch stays down.
--- ⛔ io.open with a RELATIVE path depends on the game process CWD (Fluffy/Steam
--- launches differ) -- always try the absolute game root first.
-HC.game_root = "D:/SteamLibrary/steamapps/common/Dragons Dogma 2/"
-function HC.file_exists(rel)
-    local found = false
-    pcall(function()
-        local fh = io.open(HC.game_root .. rel, "rb") or io.open(rel, "rb")
-        if fh then fh:close(); found = true end
-    end)
-    return found
-end
+-- AUTO-ARM (08-18 r3, Aurora: "in the pak"): the polish motlist ships in the
+-- v0.9.4 pak, same as the horse bank -- and IrisWildHorses auto-arms its
+-- pak-served motlists every boot, so the cat follows the proven pattern.
+-- The io.open loose-file probe is GONE (it lied: files present on disk read
+-- as missing -- game-held handles or sandboxed io). If the pak is ever
+-- uninstalled, create_resource nils and the status reports it; the autoload
+-- toggle below is the emergency off-switch.
 pcall(function()
     if C.housecat_bank_autoload ~= false then
-        for _, lf in ipairs({
-            "natives/stm/character/ch/iris_housecat/iris_housecat_full_polish.motlist.751",
-            "natives/stm/character/ch/iris_housecat/iris_housecat_full_axisfix.motlist.751",
-        }) do
-            if HC.file_exists(lf) then
-                C.housecat_bank_armed = true
-                log.info("[IrisTaming] housecat bank auto-armed (loose motlist present: " .. lf .. ")")
-                break
-            end
-        end
-        if C.housecat_bank_armed ~= true then
-            log.info("[IrisTaming] housecat auto-arm: NO loose motlist found (checked absolute + relative)")
-        end
+        C.housecat_bank_armed = true
+        log.info("[IrisTaming] housecat bank auto-armed (pak-served, horse pattern)")
+    end
+    -- saved source indices from the old 7-entry list point past the trimmed
+    -- 3-entry list -- snap those back to the pak default
+    if (math.floor(tonumber(C.housecat_bank_source) or 3)) > 3 then
+        C.housecat_bank_source = 3
     end
 end)
 -- gait dials live in C (persisted, sliders in the House cat tree); the follow
@@ -5540,6 +5524,7 @@ local function species_clips(go)
     -- being attached this session -- an unregistered bank (or the 3-take bisect,
     -- which lacks ids 8..14) is never asked for clips it does not have.
     if go and S.housecat_go_addr and S.housecat_bank_key
+        and S.housecat_gait_at and os.clock() >= S.housecat_gait_at
         and tostring(S.housecat_bank_path or ""):find("full", 1, true) then
         local a = nil
         pcall(function() a = go:get_address() end)
@@ -13789,12 +13774,6 @@ function HC.load_motlist()
     local src = HC.bank_sources[math.floor(tonumber(C.housecat_bank_source) or 1)] or HC.bank_sources[1]
     local path = src.path
     if S.housecat_bank_holder and S.housecat_bank_path == path then return true end
-    -- LOOSE sources are guarded by the disk: a deleted file would make
-    -- create_resource the documented instant-CTD -- refuse cleanly instead.
-    if src.loose and not HC.file_exists(src.loose) then
-        S.housecat_bank_status = "loose motlist missing on disk: " .. tostring(src.loose)
-        return false
-    end
     -- source switched: drop old refs BEFORE loading the new one (UAF law)
     S.housecat_bank_holder, S.housecat_bank_res = nil, nil
     collectgarbage("collect")
@@ -13866,6 +13845,12 @@ function HC.register_bank()
     if ok then
         S.housecat_bank_key = key
         S.housecat_bank_status = "bank 904 registered on this cat"
+        -- gait profile goes live only after the freshly-attached bank has had
+        -- time to finish its async load -- never play into a seconds-old bank
+        if not S.housecat_gait_at then
+            S.housecat_gait_at = os.clock() + 2.0
+            pcall(function() log.info("[IrisTaming] hcstage register ok (gait live in 2s)") end)
+        end
     else
         S.housecat_bank_status = "bank registration failed: " .. tostring(err)
     end
@@ -13931,6 +13916,9 @@ function HC.delete()
     S.housecat_pending = false
     S.housecat_spawn_queued = false
     S.housecat_rebind_at = nil
+    S.housecat_settle_at = nil
+    S.housecat_bank_at = nil
+    S.housecat_gait_at = nil
     S.housecat_bank_key = nil  -- motion component died with the body; re-register on next spawn
     if S.housecat_prefab_ctrl then pcall(function() S.housecat_prefab_ctrl:release() end) end
     if S.housecat_prefab then pcall(function() S.housecat_prefab:release() end) end
@@ -14092,7 +14080,12 @@ function HC.spawn_tick()
         S.housecat_status = "mesh applied, but IRIS adoption failed: " .. tostring(adopt_why)
         return
     end
-    if C.housecat_bank_armed == true then HC.register_bank() end
+    -- ⛔ SETTLE DELAY (08-18 r4, the v0.9.4 spawn CTD): every session that ever
+    -- worked registered the bank SECONDS after spawn, by hand, on a settled
+    -- body. Auto-registering one frame after get_Chara() (and scaling on that
+    -- same first tick) is brand-new timing on a body still in post-proc --
+    -- defer both until the body has stood in the world for a moment.
+    S.housecat_settle_at = os.clock() + 2.0
     S.housecat_status = "House Cat: IRIS local companion (following)"
     S.housecat_rebind_at = os.clock() + 1.2
     S.status = S.housecat_status
@@ -14149,6 +14142,27 @@ function HC.carry_scale_tick()
     local rec = ch and S.tamed[ch]
     local go = ch and char_go(ch)
     if not (rec and go) then return end
+    -- STAGED settle (08-18 r5): the r4 crash still fired scale + register +
+    -- first-gait-clip in the SAME instant. Separate them so the next crash's
+    -- log timestamp names the guilty stage:
+    --   settle+0s  scale applies        ("hcstage scale")
+    --   settle+2s  bank registers       ("hcstage register" + hcbank A..I)
+    --   register+2s gait profile live   ("hcstage gait live", set in register_bank)
+    if S.housecat_settle_at then
+        if os.clock() < S.housecat_settle_at then return end
+        S.housecat_settle_at = nil
+        S.housecat_bank_at = os.clock() + 2.0
+        pcall(function() log.info("[IrisTaming] hcstage scale (first apply now, register in 2s)") end)
+    end
+    if S.housecat_bank_at then
+        if os.clock() >= S.housecat_bank_at then
+            S.housecat_bank_at = nil
+            if C.housecat_bank_armed == true then
+                pcall(function() log.info("[IrisTaming] hcstage register") end)
+                HC.register_bank()
+            end
+        end
+    end
     if rec.perch then rec.hc_scale_now = nil; return end
     local s = HC.ground_scale()
     if rec.carried == true or rec.carried_script == true then
@@ -21683,7 +21697,7 @@ re.on_draw_ui(function()
                 hcchg, C.housecat_bank_source = imgui.combo("Bank 904 source##tame_housecat_banksrc", math.floor(tonumber(C.housecat_bank_source) or 1), hc_bank_labels)
                 if hcchg then pcall(save_state) end
                 if C.housecat_bank_armed ~= true then
-                    imgui.text("Auto-arm found no loose axis-fix motlist on disk; arm manually if you know it is servable.")
+                    imgui.text("Bank disarmed (autoload off). Install the v0.9.4 house-cat pak, then arm.")
                     if imgui.button("ARM motion bank##tame_housecat_bankarm") then
                         C.housecat_bank_armed = true
                         HC.register_bank()

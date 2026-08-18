@@ -2002,6 +2002,16 @@ pcall(function()
     -- 08-18 wyrm maul pain cries: post one of the TARGET's own triggers on
     -- its own container. Manual posts play on think-stopped bodies -- the
     -- ridden-cat voice above is the standing proof.
+    -- 08-18: the wolf's harvested VO trigger ids, sorted -- lets the rodeo
+    -- run a sound-browser-style picker for the maul growl.
+    api.wolf_vocal_ids = function(target_go)
+        local ids = ensure_vocal_ids(target_go)
+        if not ids then return nil end
+        local out = {}
+        for id in pairs(ids) do out[#out + 1] = id end
+        table.sort(out)
+        return out
+    end
     api.play_trigger_on = function(target_go, trigger_id)
         if not (valid(target_go) and tonumber(trigger_id)) then
             return false, "bad args"

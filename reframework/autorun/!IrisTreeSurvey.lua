@@ -328,6 +328,233 @@ local function _trunk_set(on, broad)
     _log(M.last)
 end
 
+-- ── ⭐ 08-19 PER-TREE COLLISION HUNT (Aurora: "I bet you could find a per-tree kill") ──────
+-- The 08-13 wall: SpeedTree trunk COLLIDABLES are shared per tree MODEL - any flag flip goes
+-- world-wide by architecture. Two layers were never probed: (1) via.dynamics.RigidBodyMeshSet
+-- on the same Foliage GO (a mesh SET suggests per-instance bodies = the surgical lever), and
+-- (2) per-instance TRANSFORM writes on via.landscape.Foliage (a position setter + collision
+-- following the instance = sink ONE tree underground, nothing shared ever touched).
+-- This dump names both layers' REAL methods (⛔ never guess names - typedef-dump first law);
+-- the sink/kill gets wired NEXT round from these receipts. Output: IRIS/pertree_probe.txt
+local pertree_pending = false
+local function _pertree_dump()
+    local pp = _pl_pos()
+    if not pp then M.last = "no player"; return end
+    local f = io.open("IRIS/pertree_probe.txt", "w")
+    if not f then M.last = "cannot open pertree_probe.txt"; return end
+    f:write("PER-TREE PROBE " .. os.date("%Y-%m-%d %H:%M:%S")
+        .. string.format("  player(%.2f,%.2f,%.2f) radius=%.0f\n\n", pp.x, pp.y, pp.z, M.radius or 30.0))
+    local function dump_methods(obj, label, filter)
+        pcall(function()
+            local td = obj:get_type_definition()
+            f:write("== " .. label .. " (" .. td:get_full_name() .. ") ==\n")
+            local depth = 0
+            while td and depth < 4 do
+                for _, m in ipairs(td:get_methods()) do
+                    local nm = m:get_name()
+                    if (not filter) or filter(nm:lower()) then
+                        local ps = {}
+                        pcall(function()
+                            for _, pt in ipairs(m:get_param_types()) do ps[#ps + 1] = pt:get_full_name() end
+                        end)
+                        local rt = ""
+                        pcall(function() rt = m:get_return_type():get_full_name() end)
+                        f:write(string.format("  %s(%s) -> %s\n", nm, table.concat(ps, ", "), rt))
+                    end
+                end
+                td = td:get_parent_type(); depth = depth + 1
+            end
+            f:write("\n")
+        end)
+    end
+    -- foliage comps with an instance inside the radius; nearest instance = the sink target
+    local sm = sdk.get_native_singleton("via.SceneManager")
+    local scene = sdk.call_native_func(sm, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+    local comps = scene:call("findComponents(System.Type)", sdk.typeof("via.landscape.Foliage"))
+    local n = 0
+    pcall(function() n = comps:call("get_Length") or 0 end)
+    if n == 0 then pcall(function() n = comps:get_size() or 0 end) end
+    local hit_gos, dumped, best = {}, 0, nil
+    local r2 = (M.radius or 30.0) ^ 2
+    for i = 0, (tonumber(n) or 0) - 1 do
+        pcall(function()
+            local c
+            pcall(function() c = comps:call("get_Item", i) end)
+            if not c then c = comps:get_element(i) end
+            if not c then return end
+            local cnt = 0; pcall(function() cnt = tonumber(c:call("get_InstanceCount")) or 0 end)
+            local near_k = nil
+            for k = 0, math.min(cnt, 3000) - 1 do
+                local wp; pcall(function() wp = c:call("getWorldPosition", k) end)
+                if wp then
+                    local d2 = (wp.x - pp.x) ^ 2 + (wp.z - pp.z) ^ 2
+                    if d2 < r2 then
+                        near_k = near_k or k
+                        if (not best) or d2 < best.d2 then best = { comp = c, k = k, d2 = d2, wp = wp } end
+                    end
+                end
+            end
+            if near_k == nil then return end
+            local go; pcall(function() go = c:call("get_GameObject") end)
+            if not go or hit_gos[go:get_address()] then return end
+            hit_gos[go:get_address()] = true
+            dumped = dumped + 1
+            if dumped > 3 then return end   -- 3 GOs of receipts is plenty
+            local gname = "?"; pcall(function() gname = go:call("get_Name") end)
+            f:write(string.format("---- GO '%s' (comp instances=%d, first near idx=%d) ----\n", tostring(gname), cnt, near_k))
+            -- (1) the PRIZE: RigidBodyMeshSet full API + parameterless getter values
+            pcall(function()
+                local rbs = go:call("getComponent(System.Type)", sdk.typeof("via.dynamics.RigidBodyMeshSet"))
+                if not rbs then f:write("  (no via.dynamics.RigidBodyMeshSet on this GO)\n\n"); return end
+                dump_methods(rbs, "RigidBodyMeshSet FULL API", nil)
+                f:write("== RigidBodyMeshSet live getter values ==\n")
+                -- ⛔ 08-19 CRASH LESSON (first run CTD'd AFTER a clean dump = the Lua-wrapper
+                -- UAF family): the old sweep blind-called EVERY get_* incl. object-returning
+                -- ones (get_World, get_MeshResources, get_Chain) and let the wrappers fall to
+                -- GC. Whitelist of primitive-return getters ONLY, nothing wrapped:
+                for _, gn in ipairs({ "getMeshResourcesCount", "getResourcesCount",
+                        "get_NumRigidBodies", "get_Enabled", "get_CurrentEnabled",
+                        "get_Static", "get_DisableRigidBodies", "get_CalculateTypes" }) do
+                    pcall(function()
+                        local v = rbs:call(gn)
+                        local tv = type(v)
+                        if tv == "number" or tv == "boolean" or tv == "string" then
+                            f:write(string.format("  %s = %s\n", gn, tostring(v)))
+                        end
+                    end)
+                end
+                f:write("\n")
+            end)
+            -- (2) foliage per-instance surface: anything instance-addressed or transform-shaped
+            dump_methods(c, "Foliage instance-addressed methods", function(ln)
+                return ln:find("instance") or ln:find("matrix") or ln:find("position") or ln:find("transform")
+                    or ln:find("visib") or ln:find("fade") or ln:find("scale") or ln:find("remove")
+                    or ln:find("delete") or ln:find("hide") or ln:find("count") or ln:find("collision")
+            end)
+        end)
+    end
+    if best then
+        f:write(string.format("SINK TARGET (nearest instance): idx=%d dist=%.1fm world(%.2f,%.2f,%.2f)\n",
+            best.k, math.sqrt(best.d2), best.wp.x, best.wp.y, best.wp.z))
+    else
+        f:write("no foliage instance inside the radius - stand nearer a tree\n")
+    end
+    f:close()
+    collectgarbage("collect")   -- UAF law: flush stray wrappers NOW, while their state is valid
+    M.last = string.format("PER-TREE dump: %d GO(s) -> IRIS/pertree_probe.txt (stand at a BIG tree for best receipts)",
+        math.min(dumped, 3))
+    _log(M.last)
+end
+
+-- ── ⭐ 08-19 THE FIELD TEST: per-tree SINK + REMOVE (wired from the probe receipts) ────────
+-- Receipts said: setLocalPosition(UInt32, via.vec3) + removeFoliageInstance(UInt16[]) exist;
+-- RigidBodyMeshSet = ONE merged body per patch (so per-instance physics does NOT live there).
+-- The open question these buttons answer: does trunk COLLISION follow the instance?
+-- Ritual: test AWAY from the homestead, ONE tree, then WALK where it stood. Game restart
+-- (or UNDO for sink) restores everything - engine state, never saved.
+local sink = nil   -- { comp, idx, orig = {x,y,z} } - the one sunk instance, for UNDO
+local sink_pending, unsink_pending, remove_pending = false, false, false
+local function _nearest_instance(maxd)
+    local pp = _pl_pos(); if not pp then return nil end
+    local best = nil
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local scene = sdk.call_native_func(sm, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
+        local comps = scene:call("findComponents(System.Type)", sdk.typeof("via.landscape.Foliage"))
+        local n = 0
+        pcall(function() n = comps:call("get_Length") or 0 end)
+        if n == 0 then pcall(function() n = comps:get_size() or 0 end) end
+        for i = 0, (tonumber(n) or 0) - 1 do
+            pcall(function()
+                local c
+                pcall(function() c = comps:call("get_Item", i) end)
+                if not c then c = comps:get_element(i) end
+                if not c then return end
+                local cnt = 0; pcall(function() cnt = tonumber(c:call("get_InstanceCount")) or 0 end)
+                for k = 0, math.min(cnt, 3000) - 1 do
+                    local wp; pcall(function() wp = c:call("getWorldPosition", k) end)
+                    if wp then
+                        local d2 = (wp.x - pp.x) ^ 2 + (wp.z - pp.z) ^ 2
+                        if d2 <= maxd * maxd and ((not best) or d2 < best.d2) then
+                            best = { comp = c, k = k, d2 = d2, wy = wp.y }
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+    return best
+end
+local function _sink_test()
+    if sink then M.last = "a tree is already sunk - UNDO SINK first (one at a time)"; return end
+    local best = _nearest_instance(3.0)
+    if not best then M.last = "no foliage instance within 3m - stand AT the trunk"; return end
+    local lp
+    local okl = pcall(function() lp = best.comp:call("getLocalPosition(System.UInt32)", best.k) end)
+    if not (okl and lp) then
+        M.last = "getLocalPosition failed - receipts in the log"
+        _log("SINK abort: getLocalPosition(System.UInt32) idx=" .. tostring(best.k) .. " failed")
+        return
+    end
+    sink = { comp = best.comp, idx = best.k, orig = { x = lp.x, y = lp.y, z = lp.z } }
+    local oks = pcall(function()
+        best.comp:call("setLocalPosition(System.UInt32, via.vec3)", best.k,
+            _tray_vec3(lp.x, lp.y - 500.0, lp.z))
+    end)
+    local wy2; pcall(function() local wp = best.comp:call("getWorldPosition", best.k); wy2 = wp and wp.y end)
+    M.last = string.format("SINK idx=%d set=%s worldY %.1f -> %s | WALK the spot: mesh gone? trunk gone? NEIGHBORS intact?",
+        best.k, tostring(oks), best.wy or 0, tostring(wy2 and string.format("%.1f", wy2) or "?"))
+    _log(M.last)
+    if not oks then sink = nil end
+    collectgarbage("collect")
+end
+local function _unsink()
+    if not sink then M.last = "nothing sunk"; return end
+    local ok = pcall(function()
+        sink.comp:call("setLocalPosition(System.UInt32, via.vec3)", sink.idx,
+            _tray_vec3(sink.orig.x, sink.orig.y, sink.orig.z))
+    end)
+    M.last = "UNDO SINK idx=" .. tostring(sink.idx) .. " restore=" .. tostring(ok)
+    _log(M.last)
+    sink = nil
+    collectgarbage("collect")
+end
+local function _remove_test()
+    local best = _nearest_instance(3.0)
+    if not best then M.last = "no foliage instance within 3m - stand AT the trunk"; return end
+    if best.k > 65535 then M.last = "idx > UInt16 range - cannot remove this one"; return end
+    local arr
+    pcall(function() arr = sdk.create_managed_array("System.UInt16", 1) end)
+    if not arr then M.last = "create_managed_array(System.UInt16,1) failed"; _log(M.last); return end
+    pcall(function() arr:add_ref() end)
+    -- fill + VERIFY before firing (⛔ an unverified zero array would remove instance 0 = a
+    -- random tree). Two routes, then a readback:
+    local routes = {}
+    if pcall(function() arr[0] = best.k end) then routes[#routes + 1] = "index-assign" end
+    pcall(function() arr:call("SetValue(System.Object, System.Int32)", best.k, 0); routes[#routes + 1] = "SetValue" end)
+    local rb = nil
+    pcall(function()
+        local v = arr:call("GetValue(System.Int32)", 0)
+        rb = tonumber(v) or tonumber(tostring(v))
+        if rb == nil and v ~= nil then rb = tonumber(v:call("ToString()")) end
+    end)
+    if rb ~= best.k then
+        M.last = string.format("REMOVE abort: array fill unverified (want %d, readback %s; routes: %s)",
+            best.k, tostring(rb), table.concat(routes, ","))
+        _log(M.last)
+        collectgarbage("collect")
+        return
+    end
+    local res = nil
+    local okr = pcall(function()
+        res = best.comp:call("removeFoliageInstance(System.UInt16[])", arr)
+    end)
+    M.last = string.format("REMOVE idx=%d call=%s result=%s | WALK the spot + check NEIGHBORS (restart restores)",
+        best.k, tostring(okr), tostring(res))
+    _log(M.last)
+    collectgarbage("collect")
+end
+
 re.on_application_entry("UpdateBehavior", function()
     if pending then
         pending = false
@@ -337,6 +564,10 @@ re.on_application_entry("UpdateBehavior", function()
     if fol_hide_pending then fol_hide_pending = false; pcall(_fol_hide) end
     if fol_restore_pending then fol_restore_pending = false; pcall(_fol_restore) end
     if trunk_probe_pending then trunk_probe_pending = false; pcall(_trunk_probe) end
+    if pertree_pending then pertree_pending = false; pcall(_pertree_dump) end
+    if sink_pending then sink_pending = false; pcall(_sink_test) end
+    if unsink_pending then unsink_pending = false; pcall(_unsink) end
+    if remove_pending then remove_pending = false; pcall(_remove_test) end
     if trunk_off_pending then
         local mode = trunk_off_pending
         trunk_off_pending = false
@@ -365,6 +596,12 @@ re.on_draw_ui(function()
     imgui.separator()
     imgui.text("TRUNK COLLISION (the invisible blocker where a felled tree stood)")
     if imgui.button("PROBE: name the collidables around me##its_tp") then trunk_probe_pending = true end
+    if imgui.button("PER-TREE HUNT: dump RigidBodyMeshSet + instance APIs##its_pt") then pertree_pending = true end
+    imgui.text("per-tree kill test (stand AT the trunk; test AWAY from home; restart restores):")
+    if imgui.button("SINK nearest tree (-500m, reversible)##its_sk") then sink_pending = true end
+    imgui.same_line()
+    if imgui.button("UNDO SINK##its_us") then unsink_pending = true end
+    if imgui.button("REMOVE nearest tree (native delete, restores on re-stream/restart)##its_rm") then remove_pending = true end
     if imgui.button("KILL surgical (this collidable only)##its_ts") then trunk_off_pending = "surgical" end
     imgui.same_line()
     if imgui.button("KILL broad (whole Foliage component)##its_tb") then trunk_off_pending = "broad" end

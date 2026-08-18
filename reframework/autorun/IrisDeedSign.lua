@@ -82,6 +82,16 @@ end
 
 -- ── materials (IRIS bundle items: Stone 34710, Timber 34711 - same ids the tools grant) ──
 local STONE_ITEM, TIMBER_ITEM = 34710, 34711
+
+-- ⭐ 08-18 per-plot deed terms: the plot record overrides the panel globals (an Eini's plot
+-- costs more gold + more stone/timber than a farmhouse plot). Fields are written into the
+-- record by homestead SAVE (its KIT_DEEDS defaults); old records fall through to M.*.
+local function _deed_terms(rec)
+    local price = (rec and tonumber(rec.price)) or M.price or 20000
+    local ns = (rec and tonumber(rec.req_stone)) or M.req_stone or 60
+    local nt = (rec and tonumber(rec.req_timber)) or M.req_timber or 25
+    return price, ns, nt
+end
 -- count/consume = RiftSpeak inventory.lua's PROVEN calls (the wedding-ring lessons):
 -- getHaveNum(Int32, app.Character) / deleteItem(Int32, Int32, app.Character)
 local function _player_chara()
@@ -221,12 +231,26 @@ end
 -- the world by the plot's yaw (the forge's _yaw_offset convention: x'=x*c+z*s, z'=-x*s+z*c).
 local SIGN_LOCAL = { x = 7.17, z = -1.40 }
 local function _sign_upos(rec)
+    -- ⭐ 08-18 kit-aware placement: SIGN_LOCAL is the FARMHOUSE door-front (7.17,-1.40) -
+    -- inside the walls of a bigger kit like Eini's. Non-farmhouse plots default the sign to
+    -- the plot's ARRIVAL point (rec.tx/tz = where you stood at SAVE: proven ground, outside
+    -- the footprint). rec.sign_dx/sign_dz (plot-local) override for hand-fitting.
+    local lx, lz = SIGN_LOCAL.x, SIGN_LOCAL.z
+    if rec.sign_dx or rec.sign_dz then
+        lx, lz = tonumber(rec.sign_dx) or 0, tonumber(rec.sign_dz) or 0
+    elseif rec.house and rec.house ~= "farm_complete" and rec.tx then
+        return {
+            x = rec.tx,
+            y = (rec.ty or rec.uy or 0) + (rec.sign_y or M.sign_y_off or 0),
+            z = rec.tz,
+        }
+    end
     local th = math.rad(rec.yaw or 0)
     local s, c = math.sin(th), math.cos(th)
     return {
-        x = (rec.ux or 0) + SIGN_LOCAL.x * c + SIGN_LOCAL.z * s,
+        x = (rec.ux or 0) + lx * c + lz * s,
         y = (rec.uy or 0) + (rec.sign_y or M.sign_y_off or 0),
-        z = (rec.uz or 0) - SIGN_LOCAL.x * s + SIGN_LOCAL.z * c,
+        z = (rec.uz or 0) - lx * s + lz * c,
     }
 end
 
@@ -649,7 +673,7 @@ re.on_application_entry("UpdateBehavior", function()
         if cdx * cdx + cdz * cdz <= 625.0 then
             local ns = _count_item(STONE_ITEM)
             local nt = _count_item(TIMBER_ITEM)
-            local need_s, need_t = (M.req_stone or 60), (M.req_timber or 25)
+            local _, need_s, need_t = _deed_terms(sign.rec)
             sign.ready = (ns == nil or ns >= need_s) and (nt == nil or nt >= need_t)
             -- ⭐ THE UNIVERSAL PROGRESS BAR (Aurora 07-21: "use a bar like this for ALL the
             -- progress stuff"; 07-23: "I want EVERYTHING to use that font"): the native-styled
@@ -695,8 +719,9 @@ re.on_application_entry("UpdateBehavior", function()
             -- o1="Begin construction"(Sel0=1), o2="Not yet"(Sel1=2, bottom/default = safe)
             if p == 1 then
                 _close_dialog()
-                _consume_item(STONE_ITEM, M.req_stone or 60)
-                _consume_item(TIMBER_ITEM, M.req_timber or 25)
+                local _, need_s, need_t = _deed_terms(sign.rec)
+                _consume_item(STONE_ITEM, need_s)
+                _consume_item(TIMBER_ITEM, need_t)
                 _log("CONSTRUCTION confirmed at '" .. tostring(sign.rec.name) .. "' -> build scene")
                 M.last = "construction: the house rises at '" .. tostring(sign.rec.name) .. "'"
                 -- the BUILD SCENE: windup now; the hammer loop + actual build follow in the pump
@@ -712,16 +737,17 @@ re.on_application_entry("UpdateBehavior", function()
             if p == 1 then           -- Sel0 = Confirm purchase
                 _close_dialog()
                 dlg.armed = false
-                local paid = _try_pay(M.price)
+                local plot_price = _deed_terms(sign.rec)
+                local paid = _try_pay(plot_price)
                 if paid == "poor" then
-                    M.last = "purchase refused: not enough gold (" .. M.price .. " G needed)"
+                    M.last = "purchase refused: not enough gold (" .. plot_price .. " G needed)"
                     _log(M.last)
                     return
                 end
                 sign.rec.owned = true
                 sign.rec.built = false   -- construction stage next, NOT an instant house
                 pcall(function() if _G.IrisHomesteadPlots then _G.IrisHomesteadPlots.save() end end)
-                _log(string.format("PURCHASED plot '%s' (paid=%s price=%d) -> construction stage", tostring(sign.rec.name), tostring(paid), M.price))
+                _log(string.format("PURCHASED plot '%s' (paid=%s price=%d) -> construction stage", tostring(sign.rec.name), tostring(paid), plot_price))
                 M.last = "plot '" .. tostring(sign.rec.name) .. "' purchased - now gather materials"
                 if paid ~= true then _dump_money_api() end
                 -- respawn the sign: it becomes the construction-site marker, and only a fresh
@@ -748,7 +774,7 @@ re.on_application_entry("UpdateBehavior", function()
         if os.clock() >= dlg.next_confirm_at then
             dlg.next_confirm_at = nil
             dlg.phase = "confirm"
-            _show_dialog("Purchase this plot for " .. tostring(M.price) .. " G?",
+            _show_dialog("Purchase this plot for " .. tostring((_deed_terms(sign.rec))) .. " G?",
                 "Confirm purchase", "Not yet")
         end
         return
@@ -758,14 +784,15 @@ re.on_application_entry("UpdateBehavior", function()
     -- dialog opens from the sign examine (runes-close event) or the fallback key.
     if dlg.want_open and dist <= 4.5 then
         dlg.want_open = nil
+        local d_price, d_stone, d_timber = _deed_terms(sign.rec)
         if sign.rec.owned == false then
             dlg.phase = "offer"
-            _show_dialog("This plot of land is for sale.\n" .. tostring(M.price) .. " G",
+            _show_dialog("This plot of land is for sale.\n" .. tostring(d_price) .. " G",
                 "Purchase the plot", "Leave")
         elseif construction and sign.ready then
             dlg.phase = "build"
             _show_dialog(string.format("Begin construction?\nStone %d and Timber %d will be used.",
-                    M.req_stone or 60, M.req_timber or 25),
+                    d_stone, d_timber),
                 "Begin construction", "Not yet")
         end
         return

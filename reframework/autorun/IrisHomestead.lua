@@ -23,9 +23,11 @@ M.last     = "(idle) - face a spot, CHECK it, SPAWN the farmhouse, SAVE if it lo
 M.dist     = 7.0            -- how far ahead of you the farmhouse spawns
 M.lift     = 0.2            -- raise the house this much above ground so the floor clears cut-grass stubble
 M.yaw      = 0.0            -- extra house yaw (deg) on top of your facing
-M.flat_tol = 2.0           -- max height spread across the footprint that still counts as FLAT (m).
-                           -- lenient by default (the farmhouse has its own knoll for minor slope);
-                           -- tighten the slider if you want only billiard-flat plots.
+M.flat_tol = 2.0           -- (legacy - verdict is asymmetric now; spread still logged for receipts)
+M.bump_tol = 1.0           -- max ground RISE above the floor plane (m) - above this it pokes
+                           -- through interiors. The fix is usually standing higher up the slope.
+M.drop_tol = 4.0           -- max fall-away BELOW the floor plane (m) - lenient: a skirt gap is
+                           -- cosmetic (lift / adjuster nudge / terrace all close it).
 M.scenery_h = 1.8          -- a collision hit this far ABOVE the ground = scenery/rock/trunk (m)
 M.cliff_ny = 0.40          -- surface normal.y below this = a genuine cliff face (slopes pass)
 M.plot_name = "Plot 1"
@@ -37,6 +39,40 @@ local grass_job = nil      -- budgeted foliage clear/restore job
 local grass_campaign = nil -- post-build multi-pass clear (foliage streams in gradually after a teleport,
                            -- so ONE clear catches only what's loaded; re-clear for ~16s to catch the rest)
 local hidden = {}          -- [{comp,i,vis}] currently-hidden foliage instances (for restore)
+
+-- ⭐ 08-18 PLOT KITS: a plot can build any forge house with an hkey (rec.house names it;
+-- _G.IrisPlot.hkey carries it to the forge). Per-kit deed defaults seed a NEW plot's price +
+-- material requirements - the deed sign reads the plot record first, its globals second.
+M.house_choice = "farm_complete"
+M.scout = false            -- SCOUT MODE: draw the chosen kit's footprint box ahead + live fit verdict
+local KIT_DEEDS = {
+    farm_complete     = { price = 20000,  stone = 60,  timber = 25,  clear = 10.5 },
+    einis_v2          = { price = 90000,  stone = 150, timber = 80,  clear = 16.0 },
+    vernworth_mansion = { price = 250000, stone = 260, timber = 140, clear = 20.0 },
+}
+local scout_cache = nil    -- throttled fit verdict for the drawn box { at, ok, reasons }
+local house_rows_cache = nil   -- {at, rows}: houses() walks every placement - never per-frame
+local function _house_rows()
+    if house_rows_cache and os.clock() - house_rows_cache.at < 5.0 then return house_rows_cache.rows end
+    local t = nil
+    pcall(function() if _G.IrisForge and _G.IrisForge.houses then t = _G.IrisForge.houses() end end)
+    house_rows_cache = { at = os.clock(), rows = (type(t) == "table" and t or {}) }
+    return house_rows_cache.rows
+end
+local function _house_row(hkey)
+    for _, h in ipairs(_house_rows()) do if h.hkey == hkey then return h end end
+    return nil
+end
+-- widest half-extent of the kit's footprint (drives the scout rings + tree square); the
+-- forge footprint already carries a +1m margin, so no extra padding here
+local function _house_half(hkey)
+    local h = _house_row(hkey)
+    local fp = h and h.footprint_aabb
+    if not fp then return FARMHOUSE.size / 2 + 1.0 end
+    local hx = math.max(math.abs(fp.min.x or 0), math.abs(fp.max.x or 0))
+    local hz = math.max(math.abs(fp.min.z or 0), math.abs(fp.max.z or 0))
+    return math.max(hx, hz, 3.0)
+end
 local GRASS_BUDGET = 200   -- foliage writes per tick (FREEZE LAW: 274k in one tick froze the game)
 
 -- Streaming can retire a Foliage component or reshuffle its instances while
@@ -207,10 +243,11 @@ local function _trees_in_footprint(cx, cz, half)
 end
 
 -- STRICT scout: is this spot genuinely flat AND clear (no cliffs/scenery/trees)? returns ok, reasons
-local function _scout(cx, cz, gy0, half)
+local function _scout(cx, cz, gy0, half, quiet)
     -- sample the HOUSE footprint (~6.5m half), not a wide margin - the old 11m reach caught distant
-    -- slope and inflated every spread reading.
-    local base = FARMHOUSE.size / 2
+    -- slope and inflated every spread reading. Ring reach follows the chosen kit's own half-extent
+    -- (Eini's ~15m) so a big kit is judged across its REAL footprint, not the farmhouse square.
+    local base = math.max((half or (FARMHOUSE.size / 2 + 1.0)) - 1.0, FARMHOUSE.size / 2)
     local rings = { { 0, 1 }, { base * 0.55, 8 }, { base, 8 } }
     local ys, reasons, minny, worst_sc = {}, {}, 1.0, 0.0
     for _, ring in ipairs(rings) do
@@ -231,26 +268,46 @@ local function _scout(cx, cz, gy0, half)
             end
         end
     end
-    local spread = 0.0
+    -- ⭐ 08-19 ASYMMETRIC verdict (Aurora: "finding flat spaces is going to be a nightmare" -
+    -- she's right, and flat was the WRONG bar): the real Eini's sits in a hillside nook; its
+    -- stone understructure is built for slope. What kills a build is ground rising ABOVE the
+    -- floor plane (pokes through interiors) - ground falling AWAY below it is cosmetic skirt
+    -- gap (lift / adjuster / terrace all fix it). So: strict on BUMP, lenient on DROP, both
+    -- measured against the anchor plane (ground at centre = where the floor will sit).
+    local spread, bump, drop = 0.0, 0.0, 0.0
     if #ys > 0 then
         local lo, hi = ys[1], ys[1]
         for _, y in ipairs(ys) do if y < lo then lo = y end; if y > hi then hi = y end end
         spread = hi - lo
+        bump = hi - gy0    -- worst rise above the floor plane
+        drop = gy0 - lo    -- worst fall-away below it
     end
-    if spread > M.flat_tol then reasons[#reasons + 1] = string.format("NOT FLAT (%.1fm spread)", spread) end
+    if bump > (M.bump_tol or 1.0) then
+        reasons[#reasons + 1] = string.format("GROUND ABOVE FLOOR (+%.1fm - stand HIGHER up the slope?)", bump)
+    end
+    if drop > (M.drop_tol or 4.0) then
+        reasons[#reasons + 1] = string.format("STEEP DROP-OFF (-%.1fm below floor)", drop)
+    end
+    -- ⭐ 08-19 trees are a SOFT verdict now (Aurora's bluff spot): TreeClear's zone mode
+    -- fells/hides everything in 45m of an OWNED plot, so a tree in the box is "clears on
+    -- purchase", not "blocked". hard_n = the blockers counted BEFORE the tree line.
+    local hard_n = #reasons
     local trees = _trees_in_footprint(cx, cz, half)
-    if trees > 0 then reasons[#reasons + 1] = trees .. (trees >= 5 and "+" or "") .. " tree/bush in footprint" end
-    _log(string.format("SCOUT @(%.1f,%.1f) spread=%.2f minNy=%.2f overhang=%.1f trees=%d -> %s",
-        cx, cz, spread, minny, worst_sc, trees, (#reasons == 0) and "CLEAR" or table.concat(reasons, " ")))
-    return (#reasons == 0), reasons, spread
+    if trees > 0 then reasons[#reasons + 1] = trees .. (trees >= 5 and "+" or "") .. " tree/bush in footprint (zone-clears once owned)" end
+    if not quiet then   -- scout MODE re-checks every second: per-tick lines would flood the log
+        _log(string.format("SCOUT @(%.1f,%.1f) spread=%.2f bump=%.2f drop=%.2f minNy=%.2f overhang=%.1f trees=%d -> %s",
+            cx, cz, spread, bump, drop, minny, worst_sc, trees, (#reasons == 0) and "CLEAR" or table.concat(reasons, " ")))
+    end
+    return (hard_n == 0), reasons, spread, trees
 end
 
 -- the forward footprint centre (where CHECK looks and SPAWN builds), + its ground height
 local function _forward_center()
     local rp = _player_pos(); if not rp then return nil end
     local fx, fz = _facing()
-    local half = FARMHOUSE.size / 2 + 1.0
-    local off = M.dist
+    local half = _house_half(M.house_choice)   -- per-kit footprint half (farmhouse fallback)
+    -- never closer than the kit's own reach: a 15m-half kit at dist 7 lands ON the player
+    local off = math.max(M.dist, half + 1.0)
     local rcx, rcz = rp.x + fx * off, rp.z + fz * off
     local g = _ground_at(rcx, rcz, rp.y)
     local gy = g and g.y or rp.y
@@ -315,8 +372,12 @@ local function _zombie_house_standing()
         local smgr = sdk.get_native_singleton("via.SceneManager")
         local scene = smgr and sdk.call_native_func(smgr, sdk.find_type_definition("via.SceneManager"), "get_CurrentScene")
         if not scene then return end
+        -- distinctive pieces per PLOT KIT (a zombie Eini's must be seen too, or the amnesiac
+        -- session builds a duplicate through it): farmhouse + einis_v2 + vernworth_mansion
         for _, nm in ipairs({ "IrisHouse_sm62_033_00", "IrisHouse_sm80_252_00",
-                              "IrisHouse_sm51_300_00", "IrisHouse_sm62_099_00" }) do
+                              "IrisHouse_sm51_300_00", "IrisHouse_sm62_099_00",
+                              "IrisHouse_sm51_053_00", "IrisHouse_sm51_054_00",
+                              "IrisHouse_sm60_003_00", "IrisHouse_sm61_200_00" }) do
             local go
             pcall(function() go = scene:call("findGameObject(System.String)", nm) end)
             if go then found = true; return end
@@ -329,7 +390,9 @@ end
 local function _check()
     local c = _forward_center(); if not c then M.last = "no player"; return end
     local ok, reasons = _scout(c.rcx, c.rcz, c.gy, c.half)
-    M.check = ok and "CLEAR - flat & unobstructed, good plot" or ("BLOCKED: " .. table.concat(reasons, ", "))
+    M.check = ok and ((#reasons > 0) and ("CLEAR (" .. table.concat(reasons, ", ") .. ")")
+                                      or "CLEAR - flat & unobstructed, good plot")
+        or ("BLOCKED: " .. table.concat(reasons, ", "))
     M.last = "CHECK -> " .. M.check
 end
 
@@ -350,14 +413,16 @@ local function _spawn()
     end
     -- hand the forge the anchor via the bridge, then build the full farmhouse there.
     -- lift the house slightly so its floor sits above the cut-grass stubble (baked into the saved Y).
-    _G.IrisPlot = { x = c.rcx, y = c.gy + M.lift, z = c.rcz, yaw = c.yaw, live = true }
-    last_anchor = { ax = c.rcx, ay = c.gy + M.lift, az = c.rcz, yaw = c.yaw }
+    local hk = M.house_choice or "farm_complete"
+    _G.IrisPlot = { x = c.rcx, y = c.gy + M.lift, z = c.rcz, yaw = c.yaw, hkey = hk, live = true }
+    last_anchor = { ax = c.rcx, ay = c.gy + M.lift, az = c.rcz, yaw = c.yaw, hkey = hk }
     _G.IrisForge.build_on_plot()
     -- collision then grass, each ONLY after the build finishes (sequenced, never concurrent - CTD law)
     pending_collision = { seen = false }
-    pending_grass = { radius = M.clear_radius }
-    M.last = "SPAWN: building the farmhouse (collision + grass auto-apply once it's up)..."
-    _log(string.format("SPAWN farmhouse anchor(%.1f,%.1f,%.1f) yaw=%.1f", c.rcx, c.gy, c.rcz, c.yaw))
+    local kd = KIT_DEEDS[hk]
+    pending_grass = { radius = math.max(M.clear_radius, (kd and kd.clear) or 0) }
+    M.last = "SPAWN: building '" .. hk .. "' (collision + grass auto-apply once it's up)..."
+    _log(string.format("SPAWN %s anchor(%.1f,%.1f,%.1f) yaw=%.1f", hk, c.rcx, c.gy, c.rcz, c.yaw))
 end
 
 local function _despawn()
@@ -411,9 +476,18 @@ local function _save()
         -- spawned underground. Your own spot is the safest teleport target.
         tx = (up and up.x or hux), ty = (up and up.y or huy), tz = (up and up.z or huz),
         yaw = last_anchor.yaw,
-        house = "farm_complete",
+        house = last_anchor.hkey or M.house_choice or "farm_complete",
         clear_radius = M.clear_radius,   -- each plot remembers its own grass-clear radius
     }
+    -- ⭐ 08-18 per-kit deed terms baked into the record (deed sign reads these rec-first;
+    -- Eini's costs more gold + more stone/timber than the farmhouse by design)
+    do
+        local kd = KIT_DEEDS[rec.house]
+        if kd then
+            rec.price, rec.req_stone, rec.req_timber = kd.price, kd.stone, kd.timber
+            rec.clear_radius = math.max(rec.clear_radius or 0, kd.clear or 0)
+        end
+    end
     p[#p + 1] = rec
     local ok = pcall(function() json.dump_file(PLOTS_FILE, p) end)
     M.last = ok and ("SAVED plot '" .. rec.name .. "' (" .. #p .. " total) -> " .. PLOTS_FILE)
@@ -497,8 +571,8 @@ re.on_application_entry("UpdateBehavior", function()
             local rx = (rec.ux or rec.ax or 0) - (up.x - rp.x)
             local ry = (rec.uy or rec.ay or 0) - (up.y - rp.y)
             local rz = (rec.uz or rec.az or 0) - (up.z - rp.z)
-            _G.IrisPlot = { x = rx, y = ry, z = rz, yaw = rec.yaw or 0, live = true }
-            last_anchor = { ax = rx, ay = ry, az = rz, yaw = rec.yaw or 0 }
+            _G.IrisPlot = { x = rx, y = ry, z = rz, yaw = rec.yaw or 0, hkey = rec.house, live = true }
+            last_anchor = { ax = rx, ay = ry, az = rz, yaw = rec.yaw or 0, hkey = rec.house }
             if _G.IrisForge then _G.IrisForge.build_on_plot() end
             pending_collision = { seen = false }
             pending_grass = { radius = (rec.clear_radius or M.clear_radius) }
@@ -1018,6 +1092,7 @@ local function _adj_rebuild_preview()
         y = last_anchor.ay + hs_adj.y,
         z = last_anchor.az + hs_adj.z,
         yaw = (last_anchor.yaw or 0) + hs_adj.yaw,
+        hkey = last_anchor.hkey,
         live = true,
     }
     pcall(function() _G.IrisForge.build_on_plot() end)
@@ -1079,7 +1154,7 @@ re.on_draw_ui(function()
                     -- SAVE PLOT records the corrected spot
                     pcall(function()
                         _G.IrisPlot = { x = last_anchor.ax, y = last_anchor.ay, z = last_anchor.az,
-                                        yaw = last_anchor.yaw or 0, live = true }
+                                        yaw = last_anchor.yaw or 0, hkey = last_anchor.hkey, live = true }
                         if _G.IrisForge then _G.IrisForge.build_on_plot() end
                     end)
                     M.last = "APPLIED - rebuilding at the adjusted anchor. SAVE PLOT keeps this spot."
@@ -1122,9 +1197,26 @@ re.on_draw_ui(function()
     c, M.lift = imgui.slider_float("house lift (raise floor over grass)##ihs", M.lift, 0.0, 1.0)
 
     imgui.text("check result: " .. M.check)
+    -- ⭐ 08-18 the plot-kit picker: SPAWN/SAVE/CHECK/SCOUT all follow this choice
+    do
+        local rows = _house_rows()
+        if #rows > 0 then
+            local labels, cur = {}, 1
+            for i, h in ipairs(rows) do
+                labels[i] = tostring(h.label or h.hkey)
+                if h.hkey == M.house_choice then cur = i end
+            end
+            local ch, ni = imgui.combo("house kit##ihs_kit", cur, labels)
+            if ch and rows[ni] then M.house_choice = rows[ni].hkey end
+        else
+            imgui.text("house kit: (forge not loaded - farmhouse default)")
+        end
+    end
+    local sc_ch, sc_v = imgui.checkbox("SCOUT MODE: draw the kit footprint ahead (green = fits)##ihs_scout", M.scout)
+    if sc_ch then M.scout = sc_v; scout_cache = nil end
     if imgui.button("CHECK SITE (flat & clear?)##ihs") then _check() end
     imgui.same_line()
-    if imgui.button("SPAWN FARMHOUSE##ihs") then last_manual_at = os.clock(); _spawn() end
+    if imgui.button("SPAWN HOUSE KIT##ihs") then last_manual_at = os.clock(); _spawn() end
     imgui.same_line()
     if imgui.button("DESPAWN##ihs") then last_manual_at = os.clock(); _despawn() end
     -- TERRACE: flat walkable pad for bumpy spots. Publishes the SAME forward anchor SPAWN
@@ -1214,7 +1306,8 @@ re.on_draw_ui(function()
     imgui.text("   (grass auto-clears after each build; these buttons re-tune it manually)")
 
     if imgui.tree_node("strictness (tune while scouting)##ihs_str") then
-        c, M.flat_tol  = imgui.slider_float("max flatness spread (m)##ihs", M.flat_tol, 0.2, 3.0)
+        c, M.bump_tol  = imgui.slider_float("max ground rise above floor (m)##ihs_bump", M.bump_tol or 1.0, 0.2, 3.0)
+        c, M.drop_tol  = imgui.slider_float("max drop-off below floor (m)##ihs_drop", M.drop_tol or 4.0, 1.0, 10.0)
         c, M.scenery_h = imgui.slider_float("scenery height over ground (m)##ihs", M.scenery_h, 0.5, 5.0)
         c, M.cliff_ny  = imgui.slider_float("cliff steepness (normal.y)##ihs", M.cliff_ny, 0.2, 0.9)
         imgui.tree_pop()
@@ -1239,13 +1332,37 @@ re.on_draw_ui(function()
         local state = (rec.owned == false) and "[FOR SALE]"
             or (rec.built == false) and "[CONSTRUCTION: gathering]"
             or ((auto_spawned == rec) and "[BUILT]" or "[OWNED, not built]")
-        imgui.text(string.format("  %d. %s  %s", i, tostring(rec.name), state))
+        imgui.text(string.format("  %d. %s  %s  <%s>", i, tostring(rec.name), state,
+            tostring(rec.house or "farm_complete")))
         imgui.same_line()
         if imgui.button("TELEPORT##ihs_tp" .. i) then _warp(rec.tx or rec.ux or rec.ax, rec.ty or rec.uy or rec.ay, rec.tz or rec.uz or rec.az) end
         imgui.same_line()
         if imgui.button("REBUILD##ihs_rb" .. i) then last_manual_at = os.clock(); _rebuild_saved(rec) end
         imgui.same_line()
         if imgui.button("DELETE##ihs_del" .. i) then _delete_saved(i) end
+        imgui.same_line()
+        -- ⭐ 08-18 SET KIT: re-point THIS plot at the combo's kit (anchor/yaw/arrival keep).
+        -- Fully reversible: pick the old kit and press again. A standing house comes down
+        -- first (same law as SELL); the sign re-grows at the kit-correct spot next pass.
+        if imgui.button("SET KIT##ihs_sk" .. i) then
+            last_manual_at = os.clock()
+            local nk = M.house_choice or "farm_complete"
+            -- ALWAYS tear down (SELL's law: the standing house isn't always auto_spawned's
+            -- record - adopted/manual builds slip by)
+            _despawn(); auto_spawned = nil
+            if rec.built ~= nil then rec.built = false end   -- built house must re-construct as the new kit
+            rec.house = nk
+            local kd = KIT_DEEDS[nk]
+            if kd then
+                rec.price, rec.req_stone, rec.req_timber = kd.price, kd.stone, kd.timber
+                rec.clear_radius = math.max(kd.clear or 0, rec.clear_radius or 0)
+            end
+            rec.sign_dx, rec.sign_dz = nil, nil   -- stale hand-fit offsets belong to the old kit
+            pcall(function() if _G.IrisDeedSign and _G.IrisDeedSign.active() == rec then _G.IrisDeedSign.remove_sign() end end)
+            _G.IrisHomesteadPlots.save()
+            M.last = string.format("plot '%s' kit -> %s (deed terms updated)", tostring(rec.name), nk)
+            _log(M.last)
+        end
         imgui.same_line()
         if rec.owned == false then
             if imgui.button("MARK OWNED (skip purchase)##ihs_own" .. i) then
@@ -1270,7 +1387,8 @@ re.on_draw_ui(function()
                 -- the house itself refunds half the plot price when it was owned
                 local href = 0
                 if rec.owned ~= false then
-                    href = 10000   -- half the 20,000 G deed (TODO: read the live price from IrisDeedSign)
+                    -- half the plot's OWN deed price (per-kit since 08-18; old recs = 20,000)
+                    href = math.floor((tonumber(rec.price) or 20000) / 2)
                     pcall(function()
                         local im = sdk.get_managed_singleton("app.ItemManager")
                         local cur = tonumber(im:get_field("_Version"))
@@ -1315,6 +1433,106 @@ re.on_frame(function()
     if F and F.text and F.text(msg, x, 80, 0xFFFFFFFF, 19) then return end
     pcall(function() draw.text(msg, x + 1, 81, 0xFF000000) end)   -- shadow
     pcall(function() draw.text(msg, x, 80, 0xFFFFFFFF) end)
+end)
+
+-- ── ⭐ 08-18 SCOUT MODE + plot markers: kit footprints DRAWN on the world ─────────────────
+-- (the furnish footprint tech: 12 edges through world_to_screen; ⛔ never a spawned gimmick.)
+-- Scout = the chosen kit's box ahead of you, green/red from the live _scout verdict (find
+-- where Eini's actually FITS by walking). Markers = every for-sale/construction plot shows
+-- its build extent so the buyer sees what's coming before gold changes hands.
+local function _argb2abgr(argb)
+    local a = (argb >> 24) & 0xFF
+    local r = (argb >> 16) & 0xFF
+    local g = (argb >> 8) & 0xFF
+    local b = argb & 0xFF
+    return (a << 24) | (b << 16) | (g << 8) | r
+end
+local function _wseg(a, b, col)
+    if not (a and b) then return end
+    if type(draw.line) == "function" then
+        pcall(function() draw.line(a.x, a.y, b.x, b.y, col) end)
+    else
+        -- no draw.line on this build: corner dots keep the footprint readable
+        pcall(function() draw.filled_rect(a.x - 2, a.y - 2, 4, 4, col) end)
+        pcall(function() draw.filled_rect(b.x - 2, b.y - 2, 4, 4, col) end)
+    end
+end
+local function _draw_kit_box(cx, cy, cz, yaw, fp, argb)
+    local cyw, syw = math.cos(math.rad(yaw or 0)), math.sin(math.rad(yaw or 0))
+    local function corner(dx, dz, dy)
+        -- kit-local -> world by the forge's own yaw convention (x'=x*c+z*s, z'=-x*s+z*c)
+        local wx = cx + dx * cyw + dz * syw
+        local wz = cz - dx * syw + dz * cyw
+        local p
+        pcall(function() p = draw.world_to_screen(Vector3f.new(wx, cy + dy, wz)) end)
+        return p
+    end
+    local n, x = fp.min, fp.max
+    local col = _argb2abgr(argb)
+    local dim = _argb2abgr((argb & 0x00FFFFFF) | 0xB0000000)
+    local c = {}
+    c[1], c[2], c[3], c[4] = corner(n.x, n.z, 0.15), corner(x.x, n.z, 0.15), corner(x.x, x.z, 0.15), corner(n.x, x.z, 0.15)
+    c[5], c[6], c[7], c[8] = corner(n.x, n.z, x.y), corner(x.x, n.z, x.y), corner(x.x, x.z, x.y), corner(n.x, x.z, x.y)
+    _wseg(c[1], c[2], col); _wseg(c[2], c[3], col); _wseg(c[3], c[4], col); _wseg(c[4], c[1], col)
+    _wseg(c[5], c[6], dim); _wseg(c[6], c[7], dim); _wseg(c[7], c[8], dim); _wseg(c[8], c[5], dim)
+    _wseg(c[1], c[5], dim); _wseg(c[2], c[6], dim); _wseg(c[3], c[7], dim); _wseg(c[4], c[8], dim)
+end
+re.on_frame(function()
+    -- (a) scout mode: box ahead of the player, fit verdict re-checked every second
+    if M.scout then
+        local c = _forward_center()
+        local row = _house_row(M.house_choice)
+        local fp = row and row.footprint_aabb
+        if c and fp then
+            if not (scout_cache and os.clock() - scout_cache.at < 1.0) then
+                local prev_ok = scout_cache and scout_cache.ok
+                local ok, reasons, _, trees = _scout(c.rcx, c.rcz, c.gy, c.half, true)
+                scout_cache = { at = os.clock(), ok = ok, reasons = reasons, trees = trees }
+                if prev_ok ~= ok then   -- log the TRANSITIONS only, never the per-second ticks
+                    _log(string.format("SCOUT MODE @(%.1f,%.1f): %s", c.rcx, c.rcz,
+                        ok and "FITS" or ("BLOCKED " .. tostring(reasons and reasons[1] or "?"))))
+                end
+            end
+            -- green = clear; AMBER = fits, trees inside will zone-clear on purchase; red = blocked
+            local argb = (not scout_cache.ok) and 0xFFF05858
+                or ((scout_cache.trees or 0) > 0 and 0xFFE8B850 or 0xFF58E858)
+            _draw_kit_box(c.rcx, c.gy + M.lift, c.rcz, c.yaw, fp, argb)
+            local msg
+            if not scout_cache.ok then
+                msg = "BLOCKED: " .. tostring((scout_cache.reasons and scout_cache.reasons[1]) or "?")
+            elseif (scout_cache.trees or 0) > 0 then
+                msg = "FITS - " .. tostring(scout_cache.trees) .. " tree(s) clear on purchase"
+            else
+                msg = "FITS - flat & clear"
+            end
+            local tp
+            pcall(function() tp = draw.world_to_screen(Vector3f.new(c.rcx, c.gy + (fp.max.y or 3.0) + 0.6, c.rcz)) end)
+            if tp then
+                local F = _G.IrisFont
+                if not (F and F.text and F.text(msg, tp.x - 60, tp.y, 0xFFFFFFFF, 17)) then
+                    pcall(function() draw.text(msg, tp.x - 59, tp.y + 1, 0xFF000000) end)
+                    pcall(function() draw.text(msg, tp.x - 60, tp.y, _argb2abgr(argb)) end)
+                end
+            end
+        end
+    end
+    -- (b) unbuilt-plot markers: for-sale / under-construction plots draw their kit's extent
+    local rp, up = _player_pos(), _player_upos()
+    if not (rp and up) then return end
+    for _, rec in ipairs(_plots()) do
+        local show = (rec.owned == false) or (rec.built == false)
+        if show and rec.ux then
+            local rx = rec.ux - (up.x - rp.x)
+            local ry = (rec.uy or 0) - (up.y - rp.y)
+            local rz = rec.uz - (up.z - rp.z)
+            local ddx, ddz = rx - rp.x, rz - rp.z
+            if ddx * ddx + ddz * ddz < 70.0 ^ 2 then
+                local row = _house_row(rec.house or "farm_complete")
+                local fp = row and row.footprint_aabb
+                if fp then _draw_kit_box(rx, ry, rz, rec.yaw or 0, fp, 0xFFE8C878) end
+            end
+        end
+    end
 end)
 
 re.on_script_reset(function()

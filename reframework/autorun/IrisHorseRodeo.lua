@@ -731,6 +731,11 @@ local function horse_speed(record)
 end
 
 local function pad_button_down(want_mask)
+    -- r23: menus own the pad (map-menu griffin aerobatics CTD, 08-18) --
+    -- the shared gate now also covers the game's own pausing GUIs.
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        return false
+    end
     local pressed = false
     pcall(function()
         local hid = sdk.get_native_singleton("via.hid.GamePad")
@@ -4706,6 +4711,36 @@ function iris_wyrm_prey_paint_chomp(lease)
     -- Re-point the attack side at the victim itself; if the painter throws
     -- on that shape (HitHistory is keyed per attacker), fall back to the
     -- original wolf-anchored shape so a chomp never loses its paint.
+    -- r16: the paint has been landing at the ORIGINAL hit's world location
+    -- (field: floating mid-air after an airborne pounce bite; "from the
+    -- wolf" when Shadow stands on the old spot). DamageInfo carries no
+    -- position, so the location must come from the receiver HitController's
+    -- transient damage-joint state, frozen at capture. Refresh it to NOW:
+    -- recompute, then pin both damage joints to the victim's own head so
+    -- the paint anchors to the body under the jaws.
+    pcall(function()
+        local hc = nil
+        pcall(function()
+            local ch = get_component(lease.target_go, "app.Character")
+            hc = ch and ch:call("get_HitController") or nil
+        end)
+        if not hc then
+            hc = get_component(lease.target_go, "app.HitController")
+        end
+        if hc then
+            pcall(function() hc:call("calcDamageJoint") end)
+            local tf = lease.target_go:call("get_Transform")
+            local hj = tf and tf:call("getJointByName", "Head_0")
+            if hj then
+                pcall(function()
+                    hc:call("set_DamageJointA(via.Joint)", hj)
+                end)
+                pcall(function()
+                    hc:call("set_DamageJointB(via.Joint)", hj)
+                end)
+            end
+        end
+    end)
     local function fire()
         return pcall(function()
             -- post-proc packets can carry a zeroed Damage (companion clamp
@@ -4724,6 +4759,24 @@ function iris_wyrm_prey_paint_chomp(lease)
     pcall(function()
         pkt.di:set_field("<AttackOwnerObject>k__BackingField", lease.target_go)
     end)
+    -- r17 THE PAINT ANCHOR, finally named: the EPV converter builds a
+    -- DamageRequestInfo whose _AttackPos/_jointPos are ATTACK-SIDE WORLD
+    -- POSITIONS (HitController even stores OldAttackColliderPosition) --
+    -- that is the frozen point every stray spray came from. The converter
+    -- runs INSIDE callbackHit, so the post-hook below rewrites those fields
+    -- to the victim's live head for the duration of our replay only.
+    pcall(function()
+        local tf = lease.target_go:call("get_Transform")
+        local hj = tf and tf:call("getJointByName", "Head_0")
+        local hp2 = hj and hj:call("get_Position")
+        if hp2 then
+            rawset(_G, "IrisWyrmPaintFix", {
+                x = tonumber(hp2.x), y = tonumber(hp2.y),
+                z = tonumber(hp2.z), go = lease.target_go,
+                until_t = os.clock() + 0.06,
+            })
+        end
+    end)
     local ok = fire()
     if not ok and lease.costume and valid(lease.costume.horse_go) then
         shape = "wolf-anchored fallback"
@@ -4737,12 +4790,493 @@ function iris_wyrm_prey_paint_chomp(lease)
         end)
         ok = fire()
     end
+    rawset(_G, "IrisWyrmPaintFix", nil)
     S.wyrm_maul_fx_status = ok
         and ("chomp painted (" .. shape .. ")")
         or "chomp paint THREW (both shapes)"
+    -- r16 receipt: which joint does the engine actually resolve for this
+    -- packet? This names the paint anchor without guessing.
+    pcall(function()
+        local j = unit:call("getDamageNearJoint", pkt.di)
+        local nm = j and tostring(j:call("get_Name")) or "nil"
+        S.wyrm_maul_fx_status = tostring(S.wyrm_maul_fx_status)
+            .. " @" .. nm
+            .. " fix:" .. tostring(S.wyrm_paint_fix_hits or 0)
+    end)
     iris_wyrm_combat_trace(lease, "chomp-fx", S.wyrm_maul_fx_status)
     return ok
 end
+
+-- ═══════════════ r15 EAT (Aurora: out of combat, corpse near -> RT = Eat,
+-- wolf feeds, corpse becomes remains). The eat clips are the taming hunt's
+-- verified pair -- 60:25 liv_eat_start / 60:26 liv_eat_loop (IrisTaming
+-- cue_eat_*), and the meat-eating sound rides IN those clips. Corpse
+-- disposal via destroy(via.GameObject) is the taming feast's proven call.
+-- Remains = the engine's own gore meshes (vfx/mesh/meat/13_meat_001_00 +
+-- 13_bone_000_00/01 -- real paths from the file list, never guessed),
+-- spawned with the taming offering's two-phase holder-bind recipe.
+
+-- r22 (Aurora): fake "L3 Dismount" prompt under the pad cluster -- same
+-- treatment as the griffin's fake L3 line, in the shared IrisFont face
+-- (Sovngarde), swapping to the keyboard glyph (Q) when keys spoke last.
+-- Position nudgable via wyrm_hud_dismount_dx/dy in the config json.
+function iris_wyrm_draw_dismount_hint(costume)
+    if C.wyrm_hud_dismount_hint == false then return end
+    if not (costume and costume.wyrm_kind) then return end
+    -- r24: fade with the vanilla cluster (the HUD writer publishes its
+    -- PlayState) and vanish whenever a menu/pause/overlay owns the screen.
+    if S.wyrm_hud_cluster_hidden then return end
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        return
+    end
+    local font = rawget(_G, "IrisFont")
+    if not (font and type(font.text) == "function") then return end
+    local sw, sh = 1920.0, 1080.0
+    pcall(function()
+        local ds = imgui.get_display_size()
+        if ds then
+            sw = tonumber(ds.x) or sw
+            sh = tonumber(ds.y) or sh
+        end
+    end)
+    local sc = sh / 1080.0
+    local px = math.max(10.0, math.min(28.0,
+        tonumber(C.wyrm_hud_dismount_px) or 16.0))
+    local x = sw - (tonumber(C.wyrm_hud_dismount_dx) or 208.0) * sc
+    local y = sh - (tonumber(C.wyrm_hud_dismount_dy) or 40.0) * sc
+    local glyph = (S.wyrm_hud_device == "keyboard"
+        or S.wyrm_last_device == "kb") and "Q" or "L3"
+    -- griffin fake-prompt colours: stick-press grey glyph, idle-grey word
+    pcall(font.text, glyph, x, y, 0xFFC9C9C9, px)
+    pcall(font.text, "Dismount", x + (px * 1.9) * sc, y, 0xFF9C9C9C, px)
+end
+
+function iris_wyrm_eat_scan(costume, now)
+    if C.wyrm_eat_enabled == false then return end
+    if not (costume and costume.wyrm_kind) then return end
+    if S.wyrm_eat or S.wyrm_atk_until then
+        S.wyrm_eat_ready = S.wyrm_eat ~= nil and false or S.wyrm_eat_ready
+        return
+    end
+    if now < (tonumber(S.wyrm_eat_scan_at) or 0.0) then return end
+    S.wyrm_eat_scan_at = now + 0.8
+    S.wyrm_eat_ready = false
+    S.wyrm_eat_corpse = nil
+    -- standing still is the eating posture; don't scan at a gallop
+    if (tonumber(costume.cur_speed) or 0.0) > 2.5 then return end
+    local mouth = iris_wyrm_native_mouth_positions(costume)
+    local wolf_pos = universal_pos(costume.horse_go)
+    if not (mouth and wolf_pos) then
+        S.wyrm_eat_scan_status = "no mouth/root position"
+        return
+    end
+    -- r17: the out-of-combat gate is GONE (Aurora's call). The r16 hp
+    -- filter didn't save it -- the finder wraps enemies in shapes whose hp
+    -- read can fail, and every nil read as "living". Eating is now allowed
+    -- in combat at the LOWEST priority: the RT dispatch pre-probes for a
+    -- downed LIVING target and the maul always wins that contest.
+    -- r16: measure from BOTH the mouth and the root -- the scaled wolf's
+    -- mouth sits ~3m ahead of where the rider reads "next to the corpse".
+    local range = math.max(1.0, tonumber(C.wyrm_eat_range) or 3.5)
+    local best, best_go, best_d = nil, nil, range
+    local nearest_any = nil
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene = sdk.call_native_func(sm, smt, "get_CurrentScene()")
+        local chars = scene and scene:call(
+            "findComponents(System.Type)", sdk.typeof("app.Character"))
+        for _, ch in ipairs(chars and chars:get_elements() or {}) do
+            local go = nil
+            pcall(function() go = ch:call("get_GameObject") end)
+            if valid(go)
+                and not (S.wyrm_eaten
+                    and S.wyrm_eaten[object_address(go)])
+                and not iris_wyrm_go_under_mount(go,
+                    object_address(costume.horse_go))
+                and not iris_wyrm_damage_go_is_party(go) then
+                local dead = false
+                pcall(function()
+                    local hc = ch:call("get_HitController")
+                    local hp = hc and tonumber(hc:call("get_Hp"))
+                    if hp and hp <= 0.5 then dead = true end
+                    if not dead then
+                        dead = ch:call("get_IsDead") == true
+                    end
+                end)
+                if dead then
+                    -- r20 (Aurora): remains scale with the meal, and BOSSES
+                    -- ARE OFF THE MENU -- a boss corpse may carry quest/
+                    -- carve hooks, and no wolf eats a cyclops in six
+                    -- seconds. The physics controller's authored Height is
+                    -- the species-agnostic size read (goblin ~1.2, ogre 3+).
+                    local h = nil
+                    pcall(function()
+                        local cc = get_component(go,
+                            "via.physics.CharacterController")
+                        h = cc and tonumber(cc:call("get_Height"))
+                    end)
+                    h = h or 1.4
+                    if h > (tonumber(C.wyrm_eat_max_height) or 2.4) then
+                        S.wyrm_eat_scan_status = string.format(
+                            "corpse too large to eat (%.1fm)", h)
+                    else
+                    local cp = universal_pos(go)
+                    if cp then
+                        local dxm, dzm = cp.x - mouth.x, cp.z - mouth.z
+                        local dxr, dzr = cp.x - wolf_pos.x, cp.z - wolf_pos.z
+                        local d = math.min(
+                            math.sqrt(dxm * dxm + dzm * dzm),
+                            math.sqrt(dxr * dxr + dzr * dzr))
+                        if not nearest_any or d < nearest_any then
+                            nearest_any = d
+                        end
+                        if d < best_d then
+                            best, best_go, best_d = ch, go, d
+                            S.wyrm_eat_size = h
+                        end
+                    end
+                    end
+                end
+            end
+        end
+    end)
+    if best then
+        S.wyrm_eat_ready = true
+        S.wyrm_eat_corpse = { target = best, go = best_go, d = best_d,
+            size = tonumber(S.wyrm_eat_size) or 1.4 }
+        S.wyrm_eat_scan_status = string.format(
+            "corpse ready (%.1fm, body %.1fm tall)", best_d,
+            tonumber(S.wyrm_eat_size) or 1.4)
+    elseif nearest_any then
+        S.wyrm_eat_scan_status = string.format(
+            "nearest corpse %.1fm (need <= %.1f)", nearest_any, range)
+    else
+        S.wyrm_eat_scan_status = "no corpse found in scene"
+    end
+end
+
+function iris_wyrm_eat_start(costume, now)
+    local rec = S.wyrm_eat_corpse
+    if not (rec and valid(rec.go)) then return false end
+    local secs = math.max(3.0, tonumber(C.wyrm_eat_secs) or 6.5)
+    S.wyrm_eat = {
+        t0 = now, until_t = now + secs,
+        corpse = rec.target, corpse_go = rec.go,
+        stage = 0, bite_at = now + 1.4,
+        size = tonumber(rec.size) or 1.4,
+    }
+    S.wyrm_eat_ready = false
+    S.wyrm_eat_corpse = nil
+    S.wyrm_atk_until = S.wyrm_eat.until_t
+    S.wyrm_atk_hold = true
+    costume.force_hold = true
+    -- face the meal over the first beat
+    pcall(function()
+        local cp = universal_pos(rec.go)
+        local wp = universal_pos(costume.horse_go)
+        if cp and wp then
+            S.wyrm_eat.yaw = math.atan(cp.x - wp.x, cp.z - wp.z)
+        end
+    end)
+    -- r24 (Aurora): the attack-camera treatment for the meal -- the look
+    -- point follows the corpse while the boom keeps the preserved heading,
+    -- exactly the bite camera's shape (kick_cam chain picks this up).
+    pcall(function()
+        local axis = costume.horse_go:call("get_Transform")
+            :call("get_AxisZ")
+        S.wyrm_eat.cam_yaw = math.atan(axis.x, axis.z)
+            + (tonumber(S.mountcam_orbit_yaw) or 0.0)
+        S.wyrm_eat.aim_go = rec.go
+    end)
+    S.wyrm_native_status = "feeding"
+    log("wyrm eat: begun")
+    return true
+end
+
+function iris_wyrm_eat_tick(costume, now)
+    local eat = S.wyrm_eat
+    if not eat then return end
+    if not (costume and costume.wyrm_kind and valid(costume.horse_character))
+        or not valid(eat.corpse_go) then
+        S.wyrm_eat = nil
+        if eat.cam_yaw then
+            S.mountcam_kick_release = {
+                yaw = eat.cam_yaw, look = eat.cam_look,
+                t0 = now, dur = tonumber(C.kick_camera_blend_s) or 0.65,
+            }
+        end
+        return
+    end
+    local age = now - (tonumber(eat.t0) or now)
+    if eat.yaw and age <= 0.35 then
+        pcall(function()
+            local tf = costume.horse_go:call("get_Transform")
+            local rot = tf:call("get_Rotation")
+            rot.x, rot.y, rot.z, rot.w =
+                0.0, math.sin(eat.yaw * 0.5), 0.0, math.cos(eat.yaw * 0.5)
+            tf:call("set_Rotation", rot)
+            costume.wyrm_yaw = eat.yaw
+        end)
+    end
+    local function play(bank, clip, blend)
+        pcall(function()
+            local motion = costume.horse_character:call("get_Motion")
+            local layer = motion and motion:call("getLayer", 0)
+            if layer then
+                layer:call(
+                    "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
+                    bank, clip, 0.0, blend or 6.0, 1, 1)
+                layer:call("set_Speed", 1.0)
+                costume.cmd_bank, costume.cmd_clip = bank, clip
+            end
+        end)
+    end
+    if eat.stage == 0 then
+        eat.stage = 1
+        play(60, 25, 8.0)      -- liv_eat_start
+    elseif eat.stage == 1 and age >= 1.1 then
+        eat.stage = 2
+        play(60, 26, 5.0)      -- liv_eat_loop (self-looping)
+    end
+    -- r18: NO mid-eat blood pulses and NO destroy -- the eat CTD's two
+    -- suspects. The taming feast destroyed a SPAWNED stag it owned; a real
+    -- combat corpse is still tracked by EnemyManager / loot / LootOverlay,
+    -- and yanking it out from under native bookkeeping is the classic CTD
+    -- shape. Consume = HIDE the body instead (set_DrawSelf on the subtree,
+    -- ⛔ never set_DrawSelfForcibly -- the rs_hug law), remains on top.
+    if now >= (tonumber(eat.until_t) or 0.0) then
+        S.wyrm_eat = nil
+        -- r24: release the meal camera like an attack releases its own.
+        if eat.cam_yaw then
+            S.mountcam_kick_release = {
+                yaw = eat.cam_yaw, look = eat.cam_look,
+                t0 = now, dur = tonumber(C.kick_camera_blend_s) or 0.65,
+            }
+        end
+        -- r24 (Aurora): the meal restores wyrm_eat_heal_pct (5%) of max HP.
+        pcall(function()
+            local hc = costume.horse_character:call("get_HitController")
+            local hp = hc and tonumber(hc:call("get_Hp"))
+            local mx = hc and tonumber(hc:call("get_MaxHp"))
+            if hp and mx and mx > 0 and hp > 0 then
+                local heal = mx * (math.max(0.0,
+                    tonumber(C.wyrm_eat_heal_pct) or 5.0) / 100.0)
+                local new = math.min(mx, hp + heal)
+                if new > hp + 0.5 then
+                    pcall(function()
+                        hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+                            new, true, 0)
+                    end)
+                    local rb = tonumber(hc:call("get_Hp")) or hp
+                    if rb < new - 0.5 then
+                        pcall(function()
+                            hc:call("setHp(System.Single)", new)
+                        end)
+                    end
+                    log(string.format("wyrm eat: healed %.0f -> %.0f",
+                        hp, tonumber(hc:call("get_Hp")) or new))
+                end
+            end
+        end)
+        local cp = nil
+        pcall(function() cp = universal_pos(eat.corpse_go) end)
+        pcall(function()
+            local budget = 0
+            local function hide(tf)
+                if not tf or budget > 60 then return end
+                budget = budget + 1
+                local cgo = tf:call("get_GameObject")
+                if cgo then pcall(function()
+                    cgo:call("set_DrawSelf", false)
+                end) end
+                local c = tf:call("get_Child")
+                while c do
+                    hide(c)
+                    c = c:call("get_Next")
+                end
+            end
+            hide(eat.corpse_go:call("get_Transform"))
+        end)
+        if cp and C.wyrm_eat_remains ~= false then
+            iris_wyrm_remains_spawn(cp, tonumber(eat.size) or 1.4,
+                eat.corpse_go)
+        end
+        -- r22 (Aurora): a consumed corpse is off the menu forever. The body
+        -- survives (hidden), so the scan must remember it by address.
+        pcall(function()
+            local addr = object_address(eat.corpse_go)
+            if addr then
+                S.wyrm_eaten = S.wyrm_eaten or {}
+                local n = 0
+                for _ in pairs(S.wyrm_eaten) do n = n + 1 end
+                if n > 64 then S.wyrm_eaten = {} end
+                S.wyrm_eaten[addr] = true
+            end
+        end)
+        S.wyrm_native_status = "the kill is consumed"
+        log("wyrm eat: corpse hidden"
+            .. (cp and " - remains scattered" or ""))
+    end
+end
+
+-- Remains: engine gore meshes on empty carriers, two-phase holder-bind
+-- (raw setMesh on a fresh GO silently no-ops -- the taming offering law).
+function iris_wyrm_remains_warm()
+    if S.wyrm_remains_warmed then return end
+    S.wyrm_remains_warmed = true
+    S.wyrm_remains_refs = {}
+    for _, base in ipairs({
+        "vfx/mesh/meat/13_meat_001_00",
+        "vfx/mesh/meat/13_bone_000_00",
+        "vfx/mesh/meat/13_bone_000_01",
+    }) do
+        pcall(function()
+            S.wyrm_remains_refs[#S.wyrm_remains_refs + 1] =
+                sdk.create_resource("via.render.MeshResource",
+                    base .. ".mesh"):add_ref()
+        end)
+        pcall(function()
+            S.wyrm_remains_refs[#S.wyrm_remains_refs + 1] =
+                sdk.create_resource("via.render.MeshMaterialResource",
+                    base .. ".mdf2"):add_ref()
+        end)
+    end
+end
+
+function iris_wyrm_remains_spawn(cp, body_height, corpse_go)
+    S.wyrm_remains_q = S.wyrm_remains_q or {}
+    -- r21: NATIVE GIMMICK remains (Aurora found them in Nick's gimmick
+    -- spawner) -- authored, textured, right-sized bone piles, spawned with
+    -- Nick's exact GenerateManager recipe. The vfx/mesh dragon-gore route
+    -- is dead (checkerboard sheets, absurd scale).
+    --   gm50_426 = bone scatter (humanoids)   gm51_581 = animal skull+bones
+    --   gm51_578 = small animal skeleton      (gm51_582 = human skeleton)
+    local kind = "humanoid"
+    pcall(function()
+        local ch = get_component(corpse_go, "app.Character")
+        local id = ch and tostring(ch:call("get_CharaIDString")) or ""
+        if id:match("^ch299") or id:match("^ch223") or id:match("^ch225")
+            or id:match("^ch227") then
+            kind = "animal"
+        end
+    end)
+    local h = tonumber(body_height) or 1.4
+    local entry
+    if kind == "animal" then
+        entry = h < 0.9
+            and { id = 444, path = "AppSystem/Gimmick/Prefab/Sign/gm51_578.pfb" }
+            or { id = 438, path = "AppSystem/Gimmick/Prefab/Sign/gm51_581.pfb" }
+    else
+        entry = { id = 426, path = "AppSystem/Gimmick/Prefab/Sign/gm50_426.pfb" }
+    end
+    S.wyrm_remains_q[#S.wyrm_remains_q + 1] = {
+        op = "gimmick", id = entry.id, path = entry.path,
+        x = cp.x, y = cp.y + 0.03, z = cp.z,
+        size_mult = math.max(0.5, math.min(1.5, h / 1.2)),
+    }
+end
+
+re.on_application_entry("UpdateBehavior", function()
+    local q = S.wyrm_remains_q
+    if q and #q > 0 then
+        local op = table.remove(q, 1)
+        if op.op == "gimmick" then
+            -- r21: Nick's proven gimmick spawn shape
+            -- (NicksDevtools/GimmickSpawner.lua:800): prefab + controller +
+            -- GenerateInfo, wait get_Ready, requestCreateInstance, read the
+            -- Instance back. One op per frame; 6s deadline then give up.
+            pcall(function()
+                if not op.prefab then
+                    op.prefab = sdk.create_instance("via.Prefab"):add_ref()
+                    op.prefab:call("set_Path", op.path)
+                    op.pc = sdk.create_instance(
+                        "app.PrefabController"):add_ref()
+                    op.pc._Item = op.prefab
+                    local gi = sdk.create_instance(
+                        "app.GenerateInfo.GenerateInfoContainer"):add_ref()
+                    local pv = ValueType.new(
+                        sdk.find_type_definition("via.Position"))
+                    pv.x = op.x; pv.y = op.y; pv.z = op.z
+                    gi._CommonInfo._InitialPosition = pv
+                    gi._CommonInfo._ContextPosition = pv
+                    pcall(function()
+                        local cost = S.costume
+                        if cost and valid(cost.horse_go) then
+                            local rot = cost.horse_go
+                                :call("get_Transform"):call("get_Rotation")
+                            gi._CommonInfo._InitialAngle = rot
+                            gi._CommonInfo._ContextAngle = rot
+                        end
+                    end)
+                    gi._CommonInfo._ObjectID._SelectedGimmickID = op.id
+                    op.gi = gi
+                    op.ii = sdk.create_instance("app.InstanceInfo"):add_ref()
+                    op.deadline = os.clock() + 6.0
+                end
+                if not op.prefab:call("get_Ready") then
+                    if os.clock() < (tonumber(op.deadline) or 0.0) then
+                        q[#q + 1] = op
+                    else
+                        log("wyrm remains: prefab never became ready")
+                    end
+                    return
+                end
+                if not op.spawned then
+                    local gm = sdk.get_managed_singleton("app.GenerateManager")
+                    local m = sdk.find_type_definition("app.GenerateManager")
+                        :get_method("requestCreateInstance(app.PrefabController, app.GenerateInfo.GenerateInfoContainer, System.Int32, app.InstanceInfo, System.Action`2<app.PrefabInstantiateResults,app.DummyArg>, System.Action`2<app.PrefabInstantiateResults,app.DummyArg>)")
+                    if not (gm and m) then return end
+                    m:call(gm, op.pc, op.gi, 0, op.ii, nil, nil)
+                    op.spawned = true
+                end
+                local go = op.ii["<Instance>k__BackingField"]
+                if go then
+                    pcall(function()
+                        local sc = tonumber(op.size_mult) or 1.0
+                        if math.abs(sc - 1.0) > 0.05 then
+                            go:call("get_Transform"):call("set_LocalScale",
+                                Vector3f.new(sc, sc, sc))
+                        end
+                    end)
+                    S.wyrm_remains = S.wyrm_remains or {}
+                    S.wyrm_remains[#S.wyrm_remains + 1] = {
+                        go = go,
+                        expire = os.clock()
+                            + (tonumber(C.wyrm_eat_remains_secs) or 180.0),
+                    }
+                    log("wyrm remains: gimmick "
+                        .. tostring(op.id) .. " spawned")
+                elseif os.clock() < (tonumber(op.deadline) or 0.0) then
+                    q[#q + 1] = op
+                end
+            end)
+        end
+    end
+    -- expire old remains (and never let the list grow unbounded)
+    local list = S.wyrm_remains
+    if list and #list > 0 then
+        local now = os.clock()
+        for i = #list, 1, -1 do
+            local rec = list[i]
+            if now >= (tonumber(rec.expire) or 0.0) or #list > 24 then
+                pcall(function()
+                    if rec.go then rec.go:call("destroy", rec.go) end
+                end)
+                table.remove(list, i)
+            end
+        end
+    end
+end)
+
+re.on_script_reset(function()
+    pcall(function()
+        for _, rec in ipairs(S.wyrm_remains or {}) do
+            if rec.go then rec.go:call("destroy", rec.go) end
+        end
+        S.wyrm_remains = nil
+    end)
+end)
 
 -- r10: the deferred maul death blow. r9 killed at the chomp that broke the HP
 -- and run 13's field verdict was "kills the goblin instantly before the wolf
@@ -4978,6 +5512,61 @@ function iris_wyrm_native_hit_capture_flush()
     end
 end
 
+-- r17: rewrite the EPV converter's attack-side positions to the victim's
+-- live head while OUR replay is in flight (flag-gated; natural hits pass
+-- through untouched). Fields named from the il2cpp dump:
+-- DamageRequestInfo._AttackPos/_jointPos/_offsetPos/_followTarget/_followJoint.
+function iris_wyrm_install_paint_anchor_fix()
+    rawset(_G, "__iris_wyrm_paint_anchor_post", function(retval)
+        local fix = rawget(_G, "IrisWyrmPaintFix")
+        if not fix then return retval end
+        if os.clock() > (tonumber(fix.until_t) or 0.0) then
+            rawset(_G, "IrisWyrmPaintFix", nil)
+            return retval
+        end
+        pcall(function()
+            local info = sdk.to_managed_object(retval)
+            if not info then return end
+            local v = Vector3f.new(
+                (tonumber(fix.x) or 0.0) + 0.0,
+                (tonumber(fix.y) or 0.0) + 0.0,
+                (tonumber(fix.z) or 0.0) + 0.0)
+            pcall(function() info:set_field("_AttackPos", v) end)
+            pcall(function() info:set_field("_jointPos", v) end)
+            pcall(function()
+                info:set_field("_offsetPos", Vector3f.new(0.0, 0.0, 0.0))
+            end)
+            if fix.go and valid(fix.go) then
+                pcall(function()
+                    info:set_field("_followTarget", fix.go)
+                end)
+                pcall(function()
+                    info:set_field("_followJoint", "Head_0")
+                end)
+            end
+            S.wyrm_paint_fix_hits = (tonumber(S.wyrm_paint_fix_hits) or 0) + 1
+        end)
+        return retval
+    end)
+    if rawget(_G, "__iris_wyrm_paint_anchor_hook") then return true end
+    local td = sdk.find_type_definition(
+        "app.EPVExpertCharacterDamageTriggerUnit")
+    local method = td
+        and td:get_method("convertDamageInfo2DamageRequestInfo")
+    if not method then return false end
+    sdk.hook(method, function(args) end, function(retval)
+        local dispatch = rawget(_G, "__iris_wyrm_paint_anchor_post")
+        if dispatch then
+            local ok, r = pcall(dispatch, retval)
+            if ok and r ~= nil then return r end
+        end
+        return retval
+    end)
+    rawset(_G, "__iris_wyrm_paint_anchor_hook", true)
+    return true
+end
+pcall(iris_wyrm_install_paint_anchor_fix)
+
 pcall(iris_wyrm_dump_hitcontroller_api)
 pcall(iris_wyrm_install_native_hit_capture)
 pcall(iris_wyrm_install_native_request_capture)
@@ -5181,8 +5770,11 @@ function iris_wyrm_pin_maul_start(lease, now)
     lease.phase = "maul"
     lease.label = "pinned maul"
     -- r10: keep converging through the push-down so the slam lands ON the
-    -- body even when RT fired from the 1.0-1.6m edge of the contact ring.
-    lease.maul_converge_until = now + 0.55
+    -- body even when RT fired from the edge of the contact ring.
+    -- r22: extended to the WHOLE maul -- the drive creeps the mouth onto
+    -- the body and holds it there (slow settle speed after the slam, see
+    -- the converge block).
+    lease.maul_converge_until = now + 4.9
     -- r12: PIN THE POSITION, not just the pose. Field video 18-52: the chomp
     -- flinch restarts replay the damage clip's root-motion shove (and the
     -- replayed packet may add engine knockback), sliding the prey ~20m out
@@ -5250,6 +5842,20 @@ function iris_wyrm_pin_maul_start(lease, now)
         target_addr = object_address(lease.target),
         until_t = lease.until_t,
     })
+    -- r24: the growl posts HERE (r18's field-proven site -- the r19 move to
+    -- the RT press went silent: its downed-target pre-probe missed). The
+    -- repeat beat in the tick carries it from here to the maul's end.
+    local growl = tonumber(C.wyrm_maul_growl_trigger) or 0
+    if growl > 0 then
+        lease.growl_next = now
+            + math.max(0.5, tonumber(C.wyrm_maul_growl_period) or 1.2)
+        pcall(function()
+            local capi = rawget(_G, "__iris_wild_cats_api")
+            if capi and capi.play_trigger_on then
+                capi.play_trigger_on(costume.horse_go, growl)
+            end
+        end)
+    end
     S.wyrm_native_status = "pinned maul: prey held, savaging"
     log(S.wyrm_native_status)
     iris_wyrm_combat_trace(lease, "maul-start", S.wyrm_native_status)
@@ -6024,13 +6630,31 @@ function iris_wyrm_read_controls()
     end)
     local key = {}
     pcall(function()
-        key.light = reframework:is_key_down(0x54) == true -- T
-        key.heavy = reframework:is_key_down(0x47) == true -- G
-        key.voice = reframework:is_key_down(0x48) == true -- H
-        key.dodge_left = reframework:is_key_down(0x5A) == true -- Z
-        key.dodge_right = reframework:is_key_down(0x43) == true -- C
-        key.maul = reframework:is_key_down(0x52) == true -- R
+        -- r22 (Aurora: "make all keyboard/mouse controls match the UI"):
+        -- the vanilla KB panel shows X howl / E maul / Ctrl dodge-L /
+        -- mouse dodge-R / V pounce / mouse bite -- those are now the
+        -- PRIMARY keys. The old T/G/H/Z/C/R set stays as quiet legacy
+        -- secondaries. (E is freed for the maul: keyboard DISMOUNT moved
+        -- to Q, see the seat handler.)
+        key.light = reframework:is_key_down(0x01) == true -- LMB (panel)
+            or reframework:is_key_down(0x54) == true -- T legacy
+        key.heavy = reframework:is_key_down(0x56) == true -- V (panel)
+            or reframework:is_key_down(0x47) == true -- G legacy
+        key.voice = reframework:is_key_down(0x58) == true -- X (panel)
+            or reframework:is_key_down(0x48) == true -- H legacy
+        key.dodge_left = reframework:is_key_down(0x11) == true -- Ctrl (panel)
+            or reframework:is_key_down(0x5A) == true -- Z legacy
+        key.dodge_right = reframework:is_key_down(0x02) == true -- RMB (panel)
+            or reframework:is_key_down(0x43) == true -- C legacy
+        key.maul = reframework:is_key_down(0x45) == true -- E (panel)
+            or reframework:is_key_down(0x52) == true -- R legacy
     end)
+    -- r22: remember which device spoke last -- the fake dismount prompt
+    -- shows L3 for pad, Q for keyboard.
+    if btn ~= 0 then S.wyrm_last_device = "pad" end
+    for _, v in pairs(key) do
+        if v then S.wyrm_last_device = "kb" break end
+    end
     local p = S.wyrm_pad
     local down = {
         light = key.light or (btn & p.x) ~= 0,
@@ -6040,6 +6664,13 @@ function iris_wyrm_read_controls()
         dodge_right = key.dodge_right or (btn & p.rb) ~= 0,
         maul = key.maul or (btn & p.rt) ~= 0,
     }
+    -- r23: while a pausing GUI or the overlay is up, swallow EVERYTHING --
+    -- and remember the held state, so releasing the map with A still down
+    -- can't edge-fire a pounce on the unpause frame.
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        S.wyrm_btn_prev = down
+        return {}, {}
+    end
     local prev = S.wyrm_btn_prev or {}
     local pressed = {}
     for name, value in pairs(down) do
@@ -6338,7 +6969,11 @@ function iris_wyrm_attack_tick()
             -- under the belly (run 12: along=-0.94 withheld), so RT contact
             -- is pure distance; the converge drive closes it from any side.
             if native.direct_maul then
-                in_contact = distance and distance <= 1.0
+                -- r22: tightened 1.0 -> 0.8 (Aurora: "more often than not
+                -- he's further away from the corpse") -- the converge now
+                -- also runs through the WHOLE maul, settling the mouth on
+                -- the body.
+                in_contact = distance and distance <= 0.8
             end
             local timed_out = acquire_age >=
                 (tonumber(native.approach_secs) or 0.58)
@@ -6757,6 +7392,26 @@ function iris_wyrm_attack_tick()
             native.pin_kill_done = true
             iris_wyrm_pin_kill(native)
         end
+        -- r22 (Aurora: "make it repeat the growl from the moment you hit RT
+        -- to the moment the maul stops"): re-post the chosen growl on a
+        -- steady beat for the whole pin, burying the clip-owned whimper.
+        if native.pin_maul
+            and (tonumber(C.wyrm_maul_growl_trigger) or 0) > 0
+            and now >= (tonumber(native.growl_next) or 0.0) then
+            native.growl_next = now
+                + math.max(0.5, tonumber(C.wyrm_maul_growl_period) or 1.2)
+            pcall(function()
+                -- r24: S.costume, not a scope-dependent local -- a nil
+                -- `costume` here died silently inside this pcall and the
+                -- repeat beat never sounded.
+                local cgo = S.costume and S.costume.horse_go
+                local capi = rawget(_G, "__iris_wild_cats_api")
+                if cgo and capi and capi.play_trigger_on then
+                    capi.play_trigger_on(cgo,
+                        tonumber(C.wyrm_maul_growl_trigger))
+                end
+            end)
+        end
         -- r9: end of a chomp jolt -- settle the pinned body back into the
         -- slow struggle.
         if native.pin_maul and native.pin_jolt_until
@@ -6870,6 +7525,10 @@ function iris_wyrm_attack_tick()
             pcall(iris_wyrm_attack_hit, costume, active)
         end
     end
+    -- r15: the EAT runner + corpse scan live on this same combat frame path.
+    iris_wyrm_eat_tick(costume, now)
+    iris_wyrm_eat_scan(costume, now)
+    iris_wyrm_draw_dismount_hint(costume)
     if S.wyrm_atk_until and now > S.wyrm_atk_until then
         S.wyrm_atk_until = nil
         S.wyrm_attack = nil
@@ -6880,6 +7539,10 @@ function iris_wyrm_attack_tick()
         end
     end
     if S.wyrm_atk_until then return end   -- one move at a time
+    -- r22 (Aurora: "don't eat when you press RT to mount up"): RT both
+    -- mounts and mauls/eats -- swallow every combat button for the first
+    -- beat after seating.
+    if now - (tonumber(S.seat_started) or 0.0) < 1.2 then return end
     if costume.wyrm_chassis == "ch223" then
         if pressed.dodge_left then
             -- Native action names are truthful; the atlas/AxisX fallback is
@@ -6892,6 +7555,30 @@ function iris_wyrm_attack_tick()
                 costume.native_controller_live and 1 or -1)
             return
         elseif pressed.maul then
+            -- r17: RT priority -- a DOWNED LIVING target always wins (the
+            -- maul); the meal fires only when no such target is in reach,
+            -- combat or not.
+            local maul_target = nil
+            pcall(function()
+                local t = iris_wyrm_attack_target(costume, {
+                    slot = "maul", range = 7.5, width = 6.0,
+                    aim_deg = 180.0, vertical = 12.0,
+                })
+                if valid(t) then
+                    local hp = nil
+                    pcall(function()
+                        local hc = t:call("get_HitController")
+                        hp = hc and tonumber(hc:call("get_Hp"))
+                    end)
+                    local down = iris_wyrm_native_target_down_state(t)
+                    if down == true and hp and hp > 0.5 then
+                        maul_target = t
+                    end
+                end
+            end)
+            if not maul_target and S.wyrm_eat_ready and S.wyrm_eat_corpse then
+                if iris_wyrm_eat_start(costume, now) then return end
+            end
             iris_wyrm_native_bite_start(costume, now, {
                 label = "contextual maul",
                 slot = "maul",
@@ -9890,8 +10577,16 @@ local function costume_tick()
                             local mdx = mtp.x - mmouth.x
                             local mdz = mtp.z - mmouth.z
                             local mdl = math.sqrt(mdx * mdx + mdz * mdz)
-                            if mdl > 0.12 then
-                                local wanted = math.min(mdl, 6.5 * dt)
+                            -- r22: fast approach during acquire, slow SETTLE
+                            -- creep during the maul itself (the clips swing
+                            -- the mouth joint -- chasing it at full speed
+                            -- would wobble the whole wolf).
+                            local mauling = lease.phase == "maul"
+                            local stop = mauling and 0.35 or 0.12
+                            local spd = mauling and 2.2 or 6.5
+                            if mdl > stop then
+                                local wanted = math.min(mdl - stop * 0.5,
+                                    spd * dt)
                                 local dirx, dirz = mdx / mdl, mdz / mdl
                                 local clear = iris_wyrm_clear_travel(costume,
                                     wanted, dirx, dirz)
@@ -12150,6 +12845,11 @@ local function mountcam_apply()
             kick_cam = attack_cam
         end
     end
+    -- r24: the meal gets the same look-at treatment as an attack.
+    if not kick_cam then
+        local eat_cam = S.wyrm_eat
+        if eat_cam and eat_cam.cam_yaw then kick_cam = eat_cam end
+    end
     local kick_release_mix = nil
     -- RIGHT-STICK ORBIT (Aurora 07-23): we own the camera, so native RS
     -- look is dead — read the stick ourselves. Yaw orbits around the
@@ -13059,7 +13759,7 @@ local function seat_mount()
     S.seat_pose_report = pose_report
     S.status = "MOUNTED [" .. pose_report .. "] - "
         .. ((S.costume.passenger_only and "L3 to dismount")
-            or (S.costume.wyrm_kind and "E/L3 to dismount")
+            or (S.costume.wyrm_kind and "Q/L3 to dismount")
             or "E/RT to dismount")
 end
 
@@ -13753,6 +14453,16 @@ local function horse_ride_hud_tick()
         if type(blessing_button) == "table" then
             blessing_button.device = RIDE_HUD_INPUT_DEVICE
         end
+        -- r24: publish device + cluster visibility for the fake dismount
+        -- line -- it must fade exactly when the vanilla cluster does.
+        -- READING PlayState is safe (only SETTING it is the mount CTD).
+        S.wyrm_hud_device = RIDE_HUD_INPUT_DEVICE
+        pcall(function()
+            local obj = HUD_GETOBJ:call(root, RIDE_HUD_LABELS[1][1])
+            local ps = obj and tostring(obj:call("get_PlayState")) or ""
+            S.wyrm_hud_cluster_hidden =
+                ps:find("DISABLE", 1, true) ~= nil
+        end)
         for _, row in ipairs(RIDE_HUD_LABELS) do
             -- ⛔⛔⛔ NEVER set_Message("") -- THE MOUNT CTD (2026-08-09, found by Aurora's
             -- own observation: "it works fine on the griffin and we use it for the
@@ -13769,7 +14479,11 @@ local function horse_ride_hud_tick()
             -- 08-12: dynamic Y slot -- "Blessing" only while the mount is a
             -- unicorn (never written otherwise, so the empty-write law holds).
             if row.dynamic == "rt" then
-                txt = costume.wyrm_kind and "Maul" or "Dismount"
+                -- r15: corpse near + out of combat = the RT slot reads Eat.
+                txt = costume.wyrm_kind
+                    and (S.wyrm_eat and "Eating"
+                        or (S.wyrm_eat_ready and "Eat" or "Maul"))
+                    or "Dismount"
             elseif row.dynamic == "dodge_right" then
                 txt = costume.wyrm_kind and "Dodge Right" or ""
             elseif row.dynamic == "dodge_left" then
@@ -15946,7 +16660,7 @@ re.on_frame(function()
                 S.seat_pose_report = seat_play_ride_pose("calm")
                 S.status = "MOUNTED [" .. S.seat_pose_report
                     .. (S.costume.wyrm_kind
-                        and "] — E/L3 to dismount"
+                        and "] — Q/L3 to dismount"
                         or "] — E/RT to dismount")
             end
             -- GAIT-AWARE pose switch (calm <-> active) with hysteresis
@@ -16127,10 +16841,11 @@ re.on_frame(function()
                     pressed = l3_pressed()
                 end
             elseif S.costume and S.costume.wyrm_kind then
-                -- RT belongs to the contextual maul while riding ch223.  Keep E
-                -- for keyboard and move the controller dismount to L3, matching
-                -- the griffin's established mounted control language.
-                pressed = keyboard_grab_pressed() or l3_pressed()
+                -- RT belongs to the contextual maul while riding ch223, and
+                -- r22: E now belongs to the maul too (the vanilla KB panel
+                -- wears E on that slot). Keyboard dismount = Q; controller
+                -- dismount = L3 (the griffin's established language).
+                pressed = iris_kb(0x51) or l3_pressed()
             else
                 pressed = grab_pressed()
             end
@@ -16999,8 +17714,9 @@ re.on_draw_ui(function()
         end
         imgui.same_line()
         if imgui.button("release##wyrm_rel") then iris_wyrm_mount_stop() end
-        imgui.text("  X/T Bite combo   Y/G Pounce   LT/H Howl or Roar")
-        imgui.text("  LB/Z Dodge left   RB/C Dodge right   RT/R Maul downed target")
+        imgui.text("  X/LMB Bite combo   Y/V Pounce   LT/X-key Howl or Roar")
+        imgui.text("  LB/Ctrl Dodge left   RB/RMB Dodge right   RT/E Maul or Eat")
+        imgui.text("  L3/Q Dismount   (legacy keys T/G/H/Z/C/R still work)")
         imgui.text("  Dismount: L3 (controller) or E (keyboard)")
         if S.wyrm_native_status then
             imgui.text("  " .. tostring(S.wyrm_native_status))
@@ -17079,6 +17795,28 @@ re.on_draw_ui(function()
                 imgui.text("  maul pain cry: "
                     .. tostring(S.wyrm_maul_voice_status))
             end
+            local wec, wev = imgui.checkbox(
+                "RT eats corpses out of combat##wyrm_eat_enabled",
+                C.wyrm_eat_enabled ~= false)
+            if wec then C.wyrm_eat_enabled = wev; save_config() end
+            -- r24: dismount hint placement (Aurora asked for the sliders)
+            local dhx, dhxv = imgui.slider_float(
+                "dismount hint X offset##wyrmdhx",
+                tonumber(C.wyrm_hud_dismount_dx) or 208.0, 40.0, 520.0)
+            if dhx then C.wyrm_hud_dismount_dx = dhxv; save_config() end
+            local dhy, dhyv = imgui.slider_float(
+                "dismount hint Y offset##wyrmdhy",
+                tonumber(C.wyrm_hud_dismount_dy) or 40.0, 10.0, 240.0)
+            if dhy then C.wyrm_hud_dismount_dy = dhyv; save_config() end
+            local dhp, dhpv = imgui.slider_float(
+                "dismount hint size##wyrmdhp",
+                tonumber(C.wyrm_hud_dismount_px) or 16.0, 10.0, 28.0)
+            if dhp then C.wyrm_hud_dismount_px = dhpv; save_config() end
+            imgui.text("  Stand by a fresh kill: RT = Eat. Downed LIVING enemies")
+            imgui.text("  always take RT priority; the kill becomes fading remains.")
+            if S.wyrm_eat_scan_status then
+                imgui.text("  eat scan: " .. tostring(S.wyrm_eat_scan_status))
+            end
             if S.wyrm_last_press then
                 imgui.text("  last combat press: "
                     .. tostring(S.wyrm_last_press))
@@ -17093,6 +17831,49 @@ re.on_draw_ui(function()
                 "RT maul = PINNED maul##wyrm_native_maul",
                 C.wyrm_native_maul ~= false)
             if wnm then C.wyrm_native_maul = wnmv; save_config() end
+            -- r18: maul-opening growl picker (sound-browser style: step
+            -- through the wolf's own VO triggers until it sounds right).
+            do
+                local gid = tonumber(C.wyrm_maul_growl_trigger) or 0
+                imgui.text("  maul voice: " .. (gid > 0
+                    and ("trigger " .. tostring(gid))
+                    or "clip default (the whimper)"))
+                local pcost = S.costume
+                if pcost and valid(pcost.horse_go) then
+                    if imgui.button("test next wolf vocal##wyrmgrowl") then
+                        pcall(function()
+                            local capi = rawget(_G, "__iris_wild_cats_api")
+                            local ids = capi and capi.wolf_vocal_ids
+                                and capi.wolf_vocal_ids(pcost.horse_go)
+                            if ids and #ids > 0 then
+                                S.wyrm_growl_idx =
+                                    ((tonumber(S.wyrm_growl_idx) or 0)
+                                        % #ids) + 1
+                                S.wyrm_growl_last = ids[S.wyrm_growl_idx]
+                                S.wyrm_growl_count = #ids
+                                capi.play_trigger_on(pcost.horse_go,
+                                    S.wyrm_growl_last)
+                            end
+                        end)
+                    end
+                    if S.wyrm_growl_last then
+                        imgui.same_line()
+                        imgui.text(string.format("heard %d (%d/%d)",
+                            tonumber(S.wyrm_growl_last) or 0,
+                            tonumber(S.wyrm_growl_idx) or 0,
+                            tonumber(S.wyrm_growl_count) or 0))
+                        if imgui.button("use as maul growl##wyrmgrowluse") then
+                            C.wyrm_maul_growl_trigger = S.wyrm_growl_last
+                            save_config()
+                        end
+                        imgui.same_line()
+                        if imgui.button("clear##wyrmgrowlclear") then
+                            C.wyrm_maul_growl_trigger = 0
+                            save_config()
+                        end
+                    end
+                end
+            end
             imgui.text("  Prey held in its native down pose; authored maul choreography;")
             imgui.text("  damage + blood per chomp. Uncheck for the old scripted maul.")
             local wmcd, wmcdv = imgui.slider_float(

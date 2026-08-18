@@ -127,7 +127,9 @@ do
     -- every forge_house_*.json = one buildable house (generated offline from scans/captures);
     -- specs merge (deduped by id), placements get their own BUILD button
     local files = {
-        { file = "IRIS/forge_house_farm_complete.json", label = "*** FARMHOUSE COMPLETE ***" },
+        -- ⭐ 08-18 hkey = the PLOT-KIT contract: a stable key a plot record can name
+        -- (rec.house / _G.IrisPlot.hkey) so plots can build houses other than the farmhouse.
+        { file = "IRIS/forge_house_farm_complete.json", label = "*** FARMHOUSE COMPLETE ***", hkey = "farm_complete" },
         -- Aurora's 2026-07-23 KIT DIFF capture at the REAL Vernworth farmhouse: all 47 pieces incl
         -- the sm50 annex timberwork the old kit never had. Test via its BUILD button; once
         -- approved it becomes the plot default (swap the "complete" preference).
@@ -147,8 +149,8 @@ do
             ob = { key = "field_shelter", name = "Field Shelter", timber = 15, stone = 0 } },
         -- Aurora's 2026-08-12 CITY expedition (Vernworth + Battahl + Eini re-capture with
         -- the DepthOcc layer). v1 selections - iterate on test-build screenshots.
-        { file = "IRIS/forge_house_vernworth_mansion.json", label = "CITY: Vernworth Mansion (231 pieces - heavy build)" },
-        { file = "IRIS/forge_house_einis_v2.json", label = "CITY: Eini's Home v2 (282 pieces - has the missing sections)" },
+        { file = "IRIS/forge_house_vernworth_mansion.json", label = "CITY: Vernworth Mansion (231 pieces - heavy build)", hkey = "vernworth_mansion" },
+        { file = "IRIS/forge_house_einis_v2.json", label = "CITY: Eini's Home v2 (282 pieces - has the missing sections)", hkey = "einis_v2" },
         { file = "IRIS/forge_house_flame_barracks.json", label = "CITY: Flamebearer Barracks (Battahl stone)" },
         { file = "IRIS/forge_house_flame_conference.json", label = "CITY: Flamebearer Conference Hall (Battahl stone)" },
     }
@@ -164,6 +166,7 @@ do
                 end
             end
             local row = { key = h.name or hf.file,
+                          hkey = hf.hkey,   -- stable plot-kit key (nil = not plot-eligible)
                           label = hf.label .. " (" .. #h.placements .. " pieces)",
                           placements = h.placements }
             if type(hf.ob) == "table" then
@@ -549,6 +552,14 @@ end
 -- Which house to drop on the plot: prefer the full "FARMHOUSE COMPLETE" (36 pieces), fall back to
 -- the 12-piece PLACEMENTS. (The 12-piece set is the old/broken-looking one.)
 local function _plot_house()
+    -- ⭐ 08-18: the plot bridge can name its kit (rec.house -> _G.IrisPlot.hkey). Unknown or
+    -- absent key falls back to the historic farmhouse default, so old plots build unchanged.
+    local want = _G.IrisPlot and _G.IrisPlot.hkey
+    if want and want ~= "" then
+        for _, h in ipairs(HOUSES) do
+            if h.hkey == want then return h end
+        end
+    end
     for _, h in ipairs(HOUSES) do
         if tostring(h.label or ""):lower():find("complete") then return h end
     end
@@ -2191,6 +2202,25 @@ re.on_application_entry("UpdateBehavior", function()
 end)
 
 -- ── bridge for IrisHomestead (single-menu authoring): drive the forge from one place ─────
+-- ⭐ 08-18 shared: a kit's ground footprint AABB from its own placement offsets (+1m margin).
+-- Used by kits() (Build tab) and houses() (plot-kit scouting/marker) - one truth for extent.
+local function _kit_footprint(placements)
+    local mnx, mxx, mnz, mxz, mxy = 0.0, 0.0, 0.0, 0.0, 3.0
+    for _, p in ipairs(placements or {}) do
+        local o = p.off or {}
+        local ox = tonumber(o.x) or 0.0
+        local oy = tonumber(o.y) or 0.0
+        local oz = tonumber(o.z) or 0.0
+        if ox < mnx then mnx = ox end
+        if ox > mxx then mxx = ox end
+        if oz < mnz then mnz = oz end
+        if oz > mxz then mxz = oz end
+        if oy + 3.0 > mxy then mxy = oy + 3.0 end
+    end
+    return { min = { x = mnx - 1.0, y = 0.0, z = mnz - 1.0 },
+             max = { x = mxx + 1.0, y = mxy, z = mxz + 1.0 } }
+end
+
 _G.IrisForge = {
     forge_all     = function() _forge_all() end,
     -- RE-ADOPT a house that survived a script reset (pieces are named IrisHouse_<id> at build):
@@ -2362,22 +2392,21 @@ _G.IrisForge = {
         local t = {}
         for _, h in ipairs(HOUSES) do
             if type(h.ob) == "table" and h.placements then
-                local mnx, mxx, mnz, mxz, mxy = 0.0, 0.0, 0.0, 0.0, 3.0
-                for _, p in ipairs(h.placements) do
-                    local o = p.off or {}
-                    local ox = tonumber(o.x) or 0.0
-                    local oy = tonumber(o.y) or 0.0
-                    local oz = tonumber(o.z) or 0.0
-                    if ox < mnx then mnx = ox end
-                    if ox > mxx then mxx = ox end
-                    if oz < mnz then mnz = oz end
-                    if oz > mxz then mxz = oz end
-                    if oy + 3.0 > mxy then mxy = oy + 3.0 end
-                end
                 t[#t + 1] = { key = h.ob.key, label = h.ob.label,
                     timber = h.ob.timber, stone = h.ob.stone, pieces = #h.placements,
-                    footprint_aabb = { min = { x = mnx - 1.0, y = 0.0, z = mnz - 1.0 },
-                                       max = { x = mxx + 1.0, y = mxy, z = mxz + 1.0 } } }
+                    footprint_aabb = _kit_footprint(h.placements) }
+            end
+        end
+        return t
+    end,
+    -- ⭐ 08-18 plot-eligible HOUSE kits (hkey rows): the homestead's kit picker + the
+    -- scout-mode footprint box both read this. Same footprint math as kits().
+    houses = function()
+        local t = {}
+        for _, h in ipairs(HOUSES) do
+            if h.hkey and h.placements then
+                t[#t + 1] = { hkey = h.hkey, label = h.label, pieces = #h.placements,
+                    footprint_aabb = _kit_footprint(h.placements) }
             end
         end
         return t

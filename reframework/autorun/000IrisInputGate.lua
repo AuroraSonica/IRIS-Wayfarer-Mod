@@ -37,8 +37,30 @@ function iris_kb_raw(vk)
     return down
 end
 
+-- 08-18 (Aurora: map open -> pad buttons still steered the GRIFFIN -> loop
+-- the loop on A -> CTD after unpause): the game's own PAUSING GUIs (pause
+-- menu, map, status screens...) must block gameplay input too. Vanilla
+-- claims the pad for the menu but our mods read the raw device underneath.
+-- app.GuiManager:isPausedGUI() is the proven lever (aaaNickCore polls the
+-- same one). Cached 0.1s -- this gate is asked dozens of times a frame.
+local iris_pause_cache = { at = 0.0, paused = false }
+function iris_game_paused()
+    local now = os.clock()
+    if now - iris_pause_cache.at > 0.1 then
+        iris_pause_cache.at = now
+        local paused = false
+        pcall(function()
+            local gm = sdk.get_managed_singleton("app.GuiManager")
+            paused = gm ~= nil and gm:call("isPausedGUI") == true
+        end)
+        iris_pause_cache.paused = paused
+    end
+    return iris_pause_cache.paused
+end
+
 function iris_input_blocked()
     if _G.IrisInputGateOff == true then return false end
+    if iris_game_paused() then return true end
     if _G.RiftSpeak_PromptOpen == true then return true end
     if _G.RiftSpeak_ExternalTyping == true then return true end
     if _G.RiftSpeakPromptOpen == true then return true end   -- legacy spelling: three IRIS files shipped this one

@@ -12260,6 +12260,13 @@ local function gamepad_button_value(name)
 end
 
 local function raw_gamepad_button_down(names)
+    -- 08-18 (Aurora: map open -> A still fired the loop-the-loop -> CTD on
+    -- unpause): menus own the pad. The shared gate (000IrisInputGate) now
+    -- also covers the game's own pausing GUIs.
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        S.last_raw_button_mask = 0
+        return false
+    end
     local dev = raw_gamepad_device()
     S.last_raw_button_mask = 0
     if not dev then return false end
@@ -12280,6 +12287,12 @@ local function raw_gamepad_button_down(names)
 end
 
 function raw_gamepad_mask_down(bind_mask)
+    -- 08-18: same menu gate as raw_gamepad_button_down (this reads the
+    -- cached mask, which that function zeroes while blocked -- the explicit
+    -- check makes the block hold even if call order changes).
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        return false
+    end
     local mask = math.floor(tonumber(S.last_raw_button_mask) or 0)
     local bind = math.floor(tonumber(bind_mask) or 0)
     if bind <= 0 or mask <= 0 then return false end
@@ -12308,6 +12321,12 @@ local function vec_axis(v)
 end
 
 local function read_raw_gamepad_axis()
+    -- 08-18: the map cursor and flight steering share the stick -- no
+    -- steering input while a pausing GUI or the overlay is up.
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        S.last_raw_axis_method = "(ui blocked)"
+        return nil, nil
+    end
     local dev = raw_gamepad_device()
     S.last_raw_axis_method = "(none)"
     local methods = {

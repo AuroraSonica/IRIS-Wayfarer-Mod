@@ -58,6 +58,11 @@ if ($lion) { Copy-Into $lion.FullName $pkg }
 # ── 4. BUILD TOOLING + REFERENCE DATA ───────────────────────────────────────────
 Copy-Into "$live\rs_tools\iris_pak\*.py"  (Join-Path $repo "tools\iris_pak")
 Copy-Into "$live\rs_tools\iris_pak\*.ps1" (Join-Path $repo "tools\iris_pak")
+# housecat build/patch/forensic scripts — CODE ONLY. ⛔ The W3 cat zips/motlists/
+# meshes are CDPR-derived, PRIVATE USE, and must NEVER enter this public repo.
+Copy-Into "$live\rs_tools\rs_build_w3_housecat_*.py" (Join-Path $repo "tools\housecat")
+Copy-Into "$live\rs_tools\rs_patch_housecat_*.py"    (Join-Path $repo "tools\housecat")
+Copy-Into "$live\rs_tools\rs_gate_w3_housecat_*.py"  (Join-Path $repo "tools\housecat")
 Copy-Into "$live\Animal Atlas\*.json"     (Join-Path $repo "tools\AnimalAtlas")   # creature motion atlases — NEVER guess a clip id
 
 # ── 5. PROFILE BACKUP (Aurora's save-state: the stable = the SOULS, the home) ───
