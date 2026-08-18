@@ -98,7 +98,37 @@ local C = {
     enabled = true,
     horse_chance = 0.25,
     horse_scale = 1.75,
-    horse_speed = 1.2,
+    horse_speed = 1.0,
+    -- ⭐ 08-18 per-gait cadence multipliers for the W3 bank (Aurora: "the new
+    -- horse animations are a little too fast"). 1.0 = authored pace. On WILD
+    -- horses these scale legs AND travel together (root motion); on a RIDDEN
+    -- horse the same numbers reach the shell through the tick re-assert.
+    horse_pace_walk = 1.0,
+    horse_pace_trot = 1.0,
+    horse_pace_canter = 1.0,
+    horse_pace_gallop = 1.0,
+    -- ⭐ 08-18 work-order: the W3 v2.1 FULL bank (ids 1-128). ⛔ Reviewer
+    -- blocker #4: on an install still serving the old baseline 901 motlist
+    -- (ids 1-5), firing high ids is the wrong-clip-id crash class. This flag
+    -- gates EVERY id > 6 the mod fires (transitions, actions, graze, jumps);
+    -- off = pre-work-order behavior everywhere. Default on: Aurora's install
+    -- field-verified the full bank (audition tree + canter pilot).
+    w3_full_bank = true,
+    w3_graze_enabled = true,    -- eat trio 19/20/21/22 over the doe graze
+    w3_ritual_enabled = true,   -- blessing = eat-bow 19 -> rear 18 (else 903)
+    -- Wild-path naturalism (Aurora 08-18: "part of the beauty of seeing a
+    -- wild horse in the environment"). ⚠ These W3 clips are exported with
+    -- STATIONARY root policy, so wild bodies (whose travel IS clip root
+    -- motion) pause while one plays. Walk start/stop + standing idle read
+    -- fine stationary; the FLEE start/stop stays on today's travelling trot
+    -- until the transition clips are re-exported with calibrated root motion.
+    w3_wild_idle = true,        -- doe idle -> W3 standing_idle01 (901:4)
+    w3_wild_transitions = true, -- walk boundaries -> walk_start/walk_stop
+    -- 08-18: DD2 foot-IK re-plants hooves under W3 pose clips (eat/idle) and
+    -- bends the legs strangely — release it while those play, restore on
+    -- every gait/native clip (the ox-gait recipe, per-state)
+    w3_ik_off_actions = true,
+    bless_strike_frac = 0.45,   -- strike point as fraction of the rear clip
     horse_hp = 1000,
     -- ⛔ CRASH SUSPECTS (2026-08-08): both of these register a CUSTOM MOTLIST as a
     -- dynamic motion bank on a live converted horse, and the 08-08 crashes landed
@@ -328,7 +358,16 @@ local function load_config()
     end
     -- Migration 07-22: horses tank like oxen, stride a touch faster.
     if (C.horse_hp or 0) < 1000 then C.horse_hp = 1000 end
-    if C.horse_speed < 1.2 then C.horse_speed = 1.2 end
+    -- ⭐ 08-18 W3-bank migration: the old `< 1.2 -> 1.2` stride FLOOR was
+    -- doe-era tuning (doe clips read sluggish at 1.0). The W3 clips are
+    -- authored at real horse cadence, so that floor force-played every gait
+    -- 20%+ fast — likely the whole "animations feel too fast" report.
+    -- One-shot saved values back to neutral, then sanity-clamp only.
+    if not C.w3_pace_migrated then
+        C.w3_pace_migrated = true
+        if (C.horse_speed or 1.0) > 1.0 then C.horse_speed = 1.0 end
+    end
+    C.horse_speed = math.max(0.5, math.min(1.6, C.horse_speed or 1.0))
 end
 
 local function save_config()
@@ -2677,7 +2716,7 @@ function RP.register(state, motion)
     return ok
 end
 
-function RP.play(game_object, motion_id, label, speed)
+function RP.play(game_object, motion_id, label, speed, bank)
     if not valid(game_object) then S.status = "ritual pack: no live horse"; return false end
     local character, motion, layer = character_motion(game_object)
     if not (valid(motion) and valid(layer)) then
@@ -2688,10 +2727,12 @@ function RP.play(game_object, motion_id, label, speed)
         S.status = "ritual pack: " .. tostring(RP.status)
         return false
     end
+    -- 08-18: optional bank override so the W3 choreography (bank 901, which
+    -- the per-horse tick registers on every live horse) rides the same path
     local ok = pcall(function()
         layer:call(
             "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
-            RP.bank, motion_id, 0.0, 4.0, 1, 1)
+            bank or RP.bank, motion_id, 0.0, 4.0, 1, 1)
         pcall(function() layer:call("set_Speed", speed or 1.0) end)
     end)
     S.status = ok and ("ritual pack: playing " .. tostring(label))
@@ -2734,13 +2775,48 @@ local function iv_speed_mult(state)
     return mult
 end
 
+-- ⭐ 08-18 W3 speed classes (work-order): which bank-901 ids the tick
+-- re-assert may own, and what to write there. Gait names = the full formula
+-- (horse_speed x SPD gene x that gait's pace); "pin" = hold exactly 1.0
+-- (idles + graze: protects authored timing from doe-AI speed resets without
+-- gait scaling — reviewer #2/#12/#19). Ids ABSENT here (kick 17, rear 18,
+-- throw 44, auditions) belong to whoever issued them; the re-assert must
+-- never touch their speed. Transition/jump ids are keyed by TARGET gait.
+local W3_SPEED_CLASS = {
+    [1] = "walk", [2] = "trot", [3] = "gallop", [5] = "canter",
+    [4] = "pin", [6] = "pin",
+    [106] = "walk",              -- reverse gear (walk_back)
+    [7] = "pin", [8] = "pin",    -- turn-in-place (authored timing)
+    [19] = "pin", [20] = "pin", [21] = "pin", [22] = "pin",
+    [111] = "walk", [114] = "walk", [92] = "walk", [74] = "walk",
+    [80] = "trot", [83] = "trot", [123] = "trot", [68] = "trot",
+    [47] = "canter", [50] = "canter", [62] = "canter",
+    [56] = "gallop", [59] = "gallop", [86] = "gallop", [53] = "gallop",
+    [117] = "gallop",
+    [30] = "trot", [32] = "trot", [35] = "trot",
+    [36] = "canter", [38] = "canter", [41] = "canter",
+    [23] = "gallop", [25] = "gallop", [28] = "gallop",
+}
+local function gait_pace(motion_id)
+    local class = W3_SPEED_CLASS[motion_id or -1]
+    if not class or class == "pin" then return 1.0 end
+    local v = tonumber(C["horse_pace_" .. class])
+    if not v then return 1.0 end
+    return math.max(0.25, math.min(2.0, v))
+end
+
 local function issue_custom(state, motion_id, interpolation)
     if not (state and register_bank(state, state.motion) and valid(state.layer)) then
         return false
     end
-    log(string.format(
-        "locomotion boundary: requesting bank %d motion %d",
-        CUSTOM_BANK, motion_id))
+    -- log dedup (08-18): the idle remap makes bank-0 id 0 the most common
+    -- boundary; only log when the requested id actually changes
+    if state.last_issued_id ~= motion_id then
+        state.last_issued_id = motion_id
+        log(string.format(
+            "locomotion boundary: requesting bank %d motion %d",
+            CUSTOM_BANK, motion_id))
+    end
     local ok = pcall(function()
         state.layer:call(
             "changeMotion(System.UInt32, System.UInt32, System.Single, System.Single, via.motion.InterpolationMode, via.motion.InterpolationCurve)",
@@ -2748,10 +2824,48 @@ local function issue_custom(state, motion_id, interpolation)
         -- Movement comes from clip root motion, so playback speed IS travel
         -- speed; the frame-synced hoofbeats track it automatically.
         pcall(function()
-            state.layer:call("set_Speed", C.horse_speed * iv_speed_mult(state))
+            state.layer:call("set_Speed",
+                C.horse_speed * iv_speed_mult(state) * gait_pace(motion_id))
         end)
     end)
     return ok
+end
+
+-- ⭐ 08-18 foot-IK toggle per clip class (Aurora's cocked-hind-leg idle):
+-- the engine's leg-IK/ground solvers re-plant hooves wherever the DOE's
+-- planted spots were — W3 pose clips put them elsewhere and the legs bend
+-- strangely. Off while a "pin"-class clip (eat/idle) plays, back on for
+-- gaits and native clips so terrain adaptation survives.
+local function wild_ik_apply(state, motion_id)
+    if C.w3_ik_off_actions == false then return end
+    local class = W3_SPEED_CLASS[motion_id or -1]
+    local want_off = (class == "pin")
+    if want_off == (state.ik_off == true) then return end
+    state.ik_off = want_off
+    local go = state.game_object
+    if not valid(go) then return end
+    local touched = 0
+    pcall(function()
+        local comps = go:call("get_Components")
+        local n = comps and comps:call("get_Count") or 0
+        for i = 0, n - 1 do
+            local comp = comps:call("get_Item", i)
+            local tname = ""
+            pcall(function()
+                tname = comp:get_type_definition():get_full_name()
+            end)
+            if tname:find("[Ii]k") or tname:find("GroundFixer")
+                or tname:find("SlopeBody") then
+                if pcall(function()
+                    comp:call("set_Enabled", not want_off)
+                end) then
+                    touched = touched + 1
+                end
+            end
+        end
+    end)
+    log(string.format("wild horse leg-IK %s (%d comps)",
+        want_off and "OFF (pose clip)" or "on", touched))
 end
 
 local function maintain_locomotion(state)
@@ -2772,10 +2886,27 @@ local function maintain_locomotion(state)
     -- this, the FSM re-issues bank-0 gaits mid-ritual and AUTO_MAP stomps the
     -- ritual clip (the exact cause of the test-button drift).
     if RP.blessing and RP.blessing.addr == state.key then return end
+    -- ⛔ DOWNED BENCH GUARD (08-18 reviewer #6): a downed companion passes
+    -- doe_is_alive (downed = ALIVE AT 1 HP) but its body is PINNED lying
+    -- down; any remap here would visually stand the corpse-pose up.
+    if iris_body_is_downed(state.game_object) then return end
     local live = state.live
     if not live then return end
     if live.bank == 0 then
         local replacement = AUTO_MAP[live.id]
+        if not replacement and C.w3_full_bank then
+            -- 08-18 work-order wild-path additions, individually gated.
+            -- ⚠ stationary-root clips: fine for idle and walk boundaries,
+            -- NEVER for the flee start/stop (reviewer #1 — a travelling
+            -- state playing a stationary clip parks the horse mid-flee).
+            if live.id == 0 and C.w3_wild_idle ~= false then
+                replacement = {id = 4, name = "W3 standing idle"}
+            elseif live.id == 106 and C.w3_wild_transitions ~= false then
+                replacement = {id = 111, name = "W3 walk start"}
+            elseif live.id == 112 and C.w3_wild_transitions ~= false then
+                replacement = {id = 114, name = "W3 walk stop"}
+            end
+        end
         if replacement then
             if issue_custom(state, replacement.id, 4.0) then
                 if state.auto_name ~= replacement.name then
@@ -2784,12 +2915,49 @@ local function maintain_locomotion(state)
                 end
                 state.auto_name = replacement.name
                 state.live = read_layer(state.layer) or state.live
+                wild_ik_apply(state, replacement.id)
             end
         else
             state.auto_name = nil
+            wild_ik_apply(state, nil)
         end
-    elseif live.bank ~= CUSTOM_BANK then
+    elseif live.bank == 60 and C.w3_full_bank
+        and C.w3_graze_enabled ~= false then
+        -- Graze -> W3 eat trio. Doe liv ids ATLAS-VERIFIED 08-11 (memory):
+        -- liv_eat_start 0 / liv_eat_loop 1 / liv_eat_end 9. Other liv states
+        -- (sleep, drink, ruminate) deliberately stay native.
+        local eat = (live.id == 0 and 19)
+            or (live.id == 1 and (math.random() < 0.5 and 20 or 21))
+            or (live.id == 9 and 22) or nil
+        if eat then
+            if issue_custom(state, eat, 4.0) then
+                -- eating_start is non-loop: chain into a loop at end-frame
+                state.eat_chain = (eat == 19)
+                    and (math.random() < 0.5 and 20 or 21) or nil
+                state.auto_name = "W3 eat " .. tostring(eat)
+                state.live = read_layer(state.layer) or state.live
+                wild_ik_apply(state, eat)
+            end
+        else
+            state.auto_name = nil
+            wild_ik_apply(state, nil)
+        end
+    elseif live.bank == CUSTOM_BANK then
+        -- eat start -> loop chain (end-frame re-issue, the ox-tick pattern;
+        -- window is 6 frames so a 20 Hz tick cannot slip past it)
+        if state.eat_chain and live.id == 19
+            and live.frame and live.end_frame and live.end_frame > 2
+            and live.frame >= live.end_frame - 6 then
+            local chain = state.eat_chain
+            state.eat_chain = nil
+            if issue_custom(state, chain, 0.0) then
+                state.auto_name = "W3 eat loop"
+                state.live = read_layer(state.layer) or state.live
+            end
+        end
+    else
         state.auto_name = nil
+        wild_ik_apply(state, nil)
     end
 end
 
@@ -3424,6 +3592,15 @@ local GAIT_BEATS = {
     [1] = {category = "walk", beats = {0.05, 0.30, 0.55, 0.80}},
     [2] = {category = "trot", beats = {0.10, 0.60}},
     [3] = {category = "gallop", beats = {0.05, 0.17, 0.29}},
+    -- 08-18: canter is a real 3-beat gait; gallop hoof set fits its tempo
+    [5] = {category = "gallop", beats = {0.08, 0.20, 0.32}},
+    -- 08-18 round 2 (Aurora: "moving backwards doesn't have any clop
+    -- sounds"): reverse + turn-in-place step too. `always` bypasses the
+    -- ground-speed gate — a turning body barely translates but the feet
+    -- genuinely lift and plant.
+    [106] = {category = "walk", beats = {0.05, 0.30, 0.55, 0.80}},
+    [7] = {category = "walk", beats = {0.15, 0.65}, always = true},
+    [8] = {category = "walk", beats = {0.15, 0.65}, always = true},
 }
 
 local function update_cadence(state)
@@ -3440,7 +3617,7 @@ local function update_cadence(state)
         state.cadence_phase = nil
         return
     end
-    if (state.smoothed_speed or 0) < 0.3 then
+    if (state.smoothed_speed or 0) < 0.3 and not gait.always then
         state.cadence_phase = nil
         return
     end
@@ -3799,9 +3976,40 @@ local function update_horse(record, now)
     maintain_locomotion(state)
     state.live = read_layer(layer) or state.live
     -- The doe AI likes resetting layer speed; re-assert ours while a custom
-    -- clip is playing.
+    -- clip is playing. ⭐ 08-18: this line is the SINGLE speed owner for both
+    -- wild AND ridden horses (the rodeo issues gait clips but never touches
+    -- layer speed for horse-kind — only wyrms have their own pace block), so
+    -- the full formula lives here: global speed x SPD gene x per-gait cadence.
+    -- The old bare `C.horse_speed` write was stomping the SPD gene every tick
+    -- and force-feeding ridden mounts the doe-era 1.2 floor.
     if state.live and state.live.bank == CUSTOM_BANK then
-        pcall(function() state.layer:call("set_Speed", C.horse_speed) end)
+        -- ⭐ 08-18 PHOTO-MODE FREEZE: dynamic-bank clips ignore the engine's
+        -- pause clock — park the layer while paused, restore on resume.
+        if S.game_paused then
+            if not state.pause_parked then
+                state.pause_parked = true
+                pcall(function() state.layer:call("set_Speed", 0.0) end)
+            end
+            return
+        end
+        if state.pause_parked then
+            state.pause_parked = nil
+            -- un-park unconditionally: ids outside the class table (rear,
+            -- throw, auditions) would otherwise stay frozen forever
+            pcall(function() state.layer:call("set_Speed", 1.0) end)
+        end
+        -- ⛔ set_Speed PERSISTS across changeMotion (reviewer #2) — but only
+        -- ids in W3_SPEED_CLASS are ours to correct. Unknown ids (kick, rear,
+        -- throw, auditions) keep their owner-set speed untouched.
+        local class = W3_SPEED_CLASS[state.live.id or -1]
+        if class == "pin" then
+            pcall(function() state.layer:call("set_Speed", 1.0) end)
+        elseif class then
+            pcall(function()
+                state.layer:call("set_Speed",
+                    C.horse_speed * iv_speed_mult(state) * gait_pace(state.live.id))
+            end)
+        end
     end
     update_cadence(state)
 
@@ -4020,6 +4228,38 @@ rawset(_G, "__iris_wild_horses_api", {
     ritual_pack = function()
         if not RP.load() then return nil end
         return { bank = RP.bank, gather = 1, thrust = 2, eat = 3 }
+    end,
+    -- ⭐ 08-18 work-order: W3 v2.1 full-bank exports for the rodeo. All nil
+    -- until the 901 motlist is live AND the full-bank flag confirms v2.1
+    -- (reviewer blocker #4 -- on an old baseline motlist high ids are the
+    -- wrong-clip-id crash class; nil here = rodeo falls back everywhere).
+    w3_actions = function()
+        if not (C.w3_full_bank and valid(L.holder)) then return nil end
+        return { bank = 901, kick = 17, rear = 18, throw = 44,
+            eat_start = 19, eat_loop = 20, eat_loop2 = 21, eat_end = 22,
+            idle = 4, ritual = C.w3_ritual_enabled ~= false,
+            strike_frac = tonumber(C.bless_strike_frac) or 0.45 }
+    end,
+    w3_jump_pack = function()
+        if not (C.w3_full_bank and valid(L.holder)) then return nil end
+        return { bank = 901,
+            trot = { start = 30, loop = 32, land = 35 },
+            canter = { start = 36, loop = 38, land = 41 },
+            gallop = { start = 23, loop = 25, land = 28 } }
+    end,
+    -- ridden gait-transition clips keyed "from>to" in display-gait semantics
+    -- (0 idle / 100 walk / 200 trot / 250 canter / 300 gallop). Pairs the W3
+    -- set has no clip for (walk<->canter, trot<->canter, canter->walk) are
+    -- deliberately absent -- the rodeo falls back to its direct blend.
+    w3_trans = function()
+        if not (C.w3_full_bank and valid(L.holder)) then return nil end
+        return {
+            ["0>100"] = 111, ["0>200"] = 80, ["0>250"] = 47, ["0>300"] = 56,
+            ["100>200"] = 123, ["100>300"] = 117, ["200>300"] = 86,
+            ["250>300"] = 53, ["300>250"] = 62, ["300>200"] = 68,
+            ["200>100"] = 92, ["300>100"] = 74,
+            ["100>0"] = 114, ["200>0"] = 83, ["250>0"] = 50, ["300>0"] = 59,
+        }
     end,
     blessing_ready = function(go, key)
         return RP.blessing_ready(go, key)
@@ -4656,8 +4896,14 @@ function RP.try_cast()
         pos = pos, rot = rot,
         phase = "gather", t0 = os.clock(), struck = false,
     }
-    -- 2x: Aurora 08-11, "the initial idle should probably be half the length"
-    RP.play(go, 1, "RitualGather", 2.0)
+    if C.w3_full_bank and C.w3_ritual_enabled ~= false then
+        -- 08-18 W3 choreography: eating_start = the reverent bow-down gather
+        RP.blessing.w3 = true
+        RP.play(go, 19, "W3 GatherBow", 1.0, 901)
+    else
+        -- 2x: Aurora 08-11, "the initial idle should probably be half the length"
+        RP.play(go, 1, "RitualGather", 2.0)
+    end
     RP.blessing_status = "gather"
     log("blessing: ritual started on unicorn " .. tostring(addr))
     return true
@@ -4857,11 +5103,28 @@ function RP.blessing_tick()
             and frame >= endframe - 6) or t > 2.2
         if done then
             b.phase, b.t0, b.struck = "thrust", now, false
-            RP.play(go, 2, "RitualThrust")
+            if b.w3 then
+                RP.play(go, 18, "W3 Rear", 1.0, 901)
+            else
+                RP.play(go, 2, "RitualThrust")
+            end
             RP.blessing_status = "thrust"
         end
     elseif b.phase == "thrust" then
-        if not b.struck and ((frame and t > 0.3 and frame >= 36) or t > 0.7) then
+        -- W3 strike = the rearing apex, a fraction of the rear clip.
+        -- ⛔ endframe race (reviewer #3): for ~0.3s after changeMotion the
+        -- layer still reports the OUTGOING clip parked at its end — the
+        -- `frame < endframe - 2` term rejects exactly that shape.
+        local strike_ok
+        if b.w3 then
+            strike_ok = (frame and endframe and endframe > 4 and t > 0.3
+                and frame < endframe - 2
+                and frame >= endframe * math.max(0.1, math.min(0.9,
+                    tonumber(C.bless_strike_frac) or 0.45))) or t > 1.6
+        else
+            strike_ok = (frame and t > 0.3 and frame >= 36) or t > 0.7
+        end
+        if not b.struck and strike_ok then
             b.struck = true
             -- ⭐ 08-15: START THE COOLDOWN THE MOMENT THE EFFECT LANDS, not at cleanup.
             -- The ritual runs ~7.7 s (gather+thrust+linger) and ANY abort in that window
@@ -4884,7 +5147,7 @@ function RP.blessing_tick()
             RP.start_hot(circle)
         end
         local done = (t > 0.5 and frame and endframe and endframe > 0
-            and frame >= endframe - 4) or t > 2.5
+            and frame >= endframe - 4) or t > (b.w3 and 4.0 or 2.5)
         if done then b.phase, b.t0 = "linger", now end
     elseif b.phase == "linger" then
         if t > 3.0 then RP.blessing_cleanup(false) end
@@ -5496,8 +5759,27 @@ re.on_draw_ui(function()
     if changed then C.horse_scale = value; save_config() end
 
     changed, value = imgui.slider_float(
-        "Horse speed", C.horse_speed, 0.8, 1.5, "%.2f")
+        "Horse speed", C.horse_speed, 0.5, 1.6, "%.2f")
     if changed then C.horse_speed = value; save_config() end
+    imgui.text("1.00 = W3-authored pace. Wild travel scales with it (root motion).")
+
+    if imgui.tree_node("Gait cadence (per-gait speed)##iris_pace") then
+        imgui.text("Multiplies on top of Horse speed. 1.0 = as authored.")
+        local pace_rows = {
+            { "horse_pace_walk", "Walk cadence" },
+            { "horse_pace_trot", "Trot cadence" },
+            { "horse_pace_canter", "Canter cadence" },
+            { "horse_pace_gallop", "Gallop cadence" },
+        }
+        for _, row in ipairs(pace_rows) do
+            changed, value = imgui.slider_float(
+                row[2] .. "##" .. row[1],
+                tonumber(C[row[1]]) or 1.0, 0.5, 1.5, "%.2f")
+            if changed then C[row[1]] = value; save_config() end
+        end
+        imgui.text("Applies live within a second (tick re-assert), wild and ridden.")
+        imgui.tree_pop()
+    end
 
     -- ⭐ DEV: force the SPD gene so the difference is feelable. NOT persisted and NOT
     -- written to the stable record -- it only overrides the multiplier at the layer
@@ -5537,6 +5819,26 @@ re.on_draw_ui(function()
         if value then L.resource_attempted = false; load_motlist() end
         save_config()
     end
+
+    -- ⭐ 08-18 work-order: W3 full-bank feature gates
+    changed, value = imgui.checkbox(
+        "W3 full bank v2.1 installed (gates ALL ids above 6)", C.w3_full_bank)
+    if changed then C.w3_full_bank = value; save_config() end
+    if C.w3_full_bank then
+        changed, value = imgui.checkbox(
+            "  W3 graze (eat trio)", C.w3_graze_enabled ~= false)
+        if changed then C.w3_graze_enabled = value; save_config() end
+        changed, value = imgui.checkbox(
+            "  W3 wild standing idle", C.w3_wild_idle ~= false)
+        if changed then C.w3_wild_idle = value; save_config() end
+        changed, value = imgui.checkbox(
+            "  W3 wild walk start/stop", C.w3_wild_transitions ~= false)
+        if changed then C.w3_wild_transitions = value; save_config() end
+        changed, value = imgui.checkbox(
+            "  W3 blessing choreography (bow -> rear)",
+            C.w3_ritual_enabled ~= false)
+        if changed then C.w3_ritual_enabled = value; save_config() end
+    end
     imgui.text("W3 bank 901 baseline motions (first horse):")
     local pilot_clips = {
         {1, "Walk"}, {2, "Trot"}, {3, "Gallop"},
@@ -5559,6 +5861,48 @@ re.on_draw_ui(function()
             play_w3_bank(S.w3_full_test_id,
                 "ID " .. tostring(S.w3_full_test_id))
         end
+        -- ⭐ 08-18 per-id VERDICT (Aurora auditioned 042 and rightly found it
+        -- horrifying): the lab shows all 128 takes but only ~38 are gameplay
+        -- clips; the rest include 7 travel-amputated cinematic pieces and
+        -- ~65 turn variants with a known-broken retarget. Label them so
+        -- audition time goes where it matters.
+        do
+            local id9 = S.w3_full_test_id
+            local WIRED9 = {
+                [1]=1,[2]=1,[3]=1,[4]=1,[5]=1,[6]=1,[17]=1,[18]=1,[19]=1,
+                [20]=1,[21]=1,[22]=1,[23]=1,[25]=1,[28]=1,[30]=1,[32]=1,
+                [35]=1,[36]=1,[38]=1,[41]=1,[44]=1,[47]=1,[50]=1,[53]=1,
+                [56]=1,[59]=1,[62]=1,[68]=1,[74]=1,[80]=1,[83]=1,[86]=1,
+                [92]=1,[106]=1,[111]=1,[114]=1,[117]=1,[123]=1,
+            }
+            local AMPUTATED9 = {
+                [24]=1,[27]=1,[31]=1,[34]=1,[37]=1,[40]=1,[42]=1,
+            }
+            local TURN9 = {
+                [7]=1,[8]=1,[9]=1,[10]=1,[11]=1,[12]=1,[13]=1,[14]=1,
+                [15]=1,[16]=1,[45]=1,[46]=1,[48]=1,[49]=1,[51]=1,[52]=1,
+                [54]=1,[55]=1,[57]=1,[58]=1,[60]=1,[61]=1,[64]=1,[65]=1,
+                [66]=1,[67]=1,[70]=1,[71]=1,[72]=1,[73]=1,[75]=1,[76]=1,
+                [78]=1,[79]=1,[81]=1,[82]=1,[84]=1,[85]=1,[88]=1,[89]=1,
+                [90]=1,[91]=1,[94]=1,[95]=1,[96]=1,[97]=1,[99]=1,[100]=1,
+                [102]=1,[103]=1,[104]=1,[105]=1,[109]=1,[110]=1,[112]=1,
+                [113]=1,[115]=1,[116]=1,[118]=1,[119]=1,[121]=1,[122]=1,
+                [125]=1,[126]=1,[127]=1,[128]=1,
+            }
+            if AMPUTATED9[id9] then
+                imgui.text("VERDICT: NEVER USED IN GAME - cinematic transition"
+                    .. " piece with its travel amputated; ALWAYS looks wrong"
+                    .. " here. Do not judge the bank by it.")
+            elseif TURN9[id9] then
+                imgui.text("VERDICT: quarantined turn variant - known-broken"
+                    .. " retarget (mid-turn yaw), unwired. Skip it.")
+            elseif WIRED9[id9] then
+                imgui.text("VERDICT: GAMEPLAY CLIP - this one matters."
+                    .. " Report if it looks wrong.")
+            else
+                imgui.text("VERDICT: spare (unwired).")
+            end
+        end
         imgui.text("Curated candidates (audition only; no gameplay binding yet):")
         local full_bank_candidates = {
             {7, "Turn L"}, {8, "Turn R"}, {17, "Back Kick"},
@@ -5579,6 +5923,7 @@ re.on_draw_ui(function()
             end
         end
         imgui.text("IDs 24/27/31/34/37/40/42 are transition components, not complete jumps.")
+        imgui.text("(7/8/45/46 in the row above are quarantined turns - buttons kept for A/B only.)")
         imgui.tree_pop()
     end
     -- Bank 902 (Gallop_Jump / Jump_toIdle / Buck) as its own switch, so the two custom

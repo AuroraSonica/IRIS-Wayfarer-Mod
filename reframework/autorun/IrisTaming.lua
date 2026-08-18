@@ -10,6 +10,13 @@ local MOD = "IrisTaming"
 local HC = {
     mesh = "character/ch/iris_housecat/iris_housecat.mesh",
     mdf = "riftspeak/housecat/iris_housecat_v07.mdf2",
+    -- W3 cat clip catalogue (v8 retarget), shipped in the v0.9+ pak ONLY --
+    -- older paks do not carry these paths, hence the separate arm latch.
+    -- ⛔ The 17-take CE-synthesized container crashed the engine parser
+    -- (2026-08-18); the 3-take bisect container is the live experiment.
+    motlist = "character/ch/iris_housecat/iris_housecat_full.motlist",
+    motlist_bisect = "character/ch/iris_housecat/iris_housecat_bisect3.motlist",
+    bank_id = 904,
     prefab = "AppSystem/ch/ch299/Prefab/ch299200_A_00.pfb",
     warm_secs = 2.0,
     carry_front_joints = {
@@ -100,6 +107,9 @@ local C = {
     housecat_carry_paw_fix = true,
     housecat_carry_toe_relax = 0.85,
     housecat_carry_wrist_relax = 0.25,
+    housecat_bank_armed = false,   -- session-only crash latch: the W3 motlist exists only in the v0.9+ PAK
+    housecat_bank_use_bisect = true,  -- 3-take container; the 17-take one is a known parser CTD
+    housecat_test_clip = 2,
     oxtame_enabled = true,        -- THE PROPER GRIFFIN TAMING (Aurora's canon scene): kill an ox as the OFFERING
     oxtame_griffin_range = 800.0, -- only a wild griffin genuinely in the area can answer the ox offering
     oxtame_guaranteed_approach = true, -- after scenting the kill, FC-off terrain-following flight owns the approach instead of trusting a patrol waypoint
@@ -735,6 +745,11 @@ local S = {
     housecat_spawn_queued = false,
     housecat_rebind_at = nil,
     housecat_status = "disarmed",
+    housecat_bank_res = nil,
+    housecat_bank_holder = nil,
+    housecat_bank_pin = nil,
+    housecat_bank_key = nil,
+    housecat_bank_status = "bank disarmed",
 }
 -- ⭐ published BY REFERENCE for other modules (08-05: IrisFarming's monster guard must never
 -- evict a tamed creature - wolves are tameable TODAY, chimera/garm may follow, and a species
@@ -4502,6 +4517,9 @@ local function save_state()
 end
 load_state()
 C.housecat_mesh_armed = false
+-- Same create_resource crash class as the mesh latch: the W3 motlist path is
+-- only servable once the v0.9+ pak is mounted, so never restore this from disk.
+C.housecat_bank_armed = false
 
 local function learn_camp(pp)
     -- record the spot when the player camps (dedup within 30m of a known one)
@@ -13651,6 +13669,91 @@ function HC.mesh_ready()
     return true
 end
 
+-- W3 CAT MOTION BANK (v8 catalogue, 2026-08-18): the proven IrisWildHorses
+-- DynamicMotionBank recipe verbatim -- load the motlist resource, pin it,
+-- register bank 904 on the spawned body's Motion. Gated behind its OWN arm
+-- latch because only the v0.9+ pak serves the motlist path.
+function HC.load_motlist()
+    if C.housecat_bank_armed ~= true then
+        S.housecat_bank_status = "bank disarmed"
+        return false
+    end
+    if S.housecat_bank_holder then return true end
+    local path = (C.housecat_bank_use_bisect ~= false) and HC.motlist_bisect or HC.motlist
+    log.info("[IrisTaming] hcbank A: create_resource " .. tostring(path))
+    local holder = nil
+    local ok = pcall(function()
+        local res = sdk.create_resource("via.motion.MotionListResource", path)
+        log.info("[IrisTaming] hcbank B: resource " .. tostring(res ~= nil))
+        if res then
+            res:add_ref()
+            S.housecat_bank_res = res
+            holder = res:create_holder("via.motion.MotionListResourceHolder")
+            log.info("[IrisTaming] hcbank C: holder " .. tostring(holder ~= nil))
+            if holder then holder:add_ref() end
+        end
+    end)
+    S.housecat_bank_holder = holder
+    if ok and holder then
+        S.housecat_bank_status = "W3 motlist loaded ("
+            .. ((C.housecat_bank_use_bisect ~= false) and "bisect 3-take" or "full 17-take") .. ")"
+        return true
+    end
+    S.housecat_bank_status = "motlist unavailable -- install the v0.9.3 house-cat PAK first"
+    return false
+end
+
+function HC.register_bank()
+    local ch = S.housecat_ch
+    if not ch then S.housecat_bank_status = "no house-cat body"; return false end
+    if not HC.load_motlist() then return false end
+    local motion = nil
+    pcall(function() motion = ch:call("get_Motion") end)
+    if not motion then S.housecat_bank_status = "body has no Motion component"; return false end
+    log.info("[IrisTaming] hcbank C2: motion component acquired")
+    local key = nil
+    pcall(function() key = motion:get_address() end)
+    key = tostring(key or motion)
+    if S.housecat_bank_key == key then return true end
+    local ok, err = pcall(function()
+        local count = tonumber(motion:call("getDynamicMotionBankCount")) or 0
+        log.info("[IrisTaming] hcbank D: dynamic bank count " .. tostring(count))
+        local bank, index = nil, count
+        for i = 0, count - 1 do
+            local cand = motion:call("getDynamicMotionBank", i)
+            local cid = nil
+            if cand then pcall(function() cid = cand:call("get_BankID") end) end
+            if tonumber(cid) == HC.bank_id then
+                bank, index = cand, i
+                break
+            end
+        end
+        if not bank then
+            motion:call("setDynamicMotionBankCount", count + 1)
+            log.info("[IrisTaming] hcbank E: count grown to " .. tostring(count + 1))
+            bank = sdk.create_instance("via.motion.DynamicMotionBank")
+            bank = bank and bank:add_ref() or nil
+            log.info("[IrisTaming] hcbank F: bank instance " .. tostring(bank ~= nil))
+            if not bank then error("could not create DynamicMotionBank") end
+            S.housecat_bank_pin = bank
+        end
+        bank:call("set_MotionList", S.housecat_bank_holder)
+        log.info("[IrisTaming] hcbank G: set_MotionList done")
+        bank:call("set_OverwriteBankID", true)
+        bank:call("set_BankID", HC.bank_id)
+        log.info("[IrisTaming] hcbank H: ids set")
+        motion:call("setDynamicMotionBank", index, bank)
+        log.info("[IrisTaming] hcbank I: attached at index " .. tostring(index))
+    end)
+    if ok then
+        S.housecat_bank_key = key
+        S.housecat_bank_status = "bank 904 registered on this cat"
+    else
+        S.housecat_bank_status = "bank registration failed: " .. tostring(err)
+    end
+    return ok
+end
+
 function HC.apply_mesh(ch)
     local go = char_go(ch)
     if not go then return false, "spawned body is not ready" end
@@ -13709,6 +13812,7 @@ function HC.delete()
     S.housecat_pending = false
     S.housecat_spawn_queued = false
     S.housecat_rebind_at = nil
+    S.housecat_bank_key = nil  -- motion component died with the body; re-register on next spawn
     if S.housecat_prefab_ctrl then pcall(function() S.housecat_prefab_ctrl:release() end) end
     if S.housecat_prefab then pcall(function() S.housecat_prefab:release() end) end
     S.housecat_prefab_ctrl = nil
@@ -13868,6 +13972,7 @@ function HC.spawn_tick()
         S.housecat_status = "mesh applied, but IRIS adoption failed: " .. tostring(adopt_why)
         return
     end
+    if C.housecat_bank_armed == true then HC.register_bank() end
     S.housecat_status = "House Cat: IRIS local companion (following)"
     S.housecat_rebind_at = os.clock() + 1.2
     S.status = S.housecat_status
@@ -21291,6 +21396,32 @@ re.on_draw_ui(function()
                     HC.delete()
                     S.housecat_status = "despawned"
                     S.status = "house cat despawned"
+                end
+                imgui.separator()
+                if C.housecat_bank_armed ~= true then
+                    imgui.text("W3 cat animations: install the v0.9.3 house-cat mod first, then arm.")
+                    hcchg, C.housecat_bank_use_bisect = imgui.checkbox("Use 3-take bisect container (17-take is a known CTD)##tame_housecat_bisect", C.housecat_bank_use_bisect ~= false)
+                    if hcchg then pcall(save_state) end
+                    if imgui.button("ARM W3 motion bank##tame_housecat_bankarm") then
+                        C.housecat_bank_armed = true
+                        HC.register_bank()
+                    end
+                else
+                    if imgui.button("Register bank 904 on cat##tame_housecat_bankreg") then
+                        HC.register_bank()
+                    end
+                    imgui.same_line()
+                    imgui.text(tostring(S.housecat_bank_status))
+                    hcchg, C.housecat_test_clip = imgui.drag_int("W3 test clip##tame_housecat_testclip", math.floor(tonumber(C.housecat_test_clip) or 2), 1, 0, 17)
+                    if hcchg then pcall(save_state) end
+                    if imgui.button("Play W3 clip##tame_housecat_play") then
+                        if HC.register_bank() and S.housecat_ch then
+                            play_motion(S.housecat_ch, HC.bank_id, math.floor(tonumber(C.housecat_test_clip) or 2))
+                            S.status = "W3 cat clip " .. tostring(C.housecat_test_clip)
+                        end
+                    end
+                    imgui.text("1 idle 2 walk 3 run 4-5 walk L/R 6-7 run L/R 8-11 idles 12-14 eat 15 taunt 16 hiss 17 death")
+                    imgui.text("(contract is 1-based; if takes look shifted by one, try id-1)")
                 end
             end
             imgui.text("House cat: " .. tostring(S.housecat_status))
