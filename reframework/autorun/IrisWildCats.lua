@@ -116,6 +116,14 @@ local C = {
     audio_enabled = true,
     replace_wolf_vocals = true,
     ambient_enabled = true,
+    -- Trace-proven start-loop vocal.  3982150705 belongs to the 4612 END clip;
+    -- the old learner accepted every clip in the sequence and therefore saved
+    -- the final breath/close event over the actual 4610 howl request.
+    wolf_howl_trigger_id = 3274161328,
+    -- Filled only from a genuinely running wild-wolf HowlingStart action. Trigger
+    -- 3274161328 was disproved in the field (it belongs to motion 0:300), so a
+    -- saved native event ID—not that historical guess—drives mounted playback.
+    wolf_howl_event_id = 0,
     -- ⛔ OFF SINCE THE ch23_002 SPLIT. The panther used to be the puma mesh recoloured at
     -- runtime: BaseColor = {0.115, 0.125, 0.145} on every material. That is a flat 12%
     -- MULTIPLY, and a multiply cannot add contrast -- it took the coat's albedo std from
@@ -135,6 +143,17 @@ local C = {
     -- automatically if the pak is missing or the resource never streams, so turning the
     -- pak off degrades to the old look rather than to a tawny panther.
     panther_own_material = true,
+    -- Restore the original audible baseline. The accepted flat bank has no
+    -- attenuation graph; RequestInfo positioning only adds a hard cull. A
+    -- separate volume-tier build can supply distance falloff after this route
+    -- is confirmed stable.
+    spatial_audio = false,
+    spatial_src_gameobj = false,   -- legacy config key; deliberately ignored
+    -- ⭐ Scales the event's attenuation DISTANCE. 1.0 = as authored. Higher = audible
+    -- further out (a gentler falloff), lower = drops off sooner. If the cloned events
+    -- carry no attenuation ShareSet at all this will do nothing, and the real fix is to
+    -- re-author the bank -- which is exactly what the field test tells us.
+    attenuation_scale = 1.0,
 }
 
 local function load_config()
@@ -219,8 +238,9 @@ S.audio = {
     wolf_howl_heard_at = nil,
     -- Decoded from DD2's ch223000_vo_m bank and inspected as spectra: these
     -- are the two long, sustained harmonic calls (the first is the clearest
-    -- full howl). They are event/media candidates, not arbitrary VO entries.
-    wolf_howl_event_ids = { 716209110, 445935017 },
+    -- The two long IDs decoded from ch223's VO bank are WEM media IDs, not Wwise
+    -- event IDs. Posting them as events succeeds at the API boundary but is silent.
+    wolf_howl_event_ids = {},
 }
 S.audio_status = "audio idle"
 
@@ -238,7 +258,10 @@ end
 local function valid(object)
     if not object then return false end
     local ok, value = pcall(function() return object:call("get_Valid") end)
-    return (not ok) or value ~= false
+    -- A destroyed streamed character throws InvalidOperationException here.
+    -- Treating that throw as "valid" kept its dead components in REGISTRY and
+    -- hammered get_GameObject every frame after the cat had gone.
+    return ok and value ~= false
 end
 
 local function object_address(object)
@@ -883,6 +906,8 @@ local function list_elements(collection)
     return result
 end
 
+local wolf_current_action_name
+
 local function collect_wolf_family(max_source)
     max_source = max_source or 3
     local found, seen = {}, {}
@@ -1065,6 +1090,8 @@ local function refresh_cats(source_limit)
                 audio_status = tostring(S.audio_status or "-"),
                 trigger_method_ok = S.trigger_method_ok == true,
                 trigger_hook_ok = S.trigger_hook_ok == true,
+                wolf_howl_post = A.wolf_howl_last_post,
+                wolf_trigger_trace = A.wolf_trigger_trace or {},
                 cats_visible = (S.puma_targets or 0) + visible_panthers,
                 replace_enabled = C.replace_wolf_vocals == true,
             })
@@ -1133,6 +1160,103 @@ local function player_wwise_container()
         pcall(function() wwise = character:call("get_WwiseContainer") end)
     end
     return valid(wwise) and wwise or nil
+end
+
+local function force_nearest_wild_wolf_howl()
+    local player_pos = nil
+    pcall(function()
+        local manager = sdk.get_managed_singleton("app.CharacterManager")
+        local player = manager and manager:call("get_ManualPlayer") or nil
+        local go = player and player:call("get_GameObject") or nil
+        player_pos = go and go:call("get_Transform")
+            :call("get_UniversalPosition") or nil
+    end)
+    local best, best_d2 = nil, math.huge
+    for _, item in ipairs(collect_wolf_family(2)) do
+        if item.id == WOLF_NAME and valid(item.character) and item.position then
+            local action = wolf_current_action_name(item.character)
+            -- Shadow's mounted/passive graph reports Invalid. Only a real AI wolf
+            -- can teach us the audible action event.
+            if action and not action:find("Invalid", 1, true) then
+                local dx = (player_pos and player_pos.x or item.position.x)
+                    - item.position.x
+                local dz = (player_pos and player_pos.z or item.position.z)
+                    - item.position.z
+                local d2 = dx * dx + dz * dz
+                if d2 < best_d2 then best, best_d2 = item, d2 end
+            end
+        end
+    end
+    if not best then return false, "no valid-graph wild wolf nearby" end
+    local requested = false
+    -- Arm the exact body before the synchronous action request.  Some builds
+    -- expose only a generic CurrentActionList string while the Wwise event is
+    -- posted; the selected valid-graph body is a stronger discriminator than
+    -- trying to infer a howl from an unrelated running/attack vocal.
+    A.howl_capture_target_addr = object_address(best.game_object)
+    A.howl_capture_until = os.clock() + 2.5
+    pcall(function()
+        local character = best.character
+        character:call("set_IsThinkStop", false)
+        local manager = character["<ActionManager>k__BackingField"]
+            or character:call("get_ActionManager")
+        manager:call(
+            "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
+            0, "Ch223HowlingStartLoop", 0)
+        requested = true
+    end)
+    if not requested then
+        A.howl_capture_target_addr, A.howl_capture_until = nil, nil
+    end
+    return requested, requested and "wild-wolf howl requested; listening for native event"
+        or "wild-wolf howl request failed"
+end
+
+local function audio_player_game_object()
+    local game_object = nil
+    pcall(function()
+        local manager = sdk.get_managed_singleton("app.CharacterManager")
+        local character = manager and manager:call("get_ManualPlayer") or nil
+        local inner = character and character:call("get_Character") or nil
+        character = inner or character
+        game_object = character and character:call("get_GameObject") or nil
+    end)
+    return valid(game_object) and game_object or nil
+end
+
+local function audio_position(game_object)
+    local position = nil
+    pcall(function()
+        local transform = game_object and game_object:call("get_Transform")
+        position = transform and transform:call("get_UniversalPosition") or nil
+    end)
+    return position
+end
+
+local function distance_tier_event(entry, target)
+    local ids = entry and entry.tier_event_ids
+    local distance_data = A.manifest and A.manifest.distance_volume
+    local profiles = distance_data and distance_data.profiles_metres
+    local limits = profiles and profiles[entry.distance_profile or "vocal"]
+    if type(ids) ~= "table" or type(limits) ~= "table" then
+        return entry and entry.event_id or nil, nil, 1
+    end
+    local source = audio_position(target)
+    local listener = audio_position(audio_player_game_object())
+    if not source or not listener then
+        return ids[1] or entry.event_id, nil, 1
+    end
+    local dx = source.x - listener.x
+    local dy = source.y - listener.y
+    local dz = source.z - listener.z
+    local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+    local scale = math.max(0.25, tonumber(C.attenuation_scale) or 1.0)
+    for index, limit in ipairs(limits) do
+        if distance <= (tonumber(limit) or 0) * scale then
+            return tonumber(ids[index]) or entry.event_id, distance, index
+        end
+    end
+    return nil, distance, #limits + 1
 end
 
 local function load_manifest()
@@ -1247,7 +1371,12 @@ local function audio_prepare()
             bucket = {}
             A.categories[entry.category] = bucket
         end
-        bucket[#bucket + 1] = {name = entry.name, event_id = entry.event_id}
+        bucket[#bucket + 1] = {
+            name = entry.name,
+            event_id = entry.event_id,
+            tier_event_ids = entry.tier_event_ids,
+            distance_profile = entry.distance_profile,
+        }
         if entry.trigger_file == manifest.registration_trigger_path then
             A.registered_events[entry.event_id] = true
         end
@@ -1457,6 +1586,9 @@ end
 local function create_request(dispatcher, trigger, target, joint_hash)
     local request = nil
     local ok, err = pcall(function()
+        -- The custom trigger only resolves in the converted creature's full
+        -- GameObject context. Attempts to substitute the player in either
+        -- slot return nil, so retain the original field-proven call shape.
         request = dispatcher:call(
             REQUEST_SIGNATURE,
             trigger, target, target, joint_hash,
@@ -1471,6 +1603,43 @@ local function create_request(dispatcher, trigger, target, joint_hash)
         A.last_create_error = nil
     end
     return request
+end
+
+wolf_current_action_name = function(character)
+    local name = nil
+    pcall(function()
+        local manager = character and (character["<ActionManager>k__BackingField"]
+            or character:call("get_ActionManager")) or nil
+        local list = manager and (manager.CurrentActionList
+            or manager:get_field("CurrentActionList")) or nil
+        local entry = list and (list[0] or list:call("get_Item", 0)) or nil
+        if entry then name = tostring(entry:call("ToString()") or "") end
+    end)
+    if name == "" or name == "nil" then return nil end
+    return name
+end
+
+local function position_request_at(request, target)
+    if not (request and C.spatial_audio) then return end
+    local position = nil
+    pcall(function()
+        local tf = target and target:call("get_Transform")
+        position = tf and tf:call("get_UniversalPosition") or nil
+    end)
+    if not position then
+        pcall(function()
+            local tf = target and target:call("get_Transform")
+            position = tf and tf:call("get_Position") or nil
+        end)
+    end
+    if position then pcall(function() request:call("set_Position", position) end) end
+    pcall(function() request:call("set_Positioned", true) end)
+    pcall(function()
+        request:call("set_AttenuationScalingFactor",
+            tonumber(C.attenuation_scale) or 1.0)
+    end)
+    -- Deliberately no set_SrcGameObj(target): position is data; the live cat
+    -- must never become an object owned by the player's custom-bank dispatcher.
 end
 
 local function post_throttled()
@@ -1495,6 +1664,17 @@ local function post_request(dispatcher, trigger, target, throttle_claimed)
         return false, "direct createRequestInfo failed: "
             .. tostring(A.last_create_error or "no detail")
     end
+    -- ⭐⭐ MAKE THE VOICE ACTUALLY 3D. (Aurora: "it doesn't get quieter, it just stops at
+    -- a certain distance".) That is a positioned voice with no attenuation curve -- full
+    -- volume out to the cull radius, then nothing. The engine hands us the levers on the
+    -- request itself (dumped from soundlib.SoundManager.RequestInfo):
+    --   Positioned               -- 3D at all, vs a 2D voice pinned to the listener
+    --   SrcGameObj               -- WHICH object the voice emits from
+    --   AttenuationScalingFactor -- scales the event's attenuation distance
+    -- ⛔ Set these BEFORE trigger(); after it the voice is already playing and a late
+    -- write does nothing. Every one is wrapped individually -- a missing setter on some
+    -- future patch must not take the whole post down with it.
+    position_request_at(request, target)
     local ok = pcall(function()
         request = request:add_ref()
         request["<Container>k__BackingField"] = dispatcher
@@ -1553,6 +1733,7 @@ local function post_via_template(dispatcher, event_id, target, throttle_claimed)
     end
     local post_ok, post_err = pcall(function()
         request["<Container>k__BackingField"] = dispatcher
+        position_request_at(request, target)
         dispatcher:call("trigger(soundlib.SoundManager.RequestInfo)", request)
     end)
     if not post_ok then return false, tostring(post_err) end
@@ -1569,22 +1750,27 @@ local function post_event(event_id, target)
         A.registration = nil
         return false, "dispatcher went stale; reloading"
     end
+
     -- Claim the Wwise throttle once per logical sound. Previously the direct
     -- attempt consumed it, so the native-template fallback was *always*
     -- rejected as "post throttled" in the same frame.
     if post_throttled() then return false, "post throttled" end
     local trigger = A.triggers_by_event[event_id]
     local direct_err = nil
+    -- The custom cat bank belongs to the registration dispatcher. A native cat
+    -- container accepts the request wrapper but drops the unknown custom event later.
+    -- Position the request at the cat; do not change the bank-owning dispatcher.
     if trigger and A.registered_events and A.registered_events[event_id] then
         local ok
         ok, direct_err = post_request(dispatcher, trigger, target, true)
-        if ok then return true end
+        if ok then A.last_emitter = "custom/spatial" return true end
     end
     local template_ok, template_err = post_via_template(
         dispatcher, event_id, target, true)
-    if template_ok then return true end
-    return false, (direct_err and (tostring(direct_err) .. " | ") or "")
-        .. "template: " .. tostring(template_err)
+    if template_ok then A.last_emitter = "custom/spatial/template" return true end
+    direct_err = (direct_err and (tostring(direct_err) .. " | ") or "")
+        .. "custom template: " .. tostring(template_err)
+    return false, tostring(direct_err)
 end
 
 local function play_category(category, target)
@@ -1605,7 +1791,15 @@ local function play_category(category, target)
     end
     A.last_pick[category] = index
     local entry = bucket[index]
-    local ok, err = post_event(entry.event_id, target)
+    local event_id, distance, tier = distance_tier_event(entry, target)
+    A.last_audio_distance = distance
+    A.last_audio_tier = tier
+    if not event_id then
+        A.last_played = entry.name .. " (out of range)"
+        A.post_fail_n = 0
+        return true, "beyond distance-volume range"
+    end
+    local ok, err = post_event(event_id, target)
     if ok then
         A.last_played = entry.name
         A.post_fail_n = 0
@@ -1685,6 +1879,34 @@ local function registered_cat_ancestor(game_object)
     return nil
 end
 
+-- The semantic-howl learner must also see ordinary wolves.  The previous hook
+-- claimed it did, but returned at the `not cat` gate before reaching the learner,
+-- so Shadow could wait forever for a trigger that was never allowed to be seen.
+local function ch223_ancestor(game_object)
+    local current = game_object
+    for _ = 1, 8 do
+        if not valid(current) then return nil, nil end
+        local character, id, name = nil, "", ""
+        pcall(function()
+            character = get_component(current, "app.Character")
+            id = character and tostring(character:call("get_CharaIDString") or "") or ""
+            name = tostring(current:call("get_Name") or "")
+        end)
+        if id:match("^ch223") or name:find("ch223", 1, true) then
+            return current, character
+        end
+        local parent_go = nil
+        pcall(function()
+            local transform = current:call("get_Transform")
+            local parent = transform and transform:call("get_Parent")
+            parent_go = parent and parent:call("get_GameObject") or nil
+        end)
+        if not parent_go then return nil, nil end
+        current = parent_go
+    end
+    return nil, nil
+end
+
 local function cat_state_for(game_object)
     local address = object_address(game_object)
     return address and S.cats[tostring(address)] or nil
@@ -1744,24 +1966,58 @@ pcall(function()
         if id:find(PUMA_NAME, 1, true) then return "puma" end
         return nil
     end
-    api.play_wolf_call = function(target_go)
+    local function play_exact_wolf_howl(target_go)
+        -- Use the event captured from a REAL, valid-graph wild-wolf howl. Shadow's
+        -- parked graph cannot emit that action event, but her native ch223 Wwise
+        -- container owns the same bank. Build the request from one of her valid
+        -- vocal templates and substitute only the proven howl event ID.
+        local event_id = normal_u32(A.wolf_howl_event_id)
         local dispatcher = get_component(target_go, "app.WwiseContainerApp")
-        local trigger = nil
-        for _, event_id in ipairs(A.wolf_howl_event_ids or {}) do
-            trigger = native_trigger_for_event(target_go, event_id)
-            if trigger then break end
+        local template = native_template_for(target_go)
+        local played, detail = false, nil
+        if event_id and event_id > 0 and dispatcher and template then
+            local original = nil
+            pcall(function() original = tonumber(template._EventId) end)
+            if original then
+                A.manual_wolf_post_depth = (tonumber(A.manual_wolf_post_depth) or 0) + 1
+                local ok, err = pcall(function() template._EventId = event_id end)
+                if ok then played, detail = post_request(dispatcher, template, target_go) end
+                pcall(function() template._EventId = original end)
+                A.manual_wolf_post_depth = math.max(0,
+                    (tonumber(A.manual_wolf_post_depth) or 1) - 1)
+                if not ok then detail = tostring(err) end
+            end
         end
-        if not trigger then
-            trigger = native_trigger_for_id(target_go, A.wolf_howl_trigger_id)
+        A.wolf_howl_last_post = {
+            ok = played == true,
+            route = played and "captured native ch223 howl event"
+                or (event_id and (detail or "native howl event post failed")
+                    or "real wild-wolf howl event not captured yet"),
+            trigger_id = normal_u32(A.wolf_howl_trigger_id),
+            event_id = event_id, at = os.clock(),
+        }
+        return played == true
+    end
+    api.play_wolf_howl = play_exact_wolf_howl
+    api.get_wolf_howl_status = function()
+        return A.wolf_howl_last_post, A.wolf_trigger_trace
+    end
+    api.play_wolf_call = function(target_go, exact_only)
+        if play_exact_wolf_howl(target_go) then return true end
+        if exact_only ~= true then
+            local dispatcher = get_component(target_go, "app.WwiseContainerApp")
+            local trigger = native_trigger_for_id(target_go, A.wolf_howl_trigger_id)
+            if dispatcher and trigger then
+                return post_request(dispatcher, trigger, target_go)
+            end
         end
-        if dispatcher and trigger then return post_request(dispatcher, trigger, target_go) end
         -- Give a native howl action time to emit and teach us its exact trigger.
         -- Never substitute a feline bank for a wolf: silence is preferable to
         -- Shadow roaring like Mia, and Horse Rodeo now wakes the real howl node.
         A.pending_wolf_calls[#A.pending_wolf_calls + 1] = {
             target = target_go, since = os.clock(), at = os.clock() + 0.48,
         }
-        return true
+        return false -- queued is not audible; let the caller use its deterministic fallback
     end
 end)
 
@@ -1796,9 +2052,106 @@ local function install_trigger_hook()
         local owner = nil
         pcall(function() owner = container:call("get_GameObject") end)
         local trigger_id = 0
+        local event_id = 0
         pcall(function()
             trigger_id = normal_u32(request:call("get_TriggerId")) or 0
+            event_id = normal_u32(request:call("get_EventId")) or 0
         end)
+        -- Mounted howl receipt.  Keep the last 32 Wwise requests originating
+        -- from a ch223 while a wyrm combat lease is live.  This reveals whether
+        -- motion 4610/4611 emitted a real native vocal trigger, and whether our
+        -- manual retry merely constructed a silent request.  It is event-driven,
+        -- so there is no per-frame audio logging cost.
+        local mounted_lease = rawget(_G, "IrisWyrmNativeAttackLease")
+        if mounted_lease then
+            local mounted_go, mounted_ch = ch223_ancestor(owner)
+            if mounted_go and mounted_ch then
+                local bank, motion_id, motion_frame = -1, -1, -1
+                pcall(function()
+                    local motion = mounted_ch:call("get_Motion")
+                    local layer = motion and motion:call("getLayer", 0)
+                    bank = layer and tonumber(layer:call("get_MotionBankID")) or -1
+                    motion_id = layer and tonumber(layer:call("get_MotionID")) or -1
+                    motion_frame = layer and tonumber(layer:call("get_Frame")) or -1
+                end)
+                A.wolf_trigger_trace = type(A.wolf_trigger_trace) == "table"
+                    and A.wolf_trigger_trace or {}
+                A.wolf_trigger_trace[#A.wolf_trigger_trace + 1] = {
+                    at = os.clock(), trigger_id = trigger_id, event_id = event_id,
+                    source = (tonumber(A.manual_wolf_post_depth) or 0) > 0
+                        and "manual" or "native",
+                    bank = bank, motion_id = motion_id, frame = motion_frame,
+                }
+                while #A.wolf_trigger_trace > 32 do
+                    table.remove(A.wolf_trigger_trace, 1)
+                end
+                pcall(function()
+                    log.info(string.format(
+                        "[%s] [WYRM-AUDIO] %s trigger=%u event=%u motion=%s:%s frame=%.1f",
+                        MOD, A.wolf_trigger_trace[#A.wolf_trigger_trace].source,
+                        trigger_id, event_id, tostring(bank), tostring(motion_id), motion_frame))
+                end)
+            end
+        end
+        -- Learn before the cat-only replacement gate.  Require membership in
+        -- ch223's harvested vocal catalogue so a footstep or magic accent which
+        -- happens during the same motion can never become Shadow's "howl".
+        local wolf_go, wolf_ch = ch223_ancestor(owner)
+        if wolf_go and wolf_ch
+            and (tonumber(A.manual_wolf_post_depth) or 0) == 0
+            and rawget(_G, "IrisWyrmNativeAttackLease") == nil then
+            local vocal_ids = ensure_vocal_ids(wolf_go)
+            if vocal_ids and vocal_ids[trigger_id] then
+                local bank, motion_id, motion_frame = -1, -1, -1
+                pcall(function()
+                    local motion = wolf_ch:call("get_Motion")
+                    local layer = motion and motion:call("getLayer", 0)
+                    bank = layer and tonumber(layer:call("get_MotionBankID")) or -1
+                    motion_id = layer and tonumber(layer:call("get_MotionID")) or -1
+                    motion_frame = layer and tonumber(layer:call("get_Frame")) or -1
+                end)
+                -- Preserve the full native vocal sequence from an ordinary,
+                -- unmounted wolf.  The former learner guessed that the only
+                -- request seen during forced motion 4610 was the howl; field
+                -- audio disproved that.  A naturally audible howl is the sole
+                -- trustworthy reference. JSON is deferred off the Wwise hook.
+                A.wolf_natural_vocal_trace = type(A.wolf_natural_vocal_trace)
+                    == "table" and A.wolf_natural_vocal_trace or {}
+                local action_name = wolf_current_action_name(wolf_ch)
+                local capture_armed = A.howl_capture_target_addr ~= nil
+                    and object_address(wolf_go) == A.howl_capture_target_addr
+                    and os.clock() <= (tonumber(A.howl_capture_until) or 0.0)
+                A.wolf_natural_vocal_trace[#A.wolf_natural_vocal_trace + 1] = {
+                    at = os.clock(), trigger_id = trigger_id,
+                    event_id = event_id, action = action_name,
+                    capture_armed = capture_armed,
+                    bank = bank, motion_id = motion_id, frame = motion_frame,
+                }
+                while #A.wolf_natural_vocal_trace > 64 do
+                    table.remove(A.wolf_natural_vocal_trace, 1)
+                end
+                A.save_wolf_natural_vocal_trace = true
+                -- Only the start-loop owns the howl vocal.  Accepting 4612 made
+                -- the last end-clip request overwrite it with a silent close.
+                if event_id > 0 and (capture_armed
+                    or (action_name
+                        and action_name:find("HowlingStart", 1, true))) then
+                    A.wolf_howl_trigger_id = trigger_id
+                    A.wolf_howl_event_id = event_id
+                    A.wolf_howl_heard_at = os.clock()
+                    A.howl_capture_target_addr, A.howl_capture_until = nil, nil
+                    S.audio_status = "captured genuine wild-wolf howl event "
+                        .. tostring(event_id)
+                    if tonumber(C.wolf_howl_trigger_id) ~= trigger_id
+                        or tonumber(C.wolf_howl_event_id) ~= event_id then
+                        C.wolf_howl_trigger_id = trigger_id
+                        C.wolf_howl_event_id = event_id
+                        -- Never perform JSON I/O inside the Wwise pre-hook.
+                        A.save_howl_trigger = true
+                    end
+                end
+            end
+        end
         -- ⭐ WHY-COUNTERS. Posting demonstrably works (the panel test plays pain_03) yet
         -- "vocals replaced: 0" in the field, so the hook is being turned away at one of
         -- exactly two gates. Counting them costs nothing and ends the guessing: if
@@ -1846,22 +2199,6 @@ local function install_trigger_hook()
             end
         end
         A.dbg.replaced = A.dbg.replaced + 1
-
-        -- Learn the semantic howl ID from the only reliable evidence: a VO
-        -- request fired while layer 0 is playing the atlas-verified howl clips.
-        -- Do this for ordinary wolves as well as converted cats, and leave the
-        -- original request untouched.
-        local motion_id = -1
-        pcall(function()
-            local ch = get_component(owner, "app.Character")
-            local motion = ch and ch:call("get_Motion")
-            local layer = motion and motion:call("getLayer", 0)
-            motion_id = layer and tonumber(layer:call("get_MotionID")) or -1
-        end)
-        if motion_id == 4610 or motion_id == 4611 or motion_id == 4612 then
-            A.wolf_howl_trigger_id = trigger_id
-            A.wolf_howl_heard_at = os.clock()
-        end
 
         local state = cat_state_for(cat)
         if state and state.death_played then
@@ -2044,6 +2381,22 @@ end
 -- ---------------------------------------------------------------------------
 
 load_config()
+-- One-time repair for configs learnt by the old whole-sequence learner.  The
+-- field trace identified 3274161328 on 4610 and 3982150705 on 4612 in the same
+-- LT press; Aurora heard no howl because we manually replayed the latter.
+if tonumber(C.wolf_howl_trigger_id) == 3982150705
+    or (tonumber(C.wolf_howl_trigger_id) or 0) <= 0 then
+    C.wolf_howl_trigger_id = 3274161328
+    save_config()
+end
+A.wolf_howl_trigger_id = tonumber(C.wolf_howl_trigger_id) or 0
+if A.wolf_howl_trigger_id <= 0 then A.wolf_howl_trigger_id = nil end
+A.wolf_howl_event_id = tonumber(C.wolf_howl_event_id) or 0
+if A.wolf_howl_event_id <= 0 then A.wolf_howl_event_id = nil end
+-- RequestInfo positioning only added a hard cull to the flat custom bank.
+-- Pre-gained event tiers now provide distance volume without touching the
+-- working creature-bound request, so the legacy path remains disabled.
+C.spatial_audio = false
 if not S.wolf_id or not S.puma_id or not S.panther_id then
     report("Character IDs unavailable: " .. tostring(S.wolf_id_error) .. " | "
         .. tostring(S.puma_id_error) .. " | " .. tostring(S.panther_id_error))
@@ -2055,6 +2408,19 @@ re.on_application_entry("UpdateBehavior", function()
     local state = rawget(_G, SPAWN_STATE_KEY)
     if not state or not state.active or state.generation ~= GENERATION then return end
     state.frame = (state.frame or 0) + 1
+    if A.save_howl_trigger then
+        A.save_howl_trigger = nil
+        save_config()
+    end
+    if A.save_wolf_natural_vocal_trace then
+        A.save_wolf_natural_vocal_trace = nil
+        pcall(function()
+            json.dump_file("IrisWolfNaturalVocalTrace.json", {
+                generated_at = os.date("%Y-%m-%d %H:%M:%S"),
+                vocals = A.wolf_natural_vocal_trace or {},
+            })
+        end)
+    end
     if not C.enabled then return end
     -- STAGGERED deferred boot (2026-08-05): the all-at-once arm crashed the
     -- game 58 ms after firing, but that window spans four separate actions.
@@ -2112,6 +2478,49 @@ re.on_application_entry("UpdateBehavior", function()
             -- spawns, means the first panther is instant instead of arriving vanilla and
             -- waiting for a retry.
             pcall(function() load_panther_mdf() end)
+
+            -- ⭐ ONE-SHOT SOUND-API DUMP. Aurora: the vocals now cut out at a radius
+            -- instead of fading, which is the signature of an event with NO attenuation
+            -- ShareSet -- full volume until the cull distance, then nothing. Attenuation
+            -- is authored into the BANK, so the only Lua-side fix is to drive volume (or
+            -- an RTPC) per post from the listener distance. Whether that is even possible
+            -- depends on what RequestInfo and the container actually expose, and there is
+            -- no il2cpp dump on this machine to read it from. Ask the engine once.
+            pcall(function()
+                if S.sound_api_dumped then return end
+                S.sound_api_dumped = true
+                local out = {}
+                local function dump(type_name, want)
+                    local td = sdk.find_type_definition(type_name)
+                    if not td then out[type_name] = "TYPE NOT FOUND" return end
+                    local fields, methods = {}, {}
+                    pcall(function()
+                        for _, f in ipairs(td:get_fields() or {}) do
+                            local n = f:get_name()
+                            if not want or n:lower():find(want) then
+                                fields[#fields + 1] = n .. " : "
+                                    .. tostring(f:get_type():get_full_name())
+                            end
+                        end
+                    end)
+                    pcall(function()
+                        for _, m in ipairs(td:get_methods() or {}) do
+                            local n = m:get_name()
+                            if not want or n:lower():find(want) then
+                                methods[#methods + 1] = n
+                            end
+                        end
+                    end)
+                    out[type_name] = {fields = fields, methods = methods}
+                end
+                dump("soundlib.SoundManager.RequestInfo", nil)
+                dump("soundlib.SoundTriggerInfo", nil)
+                dump("app.WwiseContainerApp", "volume")
+                dump("via.wwise.WwiseContainer", "volume")
+                dump("app.WwiseContainerApp", "rtpc")
+                json.dump_file("IrisWildCats_soundapi.json", out)
+                report("sound API dumped -> data/IrisWildCats_soundapi.json")
+            end)
             S.sweep_source = 0
             WORLD_ARMED = true
         end
@@ -2309,6 +2718,14 @@ re.on_draw_ui(function()
         imgui.text("Panther material: " .. tostring(S.pmdf_status or "not requested")
             .. " | swaps " .. tostring(S.panther_mdf_swaps or 0))
         imgui.text("Live panthers: " .. tostring(S.panther_modes or "none tracked"))
+        imgui.text("Distance volume: four safe bank tiers")
+        imgui.text("  last emitter: " .. tostring(A.last_emitter or "-")
+            .. " | tier " .. tostring(A.last_audio_tier or "-")
+            .. " | metres " .. (A.last_audio_distance
+                and string.format("%.1f", A.last_audio_distance) or "-"))
+        local at_changed, at_value = imgui.slider_float(
+            "Distance-volume range scale", C.attenuation_scale or 1.0, 0.25, 3.0, "%.2f")
+        if at_changed then C.attenuation_scale = at_value; save_config() end
         imgui.text("  staging error: puma "
             .. tostring(S.puma_resource and S.puma_resource.error or "none")
             .. " | panther "
@@ -2386,6 +2803,11 @@ re.on_draw_ui(function()
                     and "native wolf vocal POSTED on cat — listen for a howl"
                     or ("native-on-cat refused: " .. tostring(err))
             end
+        end
+        if imgui.button("CAPTURE howl from nearest WILD wolf") then
+            local ok, detail = force_nearest_wild_wolf_howl()
+            S.audio_status = (ok and "capture armed: " or "capture refused: ")
+                .. tostring(detail)
         end
         imgui.text("Category tests (first cat):")
         for _, category in ipairs({

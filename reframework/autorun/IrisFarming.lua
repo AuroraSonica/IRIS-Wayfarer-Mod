@@ -209,7 +209,11 @@ local M = {
     -- ── chore emotes + animal produce (08-05, Aurora's clip picks) ──
     cook_emote = true,  cook_bank = 60, cook_clip = 6050, cook_f = 240,   -- stirring stand-in
     animal_produce = true,
-    milk_bank = 60, milk_clip = 6050, milk_f = 240,                       -- same clip as placeholder
+    -- Witcher 3 milking suite is painted from data/Animations JSON at runtime.
+    -- The old milk_bank/milk_clip fields remain readable for config compatibility
+    -- and as a safe fallback if the shared pose player was not loaded.
+    milk_pose = true, milk_ground = 1.0,
+    milk_bank = 60, milk_clip = 6050, milk_f = 240,
     -- comma-separated GameObject-name tokens. Ids read from EnemySpawner/charRef.lua (read-only,
     -- never edit other mods): ch299003_A = Ox COW (incl. harness variants A_10/20/50/60),
     -- ch299003_B = the BULL (excluded by the token), ch299221 = Chicken, ch299220 = Rooster
@@ -2157,10 +2161,39 @@ local function _water_emote_pump()
 end
 -- ── ⭐ CHORE EMOTES (08-05): a generalised clip SEQUENCER on the watering pump's proven laws
 -- (sheathe beat -> FSM hold -> hide only OUR tool meshes -> play -> exact restore). Watering
--- keeps its own field-verified pump untouched; this drives COOKING (60:6050 stirring stand-in),
--- MILKING (same clip as placeholder) and the CHICKEN egg chain (60:6020 kneel -> 6022 pickup ->
+-- keeps its own field-verified pump untouched; this drives COOKING, the custom JSON MILKING
+-- suite and the CHICKEN egg chain (60:6020 kneel -> 6022 pickup ->
 -- 6023 stand), all Aurora's clip picks. One chore at a time, and never while watering.
 local chore = { stage = nil, at = 0, seq = nil, i = 0, wp = nil }
+local function _pose_player()
+    return rawget(_G, "RS_Pose") or rawget(_G, "NB_Pose")
+end
+local function _chore_seconds(c)
+    if c and c.pose then
+        return (tonumber(c.frames) or 1) / (tonumber(c.fps) or 30)
+    end
+    return ((c and c[3]) or 120) / 60.0
+end
+local function _chore_play_step(c, chained)
+    if not c then return false end
+    if not c.pose then return _play_clip(c[1], c[2]) end
+    local player = _pose_player()
+    if not player then return false end
+    if player.set_ground then pcall(player.set_ground, tonumber(c.ground) or 1.0) end
+    local fn = chained and player.play_next or player.play
+    if not fn then return false end
+    -- Speed zero makes PrepareRendering hold the frame selected by _chore_pump.
+    -- That keeps source 30 fps tied to elapsed time rather than monitor refresh rate.
+    local ok, started = pcall(fn, c.pose, "Arisen", "Full", false, 0.0, false, true)
+    if ok and started == true then chore.pose_active = true end
+    return ok and started == true
+end
+local function _chore_stop_pose()
+    if not chore.pose_active then return end
+    local player = _pose_player()
+    if player and player.stop then pcall(player.stop) end
+    chore.pose_active = false
+end
 local function _hide_tool_meshes()
     -- the watering hide, verbatim laws: linked-list child walk, tools-only (the arrow lesson),
     -- SINGULAR getComponent, kill mesh comps self+children and remember each for exact restore
@@ -2236,7 +2269,7 @@ local function _chore_start(seq, label, on_done, on_first)
             "requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)",
             10, "SheatheWeapon", 0)
     end)
-    chore.seq, chore.i, chore.label = seq, 0, label
+    chore.seq, chore.i, chore.label, chore.pose_active = seq, 0, label, false
     chore.stage, chore.at = "sheathe", os.clock()
 end
 local function _chore_pump()
@@ -2247,10 +2280,11 @@ local function _chore_pump()
         chore.wp = _hide_tool_meshes()
         chore.i = 1
         local c = chore.seq[1]
-        local ok = _play_clip(c[1], c[2])
-        _log("chore '" .. tostring(chore.label) .. "': clip 1/" .. #chore.seq ..
+        local ok = _chore_play_step(c, false)
+        _log("chore '" .. tostring(chore.label) .. "': step 1/" .. #chore.seq ..
             (ok and " playing" or " FAILED"))
         if not ok then
+            _chore_stop_pose()
             _pfsm(true)
             for _, g in ipairs(chore.wp or {}) do pcall(function() g:call("set_Enabled", true) end) end
             chore.wp, chore.stage, chore.seq = nil, nil, nil
@@ -2267,7 +2301,13 @@ local function _chore_pump()
         chore.stage, chore.at = "play", os.clock()
     elseif chore.stage == "play" then
         local c = chore.seq[chore.i]
-        if dt >= (c[3] or 120) / 60.0 then
+        if c.pose then
+            local player = _pose_player()
+            if player and player.seek then
+                pcall(player.seek, math.floor(dt * (tonumber(c.fps) or 30)) + 1)
+            end
+        end
+        if dt >= _chore_seconds(c) then
             -- ⭐ 08-13 OPTIONAL PER-STEP CALLBACK, seq entry = {bank, clip, frames, on_step}.
             --   Fires as THIS clip ends, i.e. exactly on the seam between two clips. Added for
             --   the weapon plaque (Aurora: "hand out 6200 > item place > hand return 6202") --
@@ -2278,9 +2318,23 @@ local function _chore_pump()
             if chore.i < #chore.seq then
                 chore.i = chore.i + 1
                 local nc = chore.seq[chore.i]
-                _play_clip(nc[1], nc[2])
+                if c.pose and not nc.pose then _chore_stop_pose() end
+                local ok = _chore_play_step(nc, c.pose ~= nil and nc.pose ~= nil)
                 chore.at = os.clock()
+                if not ok then
+                    _log("chore '" .. tostring(chore.label) .. "': step " .. chore.i ..
+                        "/" .. #chore.seq .. " FAILED; ending safely")
+                    _chore_stop_pose()
+                    chore.stage, chore.seq = nil, nil
+                    _pfsm(true)
+                    for _, g in ipairs(chore.wp or {}) do pcall(function() g:call("set_Enabled", true) end) end
+                    chore.wp = nil
+                    local d = chore.done; chore.done = nil
+                    if d then pcall(d) end
+                    return
+                end
             else
+                _chore_stop_pose()
                 chore.stage, chore.seq = nil, nil
                 _pfsm(true)
                 for _, g in ipairs(chore.wp or {}) do pcall(function() g:call("set_Enabled", true) end) end
@@ -2290,6 +2344,21 @@ local function _chore_pump()
             end
         end
     end
+end
+
+local function _milk_chore_start(on_done)
+    local player = _pose_player()
+    if M.milk_pose ~= false and player and player.play and player.seek then
+        local ground = tonumber(M.milk_ground) or 1.0
+        return _chore_start({
+            { pose = "rs_w3_milking_start", frames = 61, fps = 30, ground = ground },
+            { pose = "rs_w3_milking_loop",  frames = 141, fps = 30, ground = ground },
+            { pose = "rs_w3_milking_stop",  frames = 126, fps = 30, ground = ground },
+        }, "milking", on_done)
+    end
+    _log("milking JSON player unavailable; using native placeholder")
+    return _chore_start({ { M.milk_bank or 60, M.milk_clip or 6050, M.milk_f or 240 } },
+        "milking fallback", on_done)
 end
 
 -- ⛔ REMOVED 07-25: the "set aside seed from your produce" conversion and its dialog.
@@ -2837,12 +2906,30 @@ end
 -- token lists (M.milk_ids / M.egg_ids) that the SCAN probe fills: stand by the animal, press
 -- the panel's "SCAN animals nearby", read the names it logs, paste the ch-token in the box.
 -- Once per animal per in-game day (Stardew rules), keyed by name + a 5m position grid.
-local ani = { days = nil }
+local ani = { days = nil, notice = nil }
 local ANI_FILE = "IRIS/animal_produce.json"
 local function _ani_days()
     if not ani.days then ani.days = json.load_file(ANI_FILE) or {} end
     return ani.days
 end
+-- A visible prompt must never fail silently. This small, independent notice is
+-- deliberately not tied to the optional farming HUD or RiftSpeak notification
+-- settings: it is feedback for an interaction the player just attempted.
+local function _ani_notice(message)
+    message = tostring(message or "That animal cannot produce right now.")
+    ani.notice = { text = message, until_at = os.clock() + 4.5 }
+    _log("animal produce: " .. message)
+end
+re.on_frame(function()
+    local n = ani.notice
+    if not (n and os.clock() < (n.until_at or 0)) or _hud_hidden() then return end
+    pcall(function()
+        local shown = false
+        local F = rawget(_G, "IrisFont")
+        if F and F.text then shown = F.text(n.text, 24, 92, 0xFFF2DEC0, 18) and true or false end
+        if not shown then draw.text(n.text, 24, 92, 0xFFC0DEF2) end -- ABGR fallback
+    end)
+end)
 
 -- Read-only Animals-screen contract.  The persistent record key is shared with
 -- collection below, so the status can never disagree with the actual gate.
@@ -2907,7 +2994,7 @@ end
 -- the wild-cats catalogue walk (WwiseContainerApp._UserDataList -> lists whose path has
 -- "_vo" -> _TriggerInfoList), then post one of ITS OWN triggers back at it. Whatever plays,
 -- it's a sound this species ships with.
-local anivoc = { cat = {} }
+local anivoc = { cat = {}, live = {} }
 local ANIVOC_SIG = table.concat({
     "createRequestInfo(soundlib.SoundTriggerInfo, via.GameObject, via.GameObject, ",
     "System.UInt32, System.Boolean, System.Boolean, System.UInt32, ",
@@ -2967,6 +3054,12 @@ local function _ani_moo(go)
             req["<Container>k__BackingField"] = ww
             ww:call("trigger(soundlib.SoundManager.RequestInfo)", req)
         end)
+        -- Keep the managed request wrapper alive for the complete vocal.  Letting
+        -- this local fall out of scope allowed Lua GC to end some lows early.
+        anivoc.live[#anivoc.live + 1] = {
+            req = req,
+            until_at = os.clock() + 12.0,
+        }
     end)
 end
 local function _ani_hold(go, stop)
@@ -2990,14 +3083,47 @@ local function _ani_clip(go, bank, id)
         end
     end)
 end
-local aniq = {}   -- deferred animal clips: { at, go, bank, id }
+local aniq = {}   -- deferred animal steps: { at, go, bank, id, after }
 local function _aniq_pump()
+    for i = #anivoc.live, 1, -1 do
+        if os.clock() >= (tonumber(anivoc.live[i].until_at) or 0.0) then
+            table.remove(anivoc.live, i)
+        end
+    end
     for i = #aniq, 1, -1 do
         if os.clock() >= aniq[i].at then
-            _ani_clip(aniq[i].go, aniq[i].bank, aniq[i].id)
+            local step = aniq[i]
+            if step.bank ~= nil and step.id ~= nil then
+                _ani_clip(step.go, step.bank, step.id)
+            end
+            if step.after then pcall(step.after) end
             table.remove(aniq, i)
         end
     end
+end
+
+-- A transition clip is not an idle.  Playing liv_sit_to_idle (60:49) on an
+-- already-standing cow makes the graph enter the sit family first, which is why
+-- standing cows lay down when milked.  Only request the transition when layer 0
+-- is actually in a sitting/sleeping pose; an unreadable pose is treated as
+-- standing so milking never forces a healthy cow through a speculative motion.
+local function _ani_cow_is_standing(go)
+    local standing = true
+    pcall(function()
+        local ch = go:call("getComponent(System.Type)", sdk.typeof("app.Character"))
+        local motion = ch and ch:call("get_Motion")
+        local layer = motion and motion:call("getLayer", 0)
+        if not layer then return end
+        local bank = tonumber(layer:call("get_MotionBankID"))
+        local id = tonumber(layer:call("get_MotionID"))
+        local name = ""
+        pcall(function() name = tostring(layer:call("get_MotionName")):lower() end)
+        local sit_id = bank == 60 and (id == 20 or id == 21 or id == 29
+            or id == 40 or id == 41 or id == 49)
+        standing = not (sit_id or name:find("liv_sit", 1, true)
+            or name:find("liv_sleep", 1, true))
+    end)
+    return standing
 end
 -- ── 08-11 PRODUCE GATES (Aurora): milk/eggs come only from a LIVING, TAMED animal.
 -- (a) a corpse gives nothing -- get_IsDead on the body's app.Character (the taming
@@ -3027,70 +3153,108 @@ local function _ani_eligible(a)
     if not tamed then return false, "only a tamed, stable-summoned animal produces" end
     return true
 end
+
+local function _ani_gender(a)
+    local gender = nil
+    pcall(function()
+        local bridge = rawget(_G, "IrisGriffinBridge")
+        gender = bridge and bridge.body_gender and bridge.body_gender(a.go:get_address()) or nil
+    end)
+    if gender == nil then
+        pcall(function()
+            local species = rawget(_G, "IrisSpecies")
+            gender = species and species.gender and species.gender(a.go) or nil
+        end)
+    end
+    return gender
+end
+
+-- One availability result shared by the prompt and the actual B action. The
+-- old prompt checked only the position-grid key while collection also checked
+-- the stable record ID and live address, producing a visible Milk prompt that
+-- silently refused after a cow moved. `ticket` contains the exact keys to latch
+-- when the action starts, so the read and write paths cannot drift again.
+local function _ani_availability(a, kind)
+    local eligible, why = _ani_eligible(a)
+    if not eligible then return false, why end
+    if kind == "milk" and _ani_gender(a) == "male" then
+        return false, "This animal is a bull and cannot be milked."
+    end
+
+    local today = _today()
+    if not today then
+        return false, "The in-game day clock is unavailable; try again once the world has loaded."
+    end
+    local d = _delta() or { x = 0, z = 0 }
+    local key = string.format("%s@%d,%d", a.name,
+        math.floor((a.pos.x + d.x) / 5), math.floor((a.pos.z + d.z) / 5))
+    local akey = nil
+    pcall(function() akey = "a" .. tostring(a.go:get_address()) end)
+    local record_id = nil
+    pcall(function()
+        local bridge = rawget(_G, "IrisGriffinBridge")
+        record_id = bridge and bridge.body_record_id and bridge.body_record_id(a.go) or nil
+    end)
+    local idkey = record_id ~= nil and ("id:" .. tostring(record_id)) or nil
+    local days = _ani_days()
+    local collected = (idkey and days[idkey] == today)
+        or days[key] == today or (akey and days[akey] == today)
+    if collected then
+        if kind == "milk" then
+            return false, "This cow has already been milked today. Come back tomorrow."
+        end
+        return false, "This chicken has already given an egg today. Come back tomorrow."
+    end
+    return true, nil, {
+        today = today, days = days, key = key, address_key = akey, id_key = idkey,
+    }
+end
+
 local function _try_animal_produce()
     if M.animal_produce == false then return false end
+    local denied_reason = nil
     for _, a in ipairs(_scan_animals(math.max(tonumber(M.animal_range) or 7.0, 7.0))) do
         local kind = (_match_tokens(a.name, M.milk_ids) and "milk")
                   or (_match_tokens(a.name, M.egg_ids) and "egg") or nil
+        local ticket = nil
         if kind then
-            local ok9, why9 = _ani_eligible(a)
-            if not ok9 then _log(kind .. ": " .. tostring(why9)); kind = nil end
-        end
-        if kind == "milk" then
-            -- 08-12 (the forced bull randomisation): GENDER OUTRANKS CHASSIS. The world
-            -- spawns only cow-band oxen, so some present as bulls by IRIS's roll -- and a
-            -- bull has nothing to give. Record gender first (tamed truth), then the roll.
-            local g9 = nil
-            pcall(function()
-                local b9 = rawget(_G, "IrisGriffinBridge")
-                g9 = b9 and b9.body_gender and b9.body_gender(a.go:get_address()) or nil
-            end)
-            if g9 == nil then
-                pcall(function()
-                    local sp9 = rawget(_G, "IrisSpecies")
-                    g9 = sp9 and sp9.gender and sp9.gender(a.go) or nil
-                end)
-            end
-            if g9 == "male" then _log("milk: a bull has nothing to give"); kind = nil end
+            local available, denied, ready_ticket = _ani_availability(a, kind)
+            if available then ticket = ready_ticket
+            else denied_reason = denied_reason or denied; kind = nil end
         end
         if kind then
-            local d = _delta() or { x = 0, z = 0 }
-            local key = string.format("%s@%d,%d", a.name,
-                math.floor((a.pos.x + d.x) / 5), math.floor((a.pos.z + d.z) / 5))
-            -- 08-12 (Mootilda milked twice): the grid key breaks the moment the animal WALKS
-            -- out of its 5m cell -- a wanderer reads as a new animal. Latch by BODY ADDRESS
-            -- too (follows it anywhere this session); the grid key stays as the backstop for
-            -- penned animals across a game restart. Either latch counts.
-            local akey = nil
-            pcall(function() akey = "a" .. tostring(a.go:get_address()) end)
-            local record_id = nil
-            pcall(function()
-                local b9 = rawget(_G, "IrisGriffinBridge")
-                record_id = b9 and b9.body_record_id and b9.body_record_id(a.go) or nil
-            end)
-            local idkey = record_id ~= nil and ("id:" .. tostring(record_id)) or nil
-            local today = _today()
-            local days = _ani_days()
-            if today and ((idkey and days[idkey] == today)
-                or days[key] == today or (akey and days[akey] == today)) then
-                _log(kind .. ": this animal has already given today - come back tomorrow")
-                return true
-            end
             -- Latch before starting the animation.  The stable record ID persists while
             -- the animal walks, is called to the bell, despawns, or the game is restarted.
-            if today then
-                if idkey then days[idkey] = today end
-                days[key] = today
-                if akey then days[akey] = today end
-                pcall(function() json.dump_file(ANI_FILE, days) end)
-            end
+            if ticket.id_key then ticket.days[ticket.id_key] = ticket.today end
+            ticket.days[ticket.key] = ticket.today
+            if ticket.address_key then ticket.days[ticket.address_key] = ticket.today end
+            pcall(function() json.dump_file(ANI_FILE, ticket.days) end)
             _ani_hold(a.go, true)   -- stand still, friend - released in on_done on every path
-            _ani_moo(a.go)          -- its own moo/cluck from its own bank
             if kind == "milk" then
-                -- a lying ox gets milked standing (Aurora 08-06): stand-up clip now, settle
-                -- into the standing idle once it's up. Both atlas-verified for ch299003.
-                _ani_clip(a.go, 60, 49)
-                aniq[#aniq + 1] = { at = os.clock() + 2.2, go = a.go, bank = 0, id = 0 }
+                local cow = a.go
+                local release_after = 8.0
+                if _ani_cow_is_standing(a.go) then
+                    -- Already upright: do not touch the motion graph.  Think-stop keeps
+                    -- her stationary and her low can happen immediately.
+                    _ani_moo(a.go)
+                else
+                    -- Lying: rise once, settle into standing idle, then low.  This ordering
+                    -- makes the response read as the cow getting up for the interaction.
+                    _ani_clip(a.go, 60, 49)
+                    aniq[#aniq + 1] = {
+                        at = os.clock() + 2.2, go = cow, bank = 0, id = 0,
+                        after = function() _ani_moo(cow) end,
+                    }
+                    -- 1.3 s sheathe + 10.9 s custom kneel/loop/stand suite.
+                    release_after = 13.0
+                end
+                -- The player's milking animation ends sooner than some native cow
+                -- vocals.  Keep the cow's think graph stopped until the low has had
+                -- room to finish, then release her independently of the chore.
+                aniq[#aniq + 1] = {
+                    at = os.clock() + release_after, go = cow,
+                    after = function() _ani_hold(cow, false) end,
+                }
                 -- 08-11 LUCK (IV system): a fortunate animal doubles its gift, luck/62 chance
                 local n9 = 1
                 pcall(function()
@@ -3098,13 +3262,13 @@ local function _try_animal_produce()
                     local lk = b and b.active_luck and tonumber(b.active_luck()) or 0
                     if lk > 0 and math.random() < (lk / 60.0) then n9 = 2 end
                 end)
-                _chore_start({ { M.milk_bank or 60, M.milk_clip or 6050, M.milk_f or 240 } }, "milking", function()
-                    _ani_hold(a.go, false)
+                _milk_chore_start(function()
                     local got = _grant_item(31700, n9)
                     _log("milked " .. a.name .. " -> Milk x" .. tostring(got or n9)
                         .. (n9 > 1 and " (fortune smiles on this one)" or ""))
                 end)
             else
+                _ani_moo(a.go)
                 local n9 = 1
                 pcall(function()
                     local b = rawget(_G, "IrisGriffinBridge")
@@ -3120,6 +3284,10 @@ local function _try_animal_produce()
             end
             return true
         end
+    end
+    if denied_reason then
+        _ani_notice(denied_reason)
+        return true
     end
     return false
 end
@@ -4662,54 +4830,27 @@ re.on_frame(function()
                 for _, a in ipairs(_scan_animals(math.max(tonumber(M.animal_range) or 7.0, 7.0))) do
                     local kind = (_match_tokens(a.name, M.milk_ids) and "Milk")
                               or (_match_tokens(a.name, M.egg_ids) and "Collect egg") or nil
-                    -- 08-11: dead or wild animals get no label (and thus no jump gate /
-                    -- grab shield) -- same gates as the grant, see _ani_eligible.
-                    if kind and not _ani_eligible(a) then kind = nil end
-                    -- 08-12 (Aurora: a "Milk" prompt on the BULL that does nothing): the
-                    -- label wears the same gender gate as the grant -- he has none to give
-                    if kind == "Milk" then
-                        local g9 = nil
-                        pcall(function()
-                            local b9 = rawget(_G, "IrisGriffinBridge")
-                            g9 = b9 and b9.body_gender and b9.body_gender(a.go:get_address()) or nil
-                        end)
-                        if g9 == nil then
-                            pcall(function()
-                                local sp9 = rawget(_G, "IrisSpecies")
-                                g9 = sp9 and sp9.gender and sp9.gender(a.go) or nil
-                            end)
-                        end
-                        if g9 == "male" then kind = nil end
-                    end
                     if kind then
-                        -- same day-key as the grant, so label and ledger can never disagree
-                        local done = false
-                        pcall(function()
-                            local d, today = _delta(), _today()
-                            if d and today then
-                                local key = string.format("%s@%d,%d", a.name,
-                                    math.floor((a.pos.x + d.x) / 5), math.floor((a.pos.z + d.z) / 5))
-                                done = (_ani_days()[key] == today)
-                            end
-                        end)
-                        anivis.near = { kind = kind, pos = a.pos, go = a.go,
-                                        dist = a.dist, done = done }
-                        break
+                        local produce_kind = kind == "Milk" and "milk" or "egg"
+                        local ready = _ani_availability(a, produce_kind)
+                        if ready then
+                            anivis.near = { kind = kind, pos = a.pos, go = a.go,
+                                            dist = a.dist }
+                            break
+                        end
                     end
                 end
             end
-            ani.near_now = anivis.near ~= nil and anivis.near.done ~= true
+            ani.near_now = anivis.near ~= nil
         end
         local nr = anivis.near
-        if not (nr and M.bed_prompt ~= false) then return end
-        if nr.done then
+        if not (nr and M.bed_prompt ~= false) then
             if _G.IrisPrompt then _G.IrisPrompt.clear("farm_animal") end
-            return -- no action remains today, so no interaction-shaped label
-        else
-            if _G.IrisPrompt then
-                local ap = Vector3f.new(nr.pos.x, nr.pos.y + 1.5, nr.pos.z)
-                _G.IrisPrompt.set("farm_animal", nr.kind, 18, nr.dist or 1e9, ap, nr.go)
-            end
+            return
+        end
+        if _G.IrisPrompt then
+            local ap = Vector3f.new(nr.pos.x, nr.pos.y + 1.5, nr.pos.z)
+            _G.IrisPrompt.set("farm_animal", nr.kind, 18, nr.dist or 1e9, ap, nr.go)
         end
         -- Native ui020701 is the sole Milk / Collect egg action prompt.
     end)
@@ -5973,8 +6114,11 @@ re.on_draw_ui(function()
         if imgui.button("PLAY the egg-pickup chain (6020>6022>6023)") then
             _chore_start({ { 60, 6020, 35 }, { 60, 6022, 140 }, { 60, 6023, 90 } }, "egg test")
         end
-        if imgui.button("PLAY the milk emote") then
-            _chore_start({ { M.milk_bank or 60, M.milk_clip or 6050, M.milk_f or 240 } }, "milk test")
+        ch, M.milk_pose = imgui.checkbox("use Witcher milking animation", M.milk_pose ~= false)
+        ch, M.milk_ground = imgui.slider_float("milking Hip grounding", tonumber(M.milk_ground) or 1.0,
+            0.0, 1.25, "%.2f")
+        if imgui.button("PLAY the full milk suite (kneel > milk > stand)") then
+            _milk_chore_start()
         end
         imgui.text("chore stage now: " .. tostring(chore.stage or "idle"))
         imgui.tree_pop()

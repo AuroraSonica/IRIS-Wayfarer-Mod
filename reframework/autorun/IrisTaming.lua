@@ -7,6 +7,16 @@
 -- V1 stubs (flagged in UI): food check is a toggle (inventory research pending), follow is
 -- warp-follow (native nav research pending), tells are notify-lines (in-world poses later).
 local MOD = "IrisTaming"
+local HC = {
+    mesh = "character/ch/iris_housecat/iris_housecat.mesh",
+    mdf = "riftspeak/housecat/iris_housecat_v07.mdf2",
+    prefab = "AppSystem/ch/ch299/Prefab/ch299200_A_00.pfb",
+    warm_secs = 2.0,
+    carry_front_joints = {
+        { "L_FrontLeg_Toes", "toe" }, { "R_FrontLeg_Toes", "toe" },
+        { "L_FrontLeg_Ankle", "wrist" }, { "R_FrontLeg_Ankle", "wrist" },
+    },
+}
 
 local C = {
     enabled = true,
@@ -51,6 +61,32 @@ local C = {
     perch_scale = 0.85,           -- ⛔ DEAD since 08-13: shoulder riding no longer changes size at
                                   -- all (Aurora: "Only the IVs should affect the size"). Kept only so
                                   -- saved configs load without a nil; nothing reads it.
+    perch_shrink = 0.78,          -- ⭐ 08-17 GLOBAL SHOULDER SCALE (Aurora's call, and the RIGHT call):
+                                  -- ⭐⭐ 0.78 IS A MEASUREMENT, NOT A TASTE SETTING. Field-matched by
+                                  -- Aurora on Quoth, and the log says exactly why: the easer's real
+                                  -- target for that crow is 1.60 (base 1.00 x gene 1.60 -- ch299410
+                                  -- is tuned to reach x2.0, so 1.60 is BY DESIGN, not a bug), and
+                                  -- 1.60 x 0.78 = 1.25 = what the GROUND body actually renders. The
+                                  -- native ScaleMediator's own reduction never appears in LocalScale
+                                  -- at all, which is why the 08-13 fix made the NUMBER converge and
+                                  -- left the LOOK different. This dial is that missing term.
+                                  -- the 08-13 "ground SHRINK, not shoulder growth" diagnosis fixed the
+                                  -- easer but the field still reads BIGGER on the shoulder, so stop
+                                  -- theorising and give her the dial. ONE multiplier for every perched
+                                  -- creature, on top of whatever scale the body already owns (IV size,
+                                  -- captured ground hold, species base) -- 1.0 = untouched, 0.8 = a fifth
+                                  -- smaller up there. Applied at every shoulder scale writer (the late
+                                  -- pin, the leap-up arc, and the stable easer's choke point) so the
+                                  -- three of them can never disagree. Whatever value matches the ground
+                                  -- IS the measurement of the remaining bug -- tell me the number.
+    companion_brine_shield = true,  -- ⭐ 08-17 (Aurora): tamed companions do not drown. The brine
+                                  -- is suppressed PER BODY (BrineProcessor + IsEnableDestroyByBrine)
+                                  -- on every tamed creature -- never globally, so it stays lethal
+                                  -- for the Arisen, for pawns and at the world boundary. Reason it
+                                  -- exists: our own auto-pilots put them in the water (the scout
+                                  -- dive did it, and a native-attacking wolf chasing prey into a
+                                  -- river will do it constantly), and losing a companion to OUR
+                                  -- pathing is not a stake, it is a bug with a funeral.
     perch_idle_clips = "0",       -- compact shoulder idle; cry/groom clips spread the wings and mimic a scale jump
     perch_bathe_chance = 0.0,     -- chance per idle cycle to bathe (60:0/60:10) ON THE SHOULDER; off (odd up there)
     ground_bathe_chance = 0.15,   -- chance per idle cycle to bathe while idle ON THE GROUND (a cute touch)
@@ -58,6 +94,12 @@ local C = {
     carry_pet_x = 0.0,            -- the ARM-CARRY hold spot (scripted pet carry; chest-anchored)
     carry_pet_y = -0.1,
     carry_pet_z = 0.34,
+    housecat_mesh_armed = false,   -- session-only crash latch: arm only after the custom PAK is mounted
+    housecat_spawn_distance = 2.6,
+    housecat_carry_scale = 0.72,
+    housecat_carry_paw_fix = true,
+    housecat_carry_toe_relax = 0.85,
+    housecat_carry_wrist_relax = 0.25,
     oxtame_enabled = true,        -- THE PROPER GRIFFIN TAMING (Aurora's canon scene): kill an ox as the OFFERING
     oxtame_griffin_range = 800.0, -- only a wild griffin genuinely in the area can answer the ox offering
     oxtame_guaranteed_approach = true, -- after scenting the kill, FC-off terrain-following flight owns the approach instead of trusting a patrol waypoint
@@ -268,17 +310,50 @@ local C = {
     bird_bands = "ch299410,ch299430,ch299400,ch299440,ch299420",   -- which perched creatures can scout (crow, bird, both bats, seabird)
     scout_key = 0x4A,             -- 'J' keyboard: launch scout / return early (toggle)
     scout_button_bit = 0x2000,    -- R3 (right stick click): same launch/return toggle on the pad
-    scout_ping_key = 0x50,        -- 'P' keyboard: ping nearby targets while scouting
+    -- ⭐⭐ 08-17 KEYBOARD BINDS NOW MIRROR DD2'S OWN (Aurora: "make the keyboard controls match
+    -- their input too -- so shift for soar, V for ping"). The rule: whatever DD2 binds a PAD
+    -- button to on keyboard, our action on that same pad button takes the SAME key. From her
+    -- plaque screenshots: Y=V · X=LMB · B=Shift · A=E(Grab) · Back=O · LT=X · RT=E · LB=Ctrl.
+    -- So muscle memory transfers straight from riding/combat into flying the bird.
+    scout_ping_key = 0x56,        -- 'V' = DD2's Stonesplitter key (pad Y) -> PING. (was 'P')
     scout_ping_button_bit = 0x10, -- Triangle/Y: ping on the pad
-    scout_caw_key = 0x43,         -- 'C' keyboard: CAW to distract a nearby enemy toward the crow
+    scout_caw_key = 0x01,         -- LEFT MOUSE = DD2's Mighty Sweep (pad X) -> DIVE-STEAL. (was 'C')
+                                  -- ⚠ VK_LBUTTON via reframework:is_key_down, which reads the raw
+                                  -- device and so is unaffected by the scout's input-starve hook.
     scout_caw_button = 0x40,      -- X / square: same caw on the pad
     scout_panic_key = 0x08,       -- Backspace: FORCE-restore control (the never-soft-locked button)
     scout_panic_combo = 0x3000,   -- L3+R3 together on the pad = the same panic force-restore
+    scout_timer_px = 39.0,        -- ⭐ 08-17 (Aurora: "make the countdown timer bigger"): the scout
+                                  -- countdown, in Alegreya (DD2's closest legal menu face). Flashes
+                                  -- amber under 5s so the last seconds are felt, not read.
     scout_secs = 30.0,            -- hard cap: control returns after this no matter what (depends on nothing).
                                   -- 30s also keeps the bird within the world-streamed radius (streaming
                                   -- follows the PLAYER, so a long/far scout outruns the loaded terrain)
-    scout_collect_key = 0x46,     -- 'F' keyboard: the scout bird pecks/collects a nearby item
-    scout_collect_button = 0x20020, -- A / cross: same collect on the pad
+    scout_collect_key = 0x45,     -- 'E' = DD2's Grab key (pad A) -> COLLECT. Grabbing IS collecting,
+                                  -- so this is the one bind that reads right on both devices. (was 'F')
+    scout_collect_button = 0x800,  -- ⭐ 08-17 r2: RT / R2 -- DD2's own GRAB button, and grabbing
+                                  -- IS collecting. Moved off A (0x20020) so the A slot can carry
+                                  -- "Up" honestly: A's keyboard glyph is SPACE, which the scout
+                                  -- already used for ascend. Now every relabelled slot's glyph
+                                  -- names a key that really does that thing.
+    -- ⭐ 08-18: these six are AURORA'S OWN FIELD-CHOSEN NUMBERS, read off her slider screenshot
+    -- and baked as the defaults. She placed them against the real plaque at real distance; that
+    -- beats anything I would pick from a description.
+    scout_return_dx = 40.0,       -- the RETURN row (R3 has no native prompt slot, so it stays our
+    scout_return_dy = 181.0,      -- own drawn line). dx/dy = inset from the RIGHT/BOTTOM edge.
+    scout_return_px = 23.5,
+    scout_pouch_px = 33.0,        -- the pouch readout: size, and where on screen (fractions of
+    scout_pouch_x = 0.510,        -- width/height) -- it used to hide behind the stamina gauge.
+    scout_pouch_y = 0.095,
+    -- ⭐ 08-18 THE STICK-CLICK PROMPTS (Aurora): L3/R3 have NO slot in DD2's prompt panel, so
+    -- unlike Ping/Soar/etc these cannot be relabelled onto the native UI -- they are drawn by us,
+    -- in the same Alegreya plaque grammar, stacked just above the Return row's anchor.
+    perch_prompt = true,          -- show "L3 Shoulder" / "L3 Let Down" / "R3 Scout"
+    perch_key = 0x47,             -- 'G' keyboard: shoulder / set down (no native L3 equivalent
+                                  -- exists, so this is a new bind rather than a mirrored one)
+    perch_prompt_dx = 40.0,       -- inset from the RIGHT edge
+    perch_prompt_dy = 181.0,      -- inset from the BOTTOM (same anchor as the RETURN row)
+    perch_prompt_px = 23.5,
     scout_ping_sound_id = 2832279408,   -- ping chime (COMMON/ABILITY bank -- Aurora's pick 07-15); resolved from the PLAYER's banks, rings at the scout
                                   -- (the ears ride the bird while scouting); 0 = borrow the caw id
     scout_ping_flash = true,      -- brief sonar screen-pulse when the ping fires
@@ -647,6 +722,19 @@ local S = {
     btn_prev = false,
     player_prev_pos = nil,
     status = "(waiting)",
+    housecat_spawner = nil,
+    housecat_pending = false,
+    housecat_ch = nil,
+    housecat_res = nil,
+    housecat_holder = nil,
+    housecat_mdf_res = nil,
+    housecat_mdf_holder = nil,
+    housecat_prefab = nil,
+    housecat_prefab_ctrl = nil,
+    housecat_warm_at = nil,
+    housecat_spawn_queued = false,
+    housecat_rebind_at = nil,
+    housecat_status = "disarmed",
 }
 -- ⭐ published BY REFERENCE for other modules (08-05: IrisFarming's monster guard must never
 -- evict a tamed creature - wolves are tameable TODAY, chimera/garm may follow, and a species
@@ -1120,8 +1208,24 @@ local function pin_crow_shoulder(go, pgo)
     end)
 end
 
--- Per-band shoulder placement (GLOBAL: read by the pin + sliders). Scale is deliberately
--- absent: the bloodline IV remains the sole size owner on ground and shoulder alike.
+-- ⭐⭐ THE GLOBAL SHOULDER SCALE (08-17, C.perch_shrink). THREE writers can put a scale on a
+-- perched body: this file's late pin, this file's leap-up arc, and IrisGriffin/stable.lua's IV
+-- easer at its choke point. All three multiply by THIS, so they can never disagree by a frame.
+-- ⛔ GLOBAL function + a published global VALUE on purpose: the easer lives in another file, and
+-- a local over there resolves to a nil global (the cross-file rawget law, learnt the hard way in
+-- the rodeo dead-rays saga). Clamped: a fat-fingered config may not scale a companion to nothing.
+function iris_perch_shrink()
+    local m = tonumber(C.perch_shrink)
+    if not m or m ~= m then return 1.0 end   -- nil or NaN out of a mangled config = no change
+    if m < 0.25 then return 0.25 end
+    if m > 2.0 then return 2.0 end
+    return m
+end
+
+-- Per-band shoulder placement (GLOBAL: read by the pin + sliders). Per-species scale is
+-- deliberately absent: the bloodline IV owns relative size, and the ONE global shrink above
+-- owns the ground-vs-shoulder difference. If a single species ever needs its own number, add
+-- it here as sp_<band>_psc -- the migration at ~4160 already writes that key.
 function iris_species_perch(band9)
     band9 = tostring(band9 or "")
     return {
@@ -2160,6 +2264,26 @@ local function play_player_motion(player, id, bank, start_frame, layer_idx)
     end)
 end
 
+-- ⛔⛔⛔ THE DOWNED-BODY ORACLE (GLOBAL; the liveness law, 08-14 unicorn CTD).
+-- A downed IRIS companion is ALIVE AT 1 HP with its AI off, parked in the native action node
+-- Damage.Damage_Root.DmgDownLoop which IrisGriffin/downed.lua RE-ASSERTS EVERY FRAME. So
+-- get_IsDead is false, get_Hp is 1, and every ordinary liveness test in this file waves it
+-- straight through. _G.IrisDownedAddrs (keyed by GAMEOBJECT address) is the ONLY oracle.
+-- Writing a transform, a scale or a clip onto such a body = the actinter move crash
+-- (app.actinter.cmd.move.MoveBase.updateImpl, surfacing as c0000005 in ActionManager.updateAction).
+-- ⇒ ANY tick in this file that drives a companion asks this FIRST and stands down if it is true.
+function iris_body_downed(go)
+    if not go then return false end
+    local downed = false
+    pcall(function()
+        local d = rawget(_G, "IrisDownedAddrs")
+        if type(d) ~= "table" then return end
+        local a = go:get_address()
+        if a and d[a] then downed = true end
+    end)
+    return downed
+end
+
 local function play_motion(ch, bank, id)
     -- direct clip on layer 0 (the puppet law: clips play with logic managed elsewhere)
     -- ⛔ DOWNED GUARD (2026-07-21): while the griffin mod holds a companion in its DOWNED
@@ -2167,13 +2291,7 @@ local function play_motion(ch, bank, id)
     -- idle cycle re-drove the body every frame and stomped the down node -- the rabbit sat
     -- there grooming its ears instead of collapsing. Two writers, one layer 0.
     local downed_blocked = false
-    pcall(function()
-        local d = _G.IrisDownedAddrs
-        if type(d) ~= "table" then return end
-        local go = char_go(ch)
-        local a = go and go:get_address()
-        if a and d[a] then downed_blocked = true end
-    end)
+    pcall(function() downed_blocked = iris_body_downed(char_go(ch)) end)
     if downed_blocked then return end
     pcall(function()
         local layer = ch:call("get_Motion"):call("getLayer", 0)
@@ -2206,6 +2324,90 @@ local function iris_tame_face_text(str, x, y, argb, px)
     -- objects to be born during mount transitions; this surface has no reason to own a font.
     if F and F.text and F.text(str, x, y, argb, px) then return end
     iris_screen_text(str, x, y, argb, px)          -- d2d down: the plain fallback still says it
+end
+
+-- ⭐⭐⭐ 08-17 THE CONTROL PLAQUE (Aurora: "instead of the controls written at the top in small
+-- text, can we amend the UI like we do for everything else including mounts").
+-- DD2's own plaque lives bottom-right, right-aligned, one action per line: the words in muted
+-- grey, then the glyph. Face buttons wear the console colours; keyboard keys sit in a boxed well.
+-- This renders in that exact grammar so a scout reads as part of the game rather than as debug
+-- text pasted over the top of it -- and it is GLOBAL so every future "you are driving an animal"
+-- mode (rat, rabbit, bat, and whatever comes next) gets the same face for free.
+--
+-- rows = { { label = "Ping", pad = "Y", key = "V" }, ... }   -- topmost row first
+--   pad = the face/shoulder glyph ("Y"/"X"/"A"/"B"/"L stick"/"R1"...), key = the keyboard glyph.
+--   A row may omit either: the plaque draws whichever suits the device in use.
+IRIS_PAD_GLYPH_COLOR = {
+    -- DD2's own face-button colours, eyeballed off Aurora's plaque screenshots
+    Y = 0xFFE8C860,   -- gold
+    X = 0xFF70B0E8,   -- blue
+    B = 0xFFE07070,   -- red
+    A = 0xFF80D890,   -- green
+}
+function iris_control_plaque(rows, opts)
+    if type(rows) ~= "table" or #rows == 0 then return end
+    opts = opts or {}
+    local w, h = 1920.0, 1080.0
+    pcall(function()
+        local ds = imgui.get_display_size()
+        if ds then w = tonumber(ds.x) or w; h = tonumber(ds.y) or h end
+    end)
+    local sc = h / 1080.0
+    local px = math.max(12.0, tonumber(opts.px) or tonumber(C.tame_hint_px) or 19.0)
+    local line = px * 1.5
+    -- ⛔ Anchored to the BOTTOM-RIGHT and grown UPWARD, never downward: the game's own plaque
+    -- owns that corner and a fixed top edge would drift into it the moment a mode gains a row.
+    local right = w - (tonumber(opts.dx) or 40.0) * sc
+    local bottom = h - (tonumber(opts.dy) or 250.0) * sc
+    local top = bottom - line * #rows
+    local on_pad = S.stable_input_device ~= "keyboard"
+    -- rough advance width for this face; the plaque is right-aligned so a small error just
+    -- shifts a row a pixel or two rather than colliding with anything
+    local function adv(s) return (px * 0.52) * #tostring(s or "") end
+    -- ⭐ ALEGREYA, deliberately -- the same per-call face override the griffin's fake button
+    -- prompts already use (IrisFont:187). It is the closest LEGAL match to DD2's own "francr"
+    -- menu face, so this plaque and the ride prompts wear one typeface between them. Cached
+    -- face@px inside IrisFont, so the per-call override costs nothing after the first frame.
+    local function ptext(s, x, y, col)
+        local F = _G.IrisFont
+        if F and F.text and F.text(s, x, y, col, px, nil, "Alegreya.ttf") then return end
+        iris_tame_face_text(s, x, y, col, px)
+    end
+    for i, r in ipairs(rows) do
+        local y = top + line * (i - 1)
+        local glyph = on_pad and r.pad or (r.key or r.pad)
+        local label = tostring(r.label or "")
+        if r.header then
+            -- a section header (the "Back | Hold for Stable" line in the native plaque)
+            ptext(label, right - adv(label), y, 0xFFC8C0A8)
+        elseif glyph then
+            glyph = tostring(glyph)
+            local gw
+            if on_pad and #glyph <= 2 then
+                -- a bare coloured letter, exactly as the game draws its face buttons
+                gw = adv(glyph) + 10.0 * sc
+                local gx = right - gw + 4.0 * sc
+                ptext(glyph, gx, y, IRIS_PAD_GLYPH_COLOR[glyph] or 0xFFE8E0CC)
+            else
+                -- shoulder/stick names on pad, and EVERY keyboard key, get the boxed well --
+                -- the game boxes Ctrl/Shift/Space the same way.
+                -- ⛔ draw.filled_rect eats ABGR, NOT ARGB (byte-swapped constants below); the
+                -- IrisFont.text calls on either side take ARGB as authored. Do not "tidy" these
+                -- into matching -- they are two different packings and always have been.
+                gw = adv(glyph) + 12.0 * sc
+                local gx = right - gw
+                pcall(function()
+                    draw.filled_rect(gx, y - 2.0 * sc, gw, px * 1.25, 0x70141010)
+                    draw.filled_rect(gx, y - 2.0 * sc, gw, 1.0, 0x5050A0C8)
+                    draw.filled_rect(gx, y - 2.0 * sc + px * 1.25, gw, 1.0, 0x5050A0C8)
+                end)
+                ptext(glyph, gx + 6.0 * sc, y, 0xFFE8E0CC)
+            end
+            ptext(label, right - gw - 8.0 * sc - adv(label), y, 0xFFA8A49C)
+        else
+            ptext(label, right - adv(label), y, 0xFFA8A49C)
+        end
+    end
 end
 
 -- Mount-safe rebuild: the game thread resolves one boolean from PauseManager + ui010201;
@@ -2300,6 +2502,39 @@ local function iris_tame_mode_hud()
     iris_tame_face_text(keyname, bx + 6.0 * sc, by, 0xFFE8E0CC, ppx)
     iris_tame_face_text(on_pad and "Hold for Stable" or "for Stable",
         bx + kw + 8.0 * sc, by, 0xFFA8A49C, ppx)
+
+    -- ── ⭐⭐ 3. THE STICK-CLICK PROMPTS (Aurora 08-18): "if you have an active creature who can
+    -- go on the shoulder, an 'L3 Shoulder' fake UI -- and when on the shoulder it changes to
+    -- 'L3 Let Down', and one for R3 that's 'R3 Scout'."
+    -- ⛔ These CANNOT go through IrisPromptBar: DD2's panel has no L3/R3 slot to relabel (the
+    -- slot table is LT/LB/Y/X | RT/RB/B/A), and set_slot can only ever rewrite a slot the game
+    -- is already showing. So they are drawn, in the same plaque grammar, at the Return anchor.
+    if C.perch_prompt == false or S.scout then return end   -- the scout owns that corner in flight
+    local rows8 = nil
+    -- throttled: this walks S.tamed, and the plaque redraws every frame
+    -- ⛔ SCOPE, and it would have failed SILENTLY: this HUD lives at ~:2400, but name_in_csv
+    -- (:2733) and species_clips (:5440) are file LOCALS declared BELOW it. In Lua a name used
+    -- above its local declaration compiles to a GLOBAL lookup -- so both would have been nil
+    -- here, the builder would have thrown inside its own pcall, and the prompt would simply
+    -- never appear with nothing in the log to say why. ⇒ the row builder is a GLOBAL function
+    -- defined after those locals (globals resolve at call time, and load finishes long before
+    -- the first frame). Same reason iris_sendhome_owns is a global 11k lines from its caller.
+    if os.clock() >= (tonumber(S.perch_prompt_at) or 0.0) then
+        S.perch_prompt_at = os.clock() + 0.25
+        S.perch_prompt_rows = nil
+        pcall(function()
+            if iris_perch_prompt_rows then S.perch_prompt_rows = iris_perch_prompt_rows() end
+        end)
+    end
+    rows8 = S.perch_prompt_rows
+    if rows8 then
+        pcall(function()
+            iris_control_plaque(rows8, {
+                dx = tonumber(C.perch_prompt_dx) or 40.0,
+                dy = tonumber(C.perch_prompt_dy) or 181.0,
+                px = tonumber(C.perch_prompt_px) or 23.5 })
+        end)
+    end
 end
 
 -- Resolve whether normal gameplay HUD is genuinely visible on the game thread. ui010201's
@@ -4041,6 +4276,9 @@ local function load_state()
                 -- An old save can still contain false from the abandoned transform-pin
                 -- experiment. Native wolf carry is now code-authoritative.
                 wolf_carry_native = true,
+                -- Resource creation on an unmounted custom path can crash before Lua can
+                -- catch it. This latch is deliberately session-only.
+                housecat_mesh_armed = true,
             }
             -- keep the preview-tuned posture angles safe from the save (restored just below)
             local posture_code = {}
@@ -4100,6 +4338,16 @@ local function load_state()
         if not tostring(C.critter_bands or ""):find("ch299221", 1, true) then
             C.critter_bands = tostring(C.critter_bands or "") .. ",ch299221"
         end
+        -- migration: 08-17 scout keys move onto DD2's OWN keyboard bindings (ping P->V,
+        -- dive C->LMB, collect F->E). Only rewritten when the saved value is still the OLD
+        -- DEFAULT -- a key Aurora has deliberately rebound is hers and must survive an update.
+        if math.floor(tonumber(C.scout_ping_key) or 0) == 0x50 then C.scout_ping_key = 0x56 end
+        if math.floor(tonumber(C.scout_caw_key) or 0) == 0x43 then C.scout_caw_key = 0x01 end
+        if math.floor(tonumber(C.scout_collect_key) or 0) == 0x46 then C.scout_collect_key = 0x45 end
+        -- ...and collect moves off the A pad button onto RT, so the A slot can honestly say "Up"
+        if math.floor(tonumber(C.scout_collect_button) or 0) == 0x20020 then C.scout_collect_button = 0x800 end
+        -- the old giant timer default (21px) predates the Alegreya pass; lift saved configs too
+        if math.floor(tonumber(C.scout_timer_px) or 0) == 21 then C.scout_timer_px = 46.0 end
         -- migration: the first bat roost defaults (0, -0.05, 0) buried him in the armpit
         -- (image 43) -- shift saved configs still on them up and out so he's visible to tune
         if tonumber(C.bat_perch_x) == 0.0 and tonumber(C.bat_perch_y) == -0.05 and tonumber(C.bat_perch_z) == 0.0 then
@@ -4253,6 +4501,7 @@ local function save_state()
     pcall(function() json.dump_file(MOD .. "_state.json", { config = C, camps = S.camps }) end)
 end
 load_state()
+C.housecat_mesh_armed = false
 
 local function learn_camp(pp)
     -- record the spot when the player camps (dedup within 30m of a known one)
@@ -5114,7 +5363,17 @@ local SPECIES_CLIPS = {
         feed_wait = "It waits for a morsel - fruit, berries, even something past its best... you carry none.",
         steal_chance = 0.85,   -- the PICKPOCKET is a professional (crow dive = the 0.65 amateur)
         pin_bank = 0, pin_clip = 0,   -- no bank-30 carry set on this rig: it just sits in your arms
-        hud = "Left stick run   R1/Space = HOP   B = dash   X pickpocket   A collect   Y ping   J/R3 return" },
+        -- ⭐ 08-17: per-species PLAQUE rows (was a single line of small text across the top).
+        -- Topmost row first; keys mirror DD2's own pad->keyboard bindings.
+        hud_rows = {
+            { label = "Return",     pad = "R3",      key = "J" },
+            { label = "Ping",       pad = "Y",       key = "V" },
+            { label = "Pickpocket", pad = "X",       key = "LMB" },
+            { label = "Collect",    pad = "A",       key = "E" },
+            { label = "Dash",       pad = "B",       key = "Shift" },
+            { label = "Hop",        pad = "R1",      key = "Space" },
+            { label = "Run",        pad = "L stick", key = "WASD" },
+        } },
     -- RABBIT (atlas 2026-07-14): the FIRST ground critter -- ground=true skips the whistle/
     -- fly-to-arm beat (a rabbit has no wings; c_meet -> straight to the food drop). Real run
     -- 200, uphill/downhill walks 280/281, grooming trio 3/4/5, drink 60:10/11, sleep 60:20/21.
@@ -5127,7 +5386,15 @@ local SPECIES_CLIPS = {
         -- and enough speed/time to visibly cross it.
         offer_reach = 24.0, offer_speed = 1.5, offer_timeout = 35.0,
         -- per-species HUD hint (Aurora: ground critters will DIFFER -- rat/spider get their own)
-        hud = "Left stick run   R1/Space = HOP   B = burrow (toggle)   X ambush (burrowed)   A collect   Y ping   J/R3 return" },
+        hud_rows = {
+            { label = "Return",  pad = "R3",      key = "J" },
+            { label = "Ping",    pad = "Y",       key = "V" },
+            { label = "Ambush",  pad = "X",       key = "LMB" },
+            { label = "Collect", pad = "A",       key = "E" },
+            { label = "Burrow",  pad = "B",       key = "Shift" },
+            { label = "Hop",     pad = "R1",      key = "Space" },
+            { label = "Run",     pad = "L stick", key = "WASD" },
+        } },
     -- CHICKEN (atlas 2026-08-12): GROUND critter -- "chickens can't fly xD" (Aurora,
     -- watching one attempt the fly-to-arm). No eat clip on the rig (the idle IS the
     -- pecking); walk 100, run 200; the pin_lift set means native pickup carries fine.
@@ -5138,7 +5405,13 @@ local SPECIES_CLIPS = {
                                     -- instead: idle punctuated by the 90-degree turn clips
                                     -- (a hen pecking about is exactly this little shuffle)
         feed_wait = "It waits for a morsel - grain, greens, anything small... you carry none.",
-        hud = "Left stick run   B = dash   A collect   Y ping   J/R3 return" },
+        hud_rows = {
+            { label = "Return",  pad = "R3",      key = "J" },
+            { label = "Ping",    pad = "Y",       key = "V" },
+            { label = "Collect", pad = "A",       key = "E" },
+            { label = "Dash",    pad = "B",       key = "Shift" },
+            { label = "Run",     pad = "L stick", key = "WASD" },
+        } },
 }
 SPECIES_CLIPS.ch299220 = SPECIES_CLIPS.ch299221   -- both fowl bands share the ch99_220 rig
 SPECIES_CLIPS.ch299440 = SPECIES_CLIPS.ch299400   -- the OTHER bat band (Aurora's tame landed as
@@ -5152,6 +5425,36 @@ local function species_clips(go)
         t.arm_dy = tonumber(C.bat_arm_dy) or 0.0   -- glove-hover aim height (slider)
     end
     return t
+end
+
+-- ⭐⭐ 08-18 THE STICK-CLICK PROMPT ROWS (Aurora). GLOBAL on purpose: the HUD that draws these
+-- sits ~3k lines ABOVE species_clips/name_in_csv, and a local used above its declaration is a
+-- nil global -- which fails silently inside the HUD's pcall. Declared here, below both.
+-- Returns plaque rows, or nil when there is nothing to offer.
+function iris_perch_prompt_rows()
+    local pl8 = get_player()
+    local pp8 = pl8 and upos(char_go(pl8))
+    for ch8, rec8 in pairs(S.tamed or {}) do
+        local go8 = char_go(ch8)
+        -- ⛔ a downed companion is offered nothing: you cannot shoulder a body downed.lua owns
+        if go8 and not iris_body_downed(go8) and name_in_csv(go_name(go8), C.critter_bands) then
+            local sp8 = species_clips(go8) or {}
+            local scoutable8 = name_in_csv(go_name(go8), C.bird_bands) or sp8.ground == true
+            if rec8.perch then
+                local r8 = { { label = "Let Down", pad = "L3", key = "G" } }
+                if scoutable8 then r8[#r8 + 1] = { label = "Scout", pad = "R3", key = "J" } end
+                return r8
+            end
+            -- Offered only inside the SAME reach the L3 handler itself uses (2.5m), so the
+            -- prompt can never advertise a shoulder that the button would then refuse. A
+            -- prompt that lies about what a press will do is worse than no prompt.
+            local cp8 = upos(go8)
+            if cp8 and pp8 and dist(cp8, pp8) <= 2.5 then
+                return { { label = "Shoulder", pad = "L3", key = "G" } }
+            end
+        end
+    end
+    return nil
 end
 
 local function species_idle_clip(go)
@@ -5581,6 +5884,13 @@ local function scout_force_restore(reason)
     -- bespoke partial unwind, so a suppression latch can never be left stuck on.
     pcall(function() scout_vision_apply(false) end)   -- always restore the screen grade
     pcall(function() scout_ears_restore() end)        -- ...and the ears come home
+    -- give the game's button panel its own labels back. The registry expires entries on a ~1s
+    -- TTL anyway, but an explicit clear means the plaque snaps back on the frame control returns
+    -- rather than advertising "Dive-steal" at an Arisen holding a sword.
+    pcall(function()
+        local P8 = rawget(_G, "IrisPrompt")
+        if P8 and P8.clear_slot then P8.clear_slot("iris_scout") end
+    end)
     pcall(function() scout_deposit() end)   -- the crow keeps its haul even on an abort
     local sc = S.scout
     S.scout = nil   -- cleared FIRST: a malformed state can never abort the unwind before this
@@ -5619,7 +5929,19 @@ local function scout_force_restore(reason)
             local go = char_go(sc.ch)
             if rec then
                 rec.scouting = nil
-                if go and not is_dead(sc.ch) then rec.perch = true; rec.follow = nil   -- the loop re-arms the pin
+                -- ⛔⛔⛔ 08-17 -- THE SECOND HALF OF THE DIVEBOMB CTD, and it lived in the UNWIND.
+                -- "not is_dead" was the only test here, and a DOWNED bird passes it (alive at 1 HP
+                -- -- the liveness law). So the abort that fires *because* the bird went down would
+                -- then re-arm the shoulder pin on it: our per-frame pin writing a body that
+                -- downed.lua holds in DmgDownLoop and re-asserts. Fatal, and on the very frame we
+                -- were trying to make things safe. A downed bird gets NOTHING re-armed -- the tamed
+                -- loop's downed gate holds it hands-off and re-arms the follow when it revives.
+                if go and iris_body_downed(go) then
+                    rec.perch = nil; rec.follow = nil; rec.fmode = nil
+                    rec.perch_ground_scale = nil
+                    rec.downed_hold = true
+                    pcall(function() rawset(_G, "IrisTamingPerchScaleHold", nil) end)
+                elseif go and not is_dead(sc.ch) then rec.perch = true; rec.follow = nil   -- the loop re-arms the pin
                 else rec.follow = true; rec.perch = nil end
             end
         end
@@ -5667,10 +5989,19 @@ end
         -- IV target then becomes visible. The contract is visual continuity, so L3-up
         -- captures the ground body's ACTUAL LocalScale and this late hook reasserts that
         -- exact value after every other writer. This is not a shoulder multiplier.
+        -- ⭐ 08-17: ...and then the ONE global shoulder dial on top (C.perch_shrink). The captured
+        -- ground scale is still the BASE -- this multiplies it -- so the slider means exactly
+        -- "how much smaller than its ground self does it ride", nothing more.
         local hold = tonumber(pa.scale)
         if hold and hold > 0.05 and hold <= 3.0 then
-            pa.go:call("get_Transform"):call("set_LocalScale", Vector3f.new(hold, hold, hold))
+            local s = hold * iris_perch_shrink()
+            pa.go:call("get_Transform"):call("set_LocalScale", Vector3f.new(s, s, s))
         end
+        -- ⛔ NO else-branch here on purpose. When the L3 ground capture MISSED there is no base to
+        -- multiply, and re-reading the live LocalScale every frame to scale it would compound the
+        -- dial to a dot within a second. That case belongs to the real scale owner: stable.lua's
+        -- easer multiplies its own resolved target by iris_perch_shrink() at its choke point, so
+        -- the dial works with or without a capture and only ever one writer owns the number.
     end)
     -- (08-08: the PALM/CALL posture block moved to PrepareRendering
     -- below -- Aurora: "the palm-out hand was shaking". Written here at
@@ -11656,6 +11987,19 @@ re.on_frame(function()
         if (not (sc.ch and char_go(sc.ch))) or is_dead(sc.ch) or (player and is_dead(player)) then
             scout_force_restore("lost"); return
         end
+        -- 3b) ⛔⛔⛔ THE BIRD WENT DOWN (08-17, Aurora's divebomb-into-the-sea CTD).
+        -- The brine put the crow down mid-dive and NONE of the tests above noticed: a downed
+        -- companion is alive at 1 HP with IsDead false (the liveness law), so the scout kept
+        -- piloting a body that downed.lua had already claimed, HP-pinned and parked in
+        -- DmgDownLoop -- while the Arisen stayed frozen and input-starved. Fly it no further.
+        if iris_body_downed(char_go(sc.ch)) then
+            scout_force_restore("your companion went down")
+            pcall(function()
+                set_prompt("SCOUT ENDED", "It went down out there. Get to it before the timer runs out.",
+                    4.0, 0xFFE0A040)
+            end)
+            return
+        end
         -- 4) ABSOLUTE hard cap -- pure arithmetic (t0 shifts with pauses, so menus don't eat it)
         if now >= (tonumber(sc.t0) or now) + (tonumber(C.scout_secs) or 60.0) + 30.0 then
             scout_force_restore("hard cap"); return
@@ -11703,18 +12047,94 @@ re.on_frame(function()
         local cx = w * 0.5
         local pn = 0
         pcall(function() local p = S.scout_pouch; if p then pn = #(p.items or {}) + (p.gathered or 0) + (p.looted or 0) end end)
-        iris_screen_text(string.format("SCOUT   %.0fs%s", left, pn > 0 and ("   pouch: " .. pn) or ""), cx - 44, 42, 0xFF80FFB0, 21)
-        -- the control hints speak the species: sp.hud when the table names one (Aurora:
-        -- ground critters will all differ -- rat/spider get their own lines), else the
-        -- bird default
-        local hud9 = nil
-        pcall(function() hud9 = (species_clips(char_go(S.scout.ch)) or {}).hud end)
-        if hud9 then
-            iris_screen_text(tostring(hud9), cx - 380, 68, 0xFFEFEFEF, 18)
-        else
-            iris_screen_text("Left stick fly   R1/L1 up-down (hold L1 low = LAND, R1 = take off)   B soar   A collect   X dive-steal   Y ping   J/R3 return",
-                cx - 440, 68, 0xFFEFEFEF, 18)
+        -- ⭐ 08-17 (Aurora: "make the countdown timer bigger and use the Alegreya text so it
+        -- matches the UI font"). Alegreya is the ladder's closest LEGAL match to DD2's own
+        -- "francr" menu face, so the timer now reads as part of the game's furniture. The
+        -- face is requested per-call; IrisFont caches handles, so this is not a per-frame
+        -- DirectWrite object (the mount-transition lesson at iris_tame_face_text).
+        local tpx = math.max(18.0, tonumber(C.scout_timer_px) or 46.0)
+        local tstr = string.format("%.0fs", left)
+        local F9 = _G.IrisFont
+        local tcol = (left <= 5.0 and (math.floor(os.clock() * 4.0) % 2 == 0)) and 0xFFFF9060 or 0xFF80FFB0
+        if not (F9 and F9.text and F9.text(tstr, cx - tpx * 0.55, 34, tcol, tpx, true, "Alegreya.ttf")) then
+            iris_screen_text(tstr, cx - tpx * 0.55, 34, tcol, tpx)
         end
+        -- ⭐ 08-17 r2 (Aurora: "move this pouch notice somewhere less obscured, make the font
+        -- bigger, and use proper case"). It sat directly under the timer, which is exactly where
+        -- the stamina bar draws -- so the one readout that tells her the flight was WORTH it was
+        -- hidden behind a gauge. Moved out from under it, sized up, and Title Case like the rest
+        -- of the game's furniture. Alegreya, to match the timer it belongs to.
+        if pn > 0 then
+            local ppx9 = math.max(16.0, tonumber(C.scout_pouch_px) or 30.0)
+            local ptxt9 = "Pouch " .. pn
+            local px9 = w * (tonumber(C.scout_pouch_x) or 0.5) - (ppx9 * 0.28) * #ptxt9
+            local py9 = h * (tonumber(C.scout_pouch_y) or 0.135)
+            local F8 = _G.IrisFont
+            if not (F8 and F8.text and F8.text(ptxt9, px9, py9, 0xFFE8D9A8, ppx9, true, "Alegreya.ttf")) then
+                iris_screen_text(ptxt9, px9, py9, 0xFFE8D9A8, ppx9)
+            end
+        end
+        -- ── ⭐⭐⭐ 08-17 r2 (Aurora: "what I meant was to REPLACE the actual in-game UI with the
+        -- commands like we do with all the mounts and the tools"). Right -- and that service
+        -- already exists: IrisPromptBar rewrites the GAME'S own button panel via set_slot, which
+        -- is how the horse/wolf/griffin/drake and the hoe/pickaxe/axe all do it. Drawing our own
+        -- panel above the native one was two panels arguing; this is one panel telling the truth.
+        -- ⭐ AND IT SOLVES THE KEYBOARD GLYPHS FOR FREE: the GAME draws the glyph beside the label,
+        -- so a keyboard player sees DD2's own key art. That is precisely why our binds must equal
+        -- DD2's binds for the same slot -- otherwise the panel we relabelled would lie.
+        --   L02 Y/V = Ping · L03 X/LMB = Dive-steal · R02 B/Shift = Soar
+        --   R03 A/Space = Up (Jump -> up: the key was ALREADY Space)
+        --   L01 LB/Ctrl = Land (the key was ALREADY Ctrl) · R00 RT/E = Collect (Grab -> collect)
+        -- ⚠ Only a slot the game is ALREADY showing can be relabelled (the PlayState wall), so
+        -- LT/RB are left alone rather than blanked -- a withheld slot ignores us anyway.
+        local sp9 = species_clips(char_go(S.scout.ch)) or {}
+        local ground9 = sp9.ground == true
+        local slots9 = sp9.hud_slots
+        if not slots9 then
+            if ground9 then
+                slots9 = {
+                    PNL_L02 = "Ping",   PNL_L03 = sp9.burrow and "Ambush" or "Pickpocket",
+                    PNL_R02 = sp9.burrow and "Burrow" or "Dash",
+                    PNL_R00 = "Collect", PNL_R03 = "Hop",
+                }
+            else
+                slots9 = {
+                    PNL_L02 = "Ping",     PNL_L03 = "Dive-steal",
+                    PNL_R02 = "Soar",     PNL_R00 = "Collect",
+                    PNL_L01 = "Descend",  PNL_R01 = "Ascend",
+                    -- ⛔ LT does NOTHING for a bird. Blank it with a SPACE, never "" -- an empty
+                    -- string into a live via.gui.Text is the mount CTD (IrisPromptBar converts
+                    -- it anyway, but say what we mean). A space keeps the glyph and frame and
+                    -- simply stops the panel advertising Sheathe/Draw at a crow.
+                    PNL_L00 = " ",
+                }
+                -- ⭐ ASCEND LIVES ON A DIFFERENT SLOT PER DEVICE, so the glyph never lies.
+                -- Pad: R1/RB genuinely IS ascend (asc = r1 - l1), so RB says it.
+                -- Keyboard: RB's glyph is a MOUSE button, but our ascend key is SPACE -- whose
+                -- glyph belongs to A/Jump. So on keyboard the label moves to A and RB goes quiet.
+                -- Descend needs no such split: L1 and Ctrl are both correct on their own device.
+                if S.stable_input_device == "keyboard" then
+                    slots9.PNL_R01 = " "
+                    slots9.PNL_R03 = "Ascend"
+                else
+                    slots9.PNL_R03 = " "
+                end
+            end
+        end
+        pcall(function()
+            local P9 = rawget(_G, "IrisPrompt")
+            if not (P9 and P9.set_slot) then return end
+            for slot9, txt9 in pairs(slots9) do P9.set_slot("iris_scout", slot9, txt9) end
+        end)
+        -- RETURN has no panel slot of its own (R3 is not in DD2's prompt set), so it stays as our
+        -- one drawn row -- Aurora: "keep the R3 one, but move it closer to the other controls".
+        -- Positioned by sliders so she can place it herself instead of me guessing twice.
+        pcall(function()
+            iris_control_plaque({ { label = "Return", pad = "R3", key = "J" } },
+                { dx = tonumber(C.scout_return_dx) or 40.0,
+                  dy = tonumber(C.scout_return_dy) or 205.0,
+                  px = tonumber(C.scout_return_px) or 19.0 })
+        end)
         -- SPRINT stamina bar (fed from the griffin bridge's scout_status)
         local st = nil
         pcall(function() local b = _G.IrisGriffinBridge; if b and b.scout_status then st = b.scout_status() end end)
@@ -13088,6 +13508,27 @@ _G.IrisTaming = _G.IrisTaming or {}
 _G.IrisTaming.prompt = function(title, sub, secs, color)
     pcall(function() set_prompt(tostring(title or ""), tostring(sub or ""), tonumber(secs) or 3.0, color) end)
 end
+-- ⛔⛔⛔ 08-17: let IrisGriffin/downed.lua end a scout AT THE SOURCE, in the same breath it throws
+-- a rider off a downed mount. The watchdog catches this too, but downed_enter is the earliest
+-- possible frame -- before it disables components and claims the animation layer -- and "earliest"
+-- is the whole game when the alternative is two owners on an action-claimed body.
+-- Safe from any state and idempotent (scout_force_restore's own contract).
+_G.IrisTaming.scout_abort = function(reason)
+    if not S.scout then return false end
+    pcall(function() scout_force_restore(tostring(reason or "aborted")) end)
+    return true
+end
+_G.IrisTaming.is_scouting = function(go_addr)
+    -- "is THIS body the one currently being flown as a scout drone?" (GameObject address)
+    local yes = false
+    pcall(function()
+        local sc = S.scout
+        if not (sc and sc.ch) then return end
+        local g = char_go(sc.ch)
+        if g and go_addr and g:get_address() == go_addr then yes = true end
+    end)
+    return yes
+end
 _G.IrisTaming.open_rename = function(stable_id, current_name)
     S.name_pending = { kind = "stable_id", stable_id = stable_id }
     S.name_buf = tostring(current_name or "")
@@ -13159,6 +13600,380 @@ _G.IrisTaming.is_pet_body = function(go_addr)
     end)
     return hit
 end
+
+-- HOUSE CAT: the rabbit chassis is spawned here and enters S.tamed immediately.
+-- IrisTaming is therefore the sole owner of its movement, solidity and pickup;
+-- the retired IrisPets/PetDogProbe-style controller never drives this body.
+function HC.pin_mesh()
+    if C.housecat_mesh_armed ~= true then
+        S.housecat_status = "disarmed"
+        return false
+    end
+    if S.housecat_res and S.housecat_mdf_res and S.housecat_mdf_holder then return true end
+    if not S.housecat_res then
+        local res = sdk.create_resource("via.render.MeshResource", HC.mesh)
+        if not res then
+            S.housecat_status = "mesh unavailable -- mount the v0.7-or-newer house-cat PAK first"
+            return false
+        end
+        res:add_ref()
+        S.housecat_res = res
+    end
+    local mdf = sdk.create_resource("via.render.MeshMaterialResource", HC.mdf)
+    if not mdf then
+        S.housecat_status = "material unavailable -- install the v0.7-or-newer house-cat PAK"
+        return false
+    end
+    mdf:add_ref()
+    local mdf_holder = nil
+    pcall(function()
+        mdf_holder = mdf:create_holder("via.render.MeshMaterialResourceHolder")
+        if mdf_holder then mdf_holder:add_ref() end
+    end)
+    if not mdf_holder then
+        S.housecat_status = "house-cat material holder creation failed"
+        return false
+    end
+    S.housecat_mdf_res = mdf
+    S.housecat_mdf_holder = mdf_holder
+    S.housecat_warm_at = os.clock()
+    S.housecat_status = "mesh and material streaming"
+    return true
+end
+
+function HC.mesh_ready()
+    if not HC.pin_mesh() then return false, S.housecat_status end
+    local age = os.clock() - (tonumber(S.housecat_warm_at) or 0.0)
+    if age < HC.warm_secs then
+        S.housecat_status = string.format("mesh streaming %.0f / %.0f seconds", age, HC.warm_secs)
+        return false, S.housecat_status
+    end
+    return true
+end
+
+function HC.apply_mesh(ch)
+    local go = char_go(ch)
+    if not go then return false, "spawned body is not ready" end
+    local ready, why = HC.mesh_ready()
+    if not ready then return false, why end
+
+    local holder = nil
+    pcall(function()
+        holder = S.housecat_res:create_holder("via.render.MeshResourceHolder")
+        if holder then holder:add_ref() end
+    end)
+    if not holder then return false, "mesh holder creation failed" end
+
+    local mesh = comp(go, "via.render.Mesh")
+    if not mesh then return false, "rabbit body has no via.render.Mesh" end
+    pcall(function() mesh:call("set_Enabled", false) end)
+    local ok, err = pcall(function() mesh:call("setMesh", holder) end)
+    if not ok then ok, err = pcall(function() mesh:call("set_Mesh", holder) end) end
+    local material_ok, material_err = pcall(function()
+        mesh:call("set_Material", S.housecat_mdf_holder)
+    end)
+    if not material_ok then
+        material_ok, material_err = pcall(function()
+            mesh:call("setMaterial", S.housecat_mdf_holder)
+        end)
+    end
+    pcall(function() mesh:call("set_Enabled", true) end)
+    if not ok then
+        pcall(function() holder:release() end)
+        return false, "mesh assignment failed: " .. tostring(err)
+    end
+    if not material_ok then
+        pcall(function() holder:release() end)
+        return false, "material assignment failed: " .. tostring(material_err)
+    end
+    if S.housecat_holder then pcall(function() S.housecat_holder:release() end) end
+    S.housecat_holder = holder
+    return true
+end
+
+function HC.forget_body()
+    local ch = S.housecat_ch
+    if ch then
+        pcall(function()
+            if S.tamed_addrs then S.tamed_addrs[tostring(ch:get_address())] = nil end
+        end)
+        S.tamed[ch] = nil
+    end
+    S.housecat_ch = nil
+end
+
+function HC.delete()
+    HC.forget_body()
+    if S.housecat_spawner then pcall(function() S.housecat_spawner:deleteAll() end) end
+    S.housecat_spawner = nil
+    S.housecat_pending = false
+    S.housecat_spawn_queued = false
+    S.housecat_rebind_at = nil
+    if S.housecat_prefab_ctrl then pcall(function() S.housecat_prefab_ctrl:release() end) end
+    if S.housecat_prefab then pcall(function() S.housecat_prefab:release() end) end
+    S.housecat_prefab_ctrl = nil
+    S.housecat_prefab = nil
+end
+
+function HC.adopt(ch)
+    local go = char_go(ch)
+    if not go then return false, "spawned Character has no GameObject" end
+
+    -- This is the same local companion roster used by every tamed rabbit, rat,
+    -- chicken and bird. Do not also register it with another pet controller.
+    S.tamed[ch] = {
+        name = "House Cat",
+        follow = true,
+        gender = "female",
+        housecat = true,
+    }
+    S.tamed_addrs = S.tamed_addrs or {}
+    pcall(function() S.tamed_addrs[tostring(ch:get_address())] = true end)
+    S.housecat_ch = ch
+
+    full_pacify(ch)
+    strip_hate(ch)
+    clear_targets(ch)
+    set_immunity(ch, true)
+    set_think_stop(ch, false)
+    set_nav_stop(ch, false)
+    pcall(function() set_player_fsm(go, true) end)
+    pcall(function() ch:call("setCharacterControllerEnable", true) end)
+    pcall(function() iris_body_solid(ch, go, true) end)
+    set_ground_glue(go, true)
+
+    local dm = comp(go, "app.AIDecisionMaker")
+    if dm then pcall(function() dm:call("set_Enabled", false) end) end
+    local nav = comp(go, "app.NavigationAI")
+    if nav then pcall(function() nav:call("set_Enabled", true) end) end
+    return true
+end
+
+function HC.install_prefab(spawner)
+    local prefab = sdk.create_instance("via.Prefab")
+    if not prefab then return false, "via.Prefab creation failed" end
+    prefab:add_ref()
+    local ok_path = pcall(function() prefab:call("set_Path", HC.prefab) end)
+    local exists = false
+    pcall(function() exists = prefab:call("get_Exist") end)
+    if not ok_path or not exists then
+        pcall(function() prefab:release() end)
+        return false, "rabbit prefab unavailable"
+    end
+
+    local ctrl = sdk.create_instance("app.PrefabController")
+    if not ctrl then
+        pcall(function() prefab:release() end)
+        return false, "PrefabController creation failed"
+    end
+    ctrl:add_ref()
+    local ok_ctrl = pcall(function() ctrl._Item = prefab end)
+    if not ok_ctrl then ok_ctrl = pcall(function() ctrl:set_field("_Item", prefab) end) end
+    if not ok_ctrl then
+        pcall(function() ctrl:release() end)
+        pcall(function() prefab:release() end)
+        return false, "PrefabController assignment failed"
+    end
+
+    S.housecat_prefab = prefab
+    S.housecat_prefab_ctrl = ctrl
+    spawner.getPfbCtrl = function(_self, _char_id) return ctrl end
+    return true
+end
+
+function HC.spawn()
+    local ready, why = HC.mesh_ready()
+    if not ready then
+        if S.housecat_res and S.housecat_mdf_holder then
+            S.housecat_spawn_queued = true
+            S.housecat_status = "coat warming; house-cat spawn queued automatically"
+            return true
+        end
+        S.housecat_status = tostring(why)
+        return false
+    end
+    local player = get_player()
+    local pgo = player and char_go(player)
+    if not pgo then S.housecat_status = "load into the world first"; return false end
+
+    local SR = nil
+    local ok_sr = pcall(function() SR = require("EnemySpawner/spawnRequest") end)
+    if not ok_sr or not SR then S.housecat_status = "SpawnRequest unavailable"; return false end
+
+    HC.delete()
+    local spawner = SR:new()
+    local ok_prefab, prefab_why = HC.install_prefab(spawner)
+    if not ok_prefab then S.housecat_status = tostring(prefab_why); return false end
+
+    local pos, rot = nil, nil
+    pcall(function()
+        local tf = pgo:call("get_Transform")
+        local pp, fwd = tf:call("get_UniversalPosition"), tf:call("get_AxisZ")
+        rot = tf:call("get_Rotation")
+        local d = tonumber(C.housecat_spawn_distance) or 2.6
+        pos = ValueType.new(sdk.find_type_definition("via.Position"))
+        pos.x = pp.x + (fwd and fwd.x or 0.0) * d
+        pos.y = pp.y
+        pos.z = pp.z + (fwd and fwd.z or 0.0) * d
+    end)
+    if not pos then S.housecat_status = "could not resolve spawn position"; return false end
+
+    local cfg = {
+        spawnIdle = true,
+        instLimit = 1,
+        spawnMultiple = { enable = false, qty = 1 },
+        ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
+    }
+    spawner:updateConfig(cfg)
+    spawner:requestAddInstances("ch299200_A_00", pos, rot, cfg, 1)
+    S.housecat_spawner = spawner
+    S.housecat_pending = true
+    S.housecat_status = "IRIS house-cat spawn requested"
+    return true
+end
+
+function HC.queued_spawn_tick()
+    if S.housecat_spawn_queued ~= true then return end
+    local ready = HC.mesh_ready()
+    if not ready then return end
+    S.housecat_spawn_queued = false
+    HC.spawn()
+end
+
+function HC.spawn_tick()
+    local spawner = S.housecat_spawner
+    if not spawner then return end
+    pcall(function()
+        spawner:updateInstanceCounts()
+        spawner:requestSpawnOutstanding()
+        if spawner:hasAnyOutstandingPostProc() then spawner:processPostProc() end
+    end)
+    if not S.housecat_pending then return end
+
+    local ch = nil
+    pcall(function()
+        local inst = spawner.instances and spawner.instances[1]
+        ch = inst and inst.instance and inst.instance:get_Chara()
+    end)
+    if not ch then return end
+
+    S.housecat_pending = false
+    local mesh_ok, mesh_why = HC.apply_mesh(ch)
+    if not mesh_ok then
+        S.housecat_status = "spawned, but " .. tostring(mesh_why)
+        return
+    end
+    local adopt_ok, adopt_why = HC.adopt(ch)
+    if not adopt_ok then
+        S.housecat_status = "mesh applied, but IRIS adoption failed: " .. tostring(adopt_why)
+        return
+    end
+    S.housecat_status = "House Cat: IRIS local companion (following)"
+    S.housecat_rebind_at = os.clock() + 1.2
+    S.status = S.housecat_status
+    set_prompt("HOUSE CAT", "She is now owned by IRIS Taming. Grab her like a tamed rabbit.", 5.0, 0xFF80FFB0)
+    pcall(function() log.info("[IrisTaming] house cat spawned, meshed and adopted into S.tamed") end)
+end
+
+function HC.cure_material_tick()
+    local due = tonumber(S.housecat_rebind_at)
+    if not due or os.clock() < due then return end
+    local ch = S.housecat_ch
+    local rec = ch and S.tamed[ch]
+    if not (ch and rec) then S.housecat_rebind_at = nil; return end
+    if rec.carried == true or rec.carried_script == true then
+        S.housecat_rebind_at = os.clock() + 0.5
+        return
+    end
+    S.housecat_rebind_at = nil
+    local ok, why = HC.apply_mesh(ch)
+    if ok then
+        S.housecat_status = "House Cat: IRIS companion (coat resident)"
+        pcall(function() log.info("[IrisTaming] house-cat material cure rebind complete") end)
+    else
+        S.housecat_status = "house-cat material cure failed: " .. tostring(why)
+    end
+end
+
+function HC.carry_scale_tick()
+    local ch = S.housecat_ch
+    local rec = ch and S.tamed[ch]
+    local go = ch and char_go(ch)
+    if not (rec and go) then return end
+    local active = rec.carried == true or rec.carried_script == true
+
+    if active then
+        if not rec.housecat_ground_scale then
+            local current = nil
+            pcall(function() current = go:call("get_Transform"):call("get_LocalScale") end)
+            rec.housecat_ground_scale = {
+                x = current and tonumber(current.x) or 1.0,
+                y = current and tonumber(current.y) or 1.0,
+                z = current and tonumber(current.z) or 1.0,
+            }
+        end
+        local b = rec.housecat_ground_scale
+        local m = tonumber(C.housecat_carry_scale) or 0.72
+        pcall(function()
+            go:call("get_Transform"):call("set_LocalScale", Vector3f.new(b.x * m, b.y * m, b.z * m))
+        end)
+    elseif rec.housecat_ground_scale then
+        local b = rec.housecat_ground_scale
+        pcall(function()
+            go:call("get_Transform"):call("set_LocalScale", Vector3f.new(b.x, b.y, b.z))
+        end)
+        rec.housecat_ground_scale = nil
+    end
+end
+
+-- The rabbit carry clip curls FrontLeg_Toes like compact rabbit forefeet.
+-- On the Witcher cat mesh that becomes the hooked clubs Aurora photographed.
+-- Relax only the two distal front joints while carried; leave the upper limb,
+-- locomotion and native two-actor carry machinery completely untouched.
+function HC.carry_paw_tick()
+    if C.housecat_carry_paw_fix == false then return end
+    local ch = S.housecat_ch
+    local rec = ch and S.tamed[ch]
+    local go = ch and char_go(ch)
+    if not (rec and go and (rec.carried == true or rec.carried_script == true)) then return end
+    local tf = go:call("get_Transform")
+    if not tf then return end
+    for _, spec in ipairs(HC.carry_front_joints) do
+        pcall(function()
+            local joint = tf:call("getJointByName", spec[1])
+            if not joint then return end
+            local current = joint:call("get_LocalRotation")
+            local base = joint:call("get_BaseLocalRotation")
+            if not (current and base) then return end
+            local t = spec[2] == "toe"
+                and (tonumber(C.housecat_carry_toe_relax) or 0.85)
+                or (tonumber(C.housecat_carry_wrist_relax) or 0.25)
+            t = math.max(0.0, math.min(1.0, t))
+            local bx, by, bz, bw = base.x, base.y, base.z, base.w
+            if current.x * bx + current.y * by + current.z * bz + current.w * bw < 0.0 then
+                bx, by, bz, bw = -bx, -by, -bz, -bw
+            end
+            local x = current.x + (bx - current.x) * t
+            local y = current.y + (by - current.y) * t
+            local z = current.z + (bz - current.z) * t
+            local w = current.w + (bw - current.w) * t
+            local n = math.sqrt(x * x + y * y + z * z + w * w)
+            if n > 0.00001 then
+                joint:call("set_LocalRotation", Quaternion.new(x / n, y / n, z / n, w / n))
+            end
+        end)
+    end
+end
+
+_G.IrisTaming.spawn_housecat = HC.spawn
+_G.IrisTaming.delete_housecat = HC.delete
+re.on_application_entry("LateUpdateBehavior", function()
+    pcall(HC.carry_scale_tick)
+    pcall(HC.cure_material_tick)
+end)
+re.on_application_entry("PrepareRendering", function()
+    pcall(HC.carry_paw_tick)
+end)
 -- GRIP AID: the probe's climb-stamina hold extends to WILD GRIFFINS while this is on
 -- (ride the commuter to its nest without falling out of the sky)
 _G.IrisTaming.grip_aid_on = function() return C.grip_aid == true end
@@ -13888,6 +14703,11 @@ re.on_frame(function()
             end
             if S.lockouts then for k2, v2 in pairs(S.lockouts) do S.lockouts[k2] = v2 + shift end end
         end
+
+        -- The house-cat spawner owns only the birth; once adopted, ordinary
+        -- S.tamed upkeep below owns the body like every other ground critter.
+        pcall(HC.queued_spawn_tick)
+        pcall(HC.spawn_tick)
 
         -- pump the conjuror ONLY while a birth is pending: pumping stale instances
         -- forever is a native-crash roulette (suspect in the N-press CTD)
@@ -14859,7 +15679,11 @@ re.on_frame(function()
             end)
         end
         -- L3 (the mount button family) shoulders a tamed critter / sets it down again
+        -- L3 on the pad, and ⭐ 08-18 a KEYBOARD equivalent too ('G' by default). DD2 binds
+        -- nothing to a stick click on keyboard, so unlike Ping/Soar/Collect there is no native
+        -- key to mirror -- this is a new bind, which is exactly why the drawn prompt shows it.
         local perch_dn = (gp_mask() & math.floor(tonumber(C.perch_button_bit) or 0x1000)) ~= 0
+            or iris_kb(math.floor(tonumber(C.perch_key) or 0x47))
         local perch_edge = perch_dn and not S.perch_btn_prev
         S.perch_btn_prev = perch_dn
         -- a shoulder transition that lost its body (record gone mid-arc) must never jam L3 --
@@ -15923,10 +16747,31 @@ re.on_frame(function()
                             t_hit9 = "THE TALONS STRIKE"; t_win9 = "A peck of blood - and it STEALS something!"
                             t_dry9 = "A peck of blood - but nothing worth taking."
                         end
-                        if #pool > 0 and math.random() <= chance9 then
+                        -- ⭐⭐⭐ 08-18: roll the VICTIM'S OWN TABLE first (app.Character.ItemDropInfo
+                        -- -> getJob04SnatchItem, DD2's Thief PLUNDER roll). The fixed herb pool
+                        -- survives only as the fallback for a body that carries no drop param --
+                        -- so a goblin now yields goblin things, and Aurora stops being handed
+                        -- Greenwarish by a crow that just robbed an ogre.
+                        local nat9 = nil
+                        pcall(function() local bb = _G.IrisGriffinBridge
+                            if bb and bb.scout_snatch_roll then nat9 = bb.scout_snatch_roll(0) end end)
+                        if nat9 and tonumber(nat9.id) then
+                            S.scout_pouch.items[#S.scout_pouch.items + 1] =
+                                { id = math.floor(nat9.id), count = math.max(1, math.floor(tonumber(nat9.num) or 1)),
+                                  name = item_name_from_id(math.floor(nat9.id)) }
+                            set_prompt(t_hit9, t_win9, 2.2, 0xFF80FFB0)
+                            pcall(function() local bb = _G.IrisGriffinBridge
+                                if bb and bb.scout_dive_robbed then bb.scout_dive_robbed() end end)
+                        elseif #pool > 0 and math.random() <= chance9 then
                             local sid2 = pool[math.random(#pool)]
                             S.scout_pouch.items[#S.scout_pouch.items + 1] = { id = sid2, count = 1, name = item_name_from_id(sid2) }
                             set_prompt(t_hit9, t_win9, 2.2, 0xFF80FFB0)
+                            -- ⭐ 08-17 (Aurora: "4 dives on one goblin, 3 items"): a body that has
+                            -- actually been ROBBED is retired from the dive list for good. Only on
+                            -- a successful lift -- a failed ~65% roll costs the mark nothing but
+                            -- the short re-target cooldown, so the dice never lock her out.
+                            pcall(function() local bb = _G.IrisGriffinBridge
+                                if bb and bb.scout_dive_robbed then bb.scout_dive_robbed() end end)
                         else
                             set_prompt(t_hit9, t_dry9, 1.8, 0xFF80D0FF)
                         end
@@ -15981,10 +16826,18 @@ re.on_frame(function()
                         pcall(function() local cam = _G.IrisCreatureCam
                             if cam then if cam.set_target then cam.set_target(bgo) end; if cam.set_on then cam.set_on(true) end end end)
                         S.scout = { ch = bch, phase = "scouting", t0 = now, deadline = now + (tonumber(C.scout_secs) or 60.0) }
-                        if (species_clips(bgo) or {}).ground then
-                            set_prompt("SCURRY AWAY", "Run: left stick steer, hold B to BURROW, A collect, Y ping. J/R3 to return.", 4.0, 0xFF80FFB0)
+                        -- ⭐ 08-18 (Aurora: "the notification says it can burrow, which isn't true
+                        -- -- and we don't need the controls on the notifications now we have the
+                        -- native UI"). Both right, and the second explains the first: this card
+                        -- listed controls from memory, so it drifted out of step with the code and
+                        -- started lying (only the RABBIT burrows; the rat dashes). The panel is
+                        -- now generated from the real slot table and cannot drift, so the card
+                        -- goes back to being a card -- it says what happened, not how to fly.
+                        local sp7 = species_clips(bgo) or {}
+                        if sp7.ground then
+                            set_prompt("SCURRY AWAY", "You slip into its skin. Off it goes.", 3.0, 0xFF80FFB0)
                         else
-                            set_prompt("SCOUT AWAY", "Fly: left stick steer, R1/L1 up-down, B soar, A collect, Y ping. J/R3 to return.", 4.0, 0xFF80FFB0)
+                            set_prompt("SCOUT AWAY", "You take to the air on borrowed wings.", 3.0, 0xFF80FFB0)
                         end
                     else
                         set_prompt("SCOUT", "Not now - dismount or finish the current action first.", 2.0, 0xFF5050FF)
@@ -15996,14 +16849,86 @@ re.on_frame(function()
         end
 
         S.perch_active = nil   -- re-armed below only while a crow is actually perched (self-healing)
+        -- the one global shoulder dial, republished every frame so the slider tunes live and the
+        -- easer in IrisGriffin/stable.lua (another file, another hook) reads the same number we do
+        pcall(function() rawset(_G, "IrisTamingPerchShrink", iris_perch_shrink()) end)
         if IPPS then IPPS("TAMED_LOOP") end
         for ch, rec in pairs(S.tamed) do
             local go = char_go(ch)
             if not go or is_dead(ch) then
                 S.tamed[ch] = nil
+            elseif (function()
+                    -- ⭐ THE BRINE SHIELD, asserted on a throttle for EVERY tamed body (including
+                    -- one that is scouting or downed -- hence its place above every other branch).
+                    -- The brine system is a live writer and streaming rebuilds re-enable it, so a
+                    -- set-once would quietly lapse; 2s is cheap and has never lost the race.
+                    if C.companion_brine_shield == false then return false end
+                    if now >= (tonumber(rec.brine_at) or 0.0) then
+                        rec.brine_at = now + 2.0
+                        pcall(function()
+                            local b = _G.IrisGriffinBridge
+                            if b and b.brine_shield then b.brine_shield(ch, true) end
+                        end)
+                    end
+                    return false   -- never claims the frame; the real branches below still run
+                end)() then
+            elseif iris_body_downed(go) then
+                -- ⛔⛔⛔ 08-17 -- DOWNED = TOTAL HANDS OFF. THIS IS THE DIVEBOMB CTD.
+                -- Aurora's crow dive-stole at something over the sea, hit the water, and the brine
+                -- put it DOWN. downed.lua then owns that body absolutely: AI off, HP pinned at 1,
+                -- parked in DmgDownLoop and re-asserted every frame. But a downed body reads ALIVE
+                -- (hp 1, IsDead false), so nothing above stopped this loop -- the shoulder pin, the
+                -- leap arcs and the puppet follow all kept writing its transform while the scout
+                -- drive flew it. Two owners on an action-claimed body = the actinter move crash.
+                -- ⇒ hand the body back the instant it goes down, and release any hold we had on it.
+                local was_held = rec.perch or rec.carried or rec.perch_ground_scale
+                    or rec.solid_state == false
+                    or (S.perch_trans and S.perch_trans.ch == ch) or false
+                if rec.perch or rec.carried or rec.perch_ground_scale then
+                    rec.perch = nil; rec.carried = nil; rec.perch_ground_scale = nil
+                    pcall(function() rawset(_G, "IrisTamingPerchScaleHold", nil) end)
+                end
+                if S.perch_trans and S.perch_trans.ch == ch then S.perch_trans = nil end
+                -- HAND THE BODY BACK WHOLE, ONCE (the same contract as the set-down). The perch
+                -- and the leap arcs ghost a critter completely -- controller off, AdjustPress,
+                -- colliders and HitController off, ground glue off -- and the arc's landing code
+                -- is what normally undoes all that. Going down mid-perch skips that code, so
+                -- without this the body would collapse as an unglued, non-solid floater and
+                -- REVIVE as one. Edge-triggered off rec.downed_hold: re-asserting collision
+                -- toggles every frame at 60Hz on a body downed.lua is re-asserting is precisely
+                -- the two-writers pattern this whole guard exists to stop.
+                -- ⛔ collision + glue ONLY. AIDecisionMaker/NavigationAI are downed.lua's to
+                -- restore (it records which ones IT disabled); waking either from here is the
+                -- stale native MoveBase executor behind the revive CTD.
+                if was_held and not rec.downed_hold then
+                    pcall(function() iris_body_solid(ch, go, true) end)
+                    pcall(function() set_ground_glue(go, true) end)
+                    pcall(function() log.info("[IrisTaming] companion went DOWN while held -- body handed back whole") end)
+                end
+                rec.solid_state = nil
+                -- ⛔ and NOT rec.follow either: the follow branch teleports and puppet-steps the
+                -- body, which is the same fatal write by another name. downed.lua drives it now.
+                rec.follow = nil; rec.fmode = nil
+                rec.downed_hold = true
             elseif rec.scouting then
                 -- the scout drone owns this body (griffin-side flight drive); IrisTaming stays hands-off
             else
+                -- REVIVED (or it was never down): re-arm the follow the downed gate stood down.
+                -- Without this a revived companion would stand where it fell forever -- nothing
+                -- else in this loop ever sets rec.follow back on for a body it did not just tame.
+                if rec.downed_hold then
+                    rec.downed_hold = nil
+                    if not (rec.carried or rec.perch or rec.carry_native) then
+                        rec.follow = true; rec.fmode = nil
+                    end
+                    -- ⚠ "RELEASED", not "revived" -- 08-17, and the distinction cost Aurora a
+                    -- wrong conclusion from the log. This latch clears when the body leaves
+                    -- _G.IrisDownedAddrs, and EVERY downed exit does that: a real player revive,
+                    -- the 30s window expiring (griffin_downed_to_stable -> dismissed to the
+                    -- stable, soul kept), an invalid body, or the feature being switched off.
+                    -- Her water test was the SECOND of those, not a revive.
+                    pcall(function() log.info("[IrisTaming] companion released from DOWN (revived, or the window expired) -> follow re-armed") end)
+                end
                 -- floating nameplate: name + gender symbol over every companion (Aurora's ask);
                 -- the ACTIVE stable companion reads its record via the bridge EVERY frame, so
                 -- renames and the gender backfill land instantly (rec.stable was never set --
@@ -16070,7 +16995,16 @@ re.on_frame(function()
                         set_immunity(ch, false)
                     end
                 end
-                if perch_edge and not S.perch_trans and name_in_csv(go_name(go), C.critter_bands) then
+                -- HorseRodeo owns every transform/action write while this exact
+                -- companion is mounted.  The old code only used iris_ridden_now
+                -- for immunity above, then allowed rec.follow to keep steering,
+                -- teleporting and repainting layer 0 later in this same tick.
+                -- That gave the body two drivers and could invalidate a native
+                -- takeover before its first locomotion request.
+                if iris_ridden_now then
+                    rec.fmode = nil
+                    rec.follow_last = nil
+                elseif perch_edge and not S.perch_trans and name_in_csv(go_name(go), C.critter_bands) then
                     local cp0 = upos(go)
                     local d0 = (cp0 and pp) and dist(cp0, pp) or 1e9
                     if rec.perch then
@@ -16212,6 +17146,11 @@ re.on_frame(function()
                     -- body visibly expands during the last half-second before rec.perch.
                     local hs9 = tonumber(rec.perch_ground_scale or tr9.scale)
                     if hs9 and hs9 > 0.05 and hs9 <= 3.0 then
+                        -- 08-17: the global shoulder dial rides the UP arc so the body arrives at
+                        -- its shoulder size instead of popping to it on the landing frame. The
+                        -- DOWN arc keeps the raw ground scale -- it is on its way back to being a
+                        -- ground creature, and the set-down already restores the true size.
+                        if tr9.dir == "up" then hs9 = hs9 * iris_perch_shrink() end
                         pcall(function() go:call("get_Transform"):call("set_LocalScale", Vector3f.new(hs9, hs9, hs9)) end)
                     end
                     if k9 >= 1.0 then
@@ -20320,6 +21259,43 @@ re.on_draw_ui(function()
             imgui.text("sheathe detect: " .. (sv == nil and "FAILING (checks always pass!)" or (sv and "sheathed" or "DRAWN")))
         end)
         imgui.text("STATUS: " .. tostring(S.status))
+        if imgui.tree_node("House cat (IRIS companion)##tame_housecat") then
+            imgui.text("Uses IRIS Taming's rabbit companion path: one owner for follow, solidity and pickup.")
+            if C.housecat_mesh_armed ~= true then
+                imgui.text("Install and enable the v0.7 (or newer) house-cat Fluffy mod before arming.")
+                if imgui.button("ARM house-cat mesh##tame_housecat_arm") then
+                    C.housecat_mesh_armed = true
+                    HC.pin_mesh()
+                end
+            else
+                HC.mesh_ready()
+                imgui.text("Asset: " .. tostring(S.housecat_status))
+                local hcchg
+                hcchg, C.housecat_spawn_distance = imgui.drag_float("Spawn distance##tame_housecat_dist", tonumber(C.housecat_spawn_distance) or 2.6, 0.1, 1.0, 8.0)
+                if hcchg then pcall(save_state) end
+                hcchg, C.housecat_carry_scale = imgui.drag_float("Carry-only scale##tame_housecat_carryscale", tonumber(C.housecat_carry_scale) or 0.72, 0.01, 0.4, 1.0)
+                if hcchg then pcall(save_state) end
+                hcchg, C.housecat_carry_paw_fix = imgui.checkbox("Relax rabbit paw curl while held##tame_housecat_pawfix", C.housecat_carry_paw_fix ~= false)
+                if hcchg then pcall(save_state) end
+                if C.housecat_carry_paw_fix ~= false then
+                    hcchg, C.housecat_carry_toe_relax = imgui.drag_float("Held front-toe relax##tame_housecat_toerelax", tonumber(C.housecat_carry_toe_relax) or 0.85, 0.01, 0.0, 1.0)
+                    if hcchg then pcall(save_state) end
+                    hcchg, C.housecat_carry_wrist_relax = imgui.drag_float("Held front-wrist relax##tame_housecat_wristrelax", tonumber(C.housecat_carry_wrist_relax) or 0.25, 0.01, 0.0, 1.0)
+                    if hcchg then pcall(save_state) end
+                end
+                if imgui.button("Spawn / replace IRIS house cat##tame_housecat_spawn") then
+                    if not HC.spawn() then S.status = "house cat: " .. tostring(S.housecat_status) end
+                end
+                imgui.same_line()
+                if imgui.button("Despawn house cat##tame_housecat_delete") then
+                    HC.delete()
+                    S.housecat_status = "despawned"
+                    S.status = "house cat despawned"
+                end
+            end
+            imgui.text("House cat: " .. tostring(S.housecat_status))
+            imgui.tree_pop()
+        end
         do
             local hold = _G.IrisTamingHoldWolf
             local lease = (hold and os.clock() <= (tonumber(hold.until_t) or 0.0)) and "LIVE" or "idle"
@@ -21379,12 +22355,37 @@ re.on_draw_ui(function()
                 imgui.text("(shoulder a creature -- its own X/Y/Z/rotate sliders appear here)")
             end
             c9, C.companion_nameplate = imgui.checkbox("Floating nameplate (name + gender) over companions##tame_nameplate", C.companion_nameplate ~= false); chg = chg or c9
-            imgui.text("Shoulder riding no longer changes size at all (08-13). The SIZE gene is the only")
-            imgui.text("thing that sizes a creature; a perched body holds whatever it was on the ground.")
+            c9, C.companion_brine_shield = imgui.checkbox("Tamed companions can't be killed by the brine##tame_brine", C.companion_brine_shield ~= false); chg = chg or c9
+            imgui.text("  Per-body only -- the brine stays lethal for you, for pawns and at the map edge.")
+            -- ⭐ 08-17 THE SHOULDER SIZE DIAL (Aurora: "put in a slider so I can match it by eye").
+            -- Every other route was theory; this is a measurement. Shoulder the creature, look at
+            -- it, then set it down and compare -- when the two match, the number here IS the size
+            -- of the bug the 08-13 fix left behind. Live: drag it while the bird is up there.
+            imgui.text("Shoulder size (all perched creatures):")
+            c9, C.perch_shrink = imgui.drag_float("Shoulder scale x (1.0 = same as ground)##tame_pshrink",
+                tonumber(C.perch_shrink) or 1.0, 0.005, 0.25, 2.0); chg = chg or c9
+            if imgui.button("Reset to 1.0##tame_pshrink_reset") then C.perch_shrink = 1.0; chg = true end
+            imgui.text("  One global multiplier on top of the IV size, applied by all three shoulder")
+            imgui.text("  writers (the pin, the leap-up arc, the size easer) so they cannot disagree.")
+            imgui.text("  Tell Iris the value that matches the ground and she can find the real cause.")
             imgui.tree_pop()
         end
         if imgui.tree_node("Scout drone (bird)##tame_scout") then
             c9, C.scout_secs = imgui.drag_float("Flight time (secs)##scout_secs", tonumber(C.scout_secs) or 30.0, 1.0, 10.0, 120.0); chg = chg or c9
+            imgui.text("On-screen furniture (the ACTION buttons now relabel the game's own panel):")
+            c9, C.scout_timer_px = imgui.drag_float("Countdown size##scout_tpx", tonumber(C.scout_timer_px) or 46.0, 1.0, 18.0, 96.0); chg = chg or c9
+            c9, C.scout_return_dx = imgui.drag_float("RETURN row: inset from RIGHT##scout_rdx", tonumber(C.scout_return_dx) or 40.0, 2.0, 0.0, 900.0); chg = chg or c9
+            c9, C.scout_return_dy = imgui.drag_float("RETURN row: inset from BOTTOM##scout_rdy", tonumber(C.scout_return_dy) or 205.0, 2.0, 0.0, 900.0); chg = chg or c9
+            c9, C.scout_return_px = imgui.drag_float("RETURN row: text size##scout_rpx", tonumber(C.scout_return_px) or 19.0, 0.5, 12.0, 40.0); chg = chg or c9
+            c9, C.scout_pouch_px = imgui.drag_float("Pouch readout: size##scout_ppx", tonumber(C.scout_pouch_px) or 30.0, 1.0, 16.0, 64.0); chg = chg or c9
+            c9, C.scout_pouch_x = imgui.drag_float("Pouch readout: X (0-1 of width)##scout_pxx", tonumber(C.scout_pouch_x) or 0.5, 0.01, 0.0, 1.0); chg = chg or c9
+            c9, C.scout_pouch_y = imgui.drag_float("Pouch readout: Y (0-1 of height)##scout_pxy", tonumber(C.scout_pouch_y) or 0.135, 0.005, 0.0, 1.0); chg = chg or c9
+            imgui.text("Stick-click prompts (L3 Shoulder / Let Down, R3 Scout -- DD2 has no L3/R3 slot,")
+            imgui.text("so unlike the action buttons these are drawn by us):")
+            c9, C.perch_prompt = imgui.checkbox("Show the L3/R3 prompts##tame_pprompt", C.perch_prompt ~= false); chg = chg or c9
+            c9, C.perch_prompt_dx = imgui.drag_float("L3/R3 row: inset from RIGHT##tame_ppdx", tonumber(C.perch_prompt_dx) or 40.0, 2.0, 0.0, 900.0); chg = chg or c9
+            c9, C.perch_prompt_dy = imgui.drag_float("L3/R3 row: inset from BOTTOM##tame_ppdy", tonumber(C.perch_prompt_dy) or 181.0, 2.0, 0.0, 900.0); chg = chg or c9
+            c9, C.perch_prompt_px = imgui.drag_float("L3/R3 row: text size##tame_pppx", tonumber(C.perch_prompt_px) or 23.5, 0.5, 12.0, 40.0); chg = chg or c9
             imgui.text("RABBIT burrow (hold B while grounded; the mound trail):")
             c9, C.burrow_fx_rock_scale = imgui.drag_float("burrow BREAK size (entry/exit)##scout_bfxrock", tonumber(C.burrow_fx_rock_scale) or 0.15, 0.01, 0.03, 1.5); chg = chg or c9
             c9, C.burrow_fx_dust_scale = imgui.drag_float("burrow DUST size (the trail)##scout_bfxdust", tonumber(C.burrow_fx_dust_scale) or 1.0, 0.02, 0.1, 3.0); chg = chg or c9

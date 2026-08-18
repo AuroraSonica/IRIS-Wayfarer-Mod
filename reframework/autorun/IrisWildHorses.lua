@@ -112,6 +112,12 @@ local C = {
     -- The multi-trigger Wwise graph passed the live horse isolation run on
     -- 2026-08-05; new installs can use the custom horse bank.
     audio_enabled = true,
+    -- Baseline first: the accepted flat bank has no attenuation graph. Request-level
+    -- positioning produced hard culling and complicated the proven audible route.
+    -- Distance handling stays off until a volume-tier bank passes live testing.
+    spatial_audio = false,
+    spatial_src_gameobj = false,   -- legacy config key; deliberately ignored
+    attenuation_scale = 1.0,
     hurt_vocal_min_s = 5,
     hurt_vocal_max_s = 10,
     -- `hurt_*` are very short impact barks. Aurora asked for an audible pained
@@ -166,6 +172,12 @@ local C = {
     -- the safe, working unicorn (dark accents). ON = the white-albedo experiment, now
     -- with the full-tree EyeGlow sweep + a log line proving whether it disabled anything.
     unicorn_custom_mdf = false,
+    -- W3 COMPLETE ASSET PACK: horse + unicorn share the proven horse.mdf2, while
+    -- mesh UV bands select brown/white body pixels and dark/pastel hair pixels.
+    -- This is independent of unicorn_custom_mdf because no live MDF swap is needed.
+    -- Keep OFF unless IRIS_W3_Horse_Complete is installed; old unicorn paks rely on
+    -- runtime BaseColor tinting instead of the packed atlas.
+    w3_complete_assets = false,
     -- Iridescent shimmer: cycles the EMISSIVE hue while the coat stays white/pink.
     unicorn_rainbow = true,
     unicorn_rainbow_speed = 0.12,  -- full hue cycles per second
@@ -396,7 +408,7 @@ end
 local function valid(object)
     if not object then return false end
     local ok, value = pcall(function() return object:call("get_Valid") end)
-    return (not ok) or value ~= false
+    return ok and value ~= false
 end
 
 local function object_address(object)
@@ -626,7 +638,7 @@ function UNI.apply_material(game_object)
                 -- the pixels -- BaseColor must be pure white on every part or it would
                 -- MULTIPLY against the pastels (indigo tint x teal mane = mud). Without
                 -- the texture (safe mode), the runtime tints carry the look as before.
-                local painted = C.unicorn_custom_mdf
+                local painted = C.unicorn_custom_mdf or C.w3_complete_assets
                 local base_rgba = painted and {1.0, 1.0, 1.0, 1.0}
                     or (is_horn and UNI.HORN_COLOR)
                     or (is_mane and UNI.MANE_COLOR) or UNI.BODY_COLOR
@@ -2891,6 +2903,58 @@ local function player_wwise_container()
     return valid(wwise) and wwise or nil
 end
 
+-- Distance volume deliberately leaves the field-proven request shape alone.
+-- The bank contains four pre-gained copies of every sound; choose one before
+-- posting instead of asking RequestInfo to own/reposition the live creature.
+local function audio_player_game_object()
+    local game_object = nil
+    pcall(function()
+        local manager = sdk.get_managed_singleton("app.CharacterManager")
+        local character = manager and manager:call("get_ManualPlayer") or nil
+        local inner = character and character:call("get_Character") or nil
+        character = inner or character
+        game_object = character and character:call("get_GameObject") or nil
+    end)
+    return valid(game_object) and game_object or nil
+end
+
+local function audio_position(game_object)
+    local position = nil
+    pcall(function()
+        local transform = game_object and game_object:call("get_Transform")
+        position = transform and transform:call("get_UniversalPosition") or nil
+    end)
+    return position
+end
+
+local function distance_tier_event(entry, target)
+    local ids = entry and entry.tier_event_ids
+    local distance_data = A.manifest and A.manifest.distance_volume
+    local profiles = distance_data and distance_data.profiles_metres
+    local limits = profiles and profiles[entry.distance_profile or "vocal"]
+    if type(ids) ~= "table" or type(limits) ~= "table" then
+        return entry and entry.event_id or nil, nil, 1
+    end
+
+    local source = audio_position(target)
+    local listener = audio_position(audio_player_game_object())
+    if not source or not listener then
+        -- Failure to read a position must never turn working audio silent.
+        return ids[1] or entry.event_id, nil, 1
+    end
+    local dx = source.x - listener.x
+    local dy = source.y - listener.y
+    local dz = source.z - listener.z
+    local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+    local scale = math.max(0.25, tonumber(C.attenuation_scale) or 1.0)
+    for index, limit in ipairs(limits) do
+        if distance <= (tonumber(limit) or 0) * scale then
+            return tonumber(ids[index]) or entry.event_id, distance, index
+        end
+    end
+    return nil, distance, #limits + 1
+end
+
 local function load_manifest()
     if A.manifest then return A.manifest end
     local data = nil
@@ -3009,7 +3073,12 @@ local function audio_prepare()
             bucket = {}
             A.categories[entry.category] = bucket
         end
-        bucket[#bucket + 1] = {name = entry.name, event_id = entry.event_id}
+        bucket[#bucket + 1] = {
+            name = entry.name,
+            event_id = entry.event_id,
+            tier_event_ids = entry.tier_event_ids,
+            distance_profile = entry.distance_profile,
+        }
         if entry.trigger_file == manifest.registration_trigger_path then
             A.registered_events[entry.event_id] = true
         end
@@ -3132,6 +3201,9 @@ local function post_request(dispatcher, trigger, target, lane)
     pcall(function() joint_hash = tonumber(trigger._OffsetJointHash) or 0 end)
     local request = nil
     local ok = pcall(function()
+        -- Field-proven request shape. Both player/player and player/creature
+        -- return nil for these custom events; the trigger only resolves when
+        -- it is created in the converted creature's GameObject context.
         request = dispatcher:call(
             REQUEST_SIGNATURE,
             trigger, target, target, joint_hash,
@@ -3139,6 +3211,37 @@ local function post_request(dispatcher, trigger, target, lane)
         if request then
             request = request:add_ref()
             request["<Container>k__BackingField"] = dispatcher
+            -- ⭐⭐ MAKE THE VOICE ACTUALLY 3D -- hooves are the worst offender. Levers
+            -- dumped from soundlib.SoundManager.RequestInfo: Positioned (3D at all, vs a
+            -- 2D voice pinned to the listener), SrcGameObj (WHICH object it emits from)
+            -- and AttenuationScalingFactor (scales the event's attenuation distance).
+            -- ⛔ All three must be set BEFORE trigger() -- afterwards the voice is already
+            -- playing and the write is ignored. Individually pcall'd so a setter missing
+            -- on some future patch cannot take the whole post down.
+            if C.spatial_audio then
+                local position = nil
+                pcall(function()
+                    local tf = target:call("get_Transform")
+                    position = tf and tf:call("get_UniversalPosition") or nil
+                end)
+                if position then
+                    pcall(function() request:call("set_Position", position) end)
+                end
+                pcall(function() request:call("set_Positioned", true) end)
+                pcall(function()
+                    request:call("set_AttenuationScalingFactor",
+                        tonumber(C.attenuation_scale) or 1.0)
+                end)
+                -- ⛔⛔ SrcGameObj IS THE PRIME SUSPECT FOR THE VANISHING HORSE and is
+                -- therefore SEPARATELY gated, default OFF. It is the only one of these
+                -- that hands the creature to the sound system as a registered emitter
+                -- (RequestInfo carries a GameObjectRegistered field, and SoundTriggerInfo
+                -- carries _CullingId1/2/3) -- so it is the only plausible route by which a
+                -- sound setting could get an object culled. Positioned and the attenuation
+                -- factor only describe how an existing voice is heard.
+                -- Never register the live horse into the player's custom-bank
+                -- dispatcher. Explicit position supplies 3D placement safely.
+            end
             dispatcher:call("trigger(soundlib.SoundManager.RequestInfo)", request)
         end
     end)
@@ -3190,6 +3293,22 @@ local function post_via_template(dispatcher, event_id, target, lane)
     end
     local post_ok, post_err = pcall(function()
         request["<Container>k__BackingField"] = dispatcher
+        if C.spatial_audio then
+            local position = nil
+            pcall(function()
+                local tf = target:call("get_Transform")
+                position = tf and tf:call("get_UniversalPosition") or nil
+            end)
+            if position then
+                pcall(function() request:call("set_Position", position) end)
+            end
+            pcall(function() request:call("set_Positioned", true) end)
+            pcall(function()
+                request:call("set_AttenuationScalingFactor",
+                    tonumber(C.attenuation_scale) or 1.0)
+            end)
+            -- Explicit position only; do not transfer live-object ownership.
+        end
         dispatcher:call("trigger(soundlib.SoundManager.RequestInfo)", request)
     end)
     if not post_ok then return false, tostring(post_err) end
@@ -3215,11 +3334,21 @@ local function post_event(event_id, target, lane)
     local trigger = A.triggers_by_event[event_id]
     local registered = A.registered_events
         and A.registered_events[event_id]
-    if trigger and registered
-        and post_request(dispatcher, trigger, target, lane) then
+
+    -- The custom bank is registered on this dispatcher. Posting its trigger through
+    -- the horse's native container returns success but the audio thread silently drops
+    -- the unknown event. Keep the owning dispatcher and position the RequestInfo at the
+    -- horse instead; the bank's attenuation curve then controls distance normally.
+    if trigger and registered and post_request(dispatcher, trigger, target, lane) then
+        A.last_emitter = "custom/spatial"
         return true
     end
-    return post_via_template(dispatcher, event_id, target, lane)
+    local ok, err = post_via_template(dispatcher, event_id, target, lane)
+    if ok then
+        A.last_emitter = "custom/spatial/template"
+        return true, err
+    end
+    return false, tostring(err or "custom dispatcher rejected the post")
 end
 
 local function play_category(category, target)
@@ -3246,9 +3375,18 @@ local function play_category(category, target)
     end
     A.last_pick[category] = index
     local entry = bucket[index]
+    local event_id, distance, tier = distance_tier_event(entry, target)
+    A.last_audio_distance = distance
+    A.last_audio_tier = tier
+    if not event_id then
+        -- Beyond the final tier is intentional silence, not a failed post.
+        A.last_played = entry.name .. " (out of range)"
+        A.post_fail_n = 0
+        return true, "beyond distance-volume range"
+    end
     local hoof_lane = category == "walk" or category == "trot"
         or category == "gallop" or category == "land"
-    local ok, err = post_event(entry.event_id, target,
+    local ok, err = post_event(event_id, target,
         hoof_lane and "hoof" or "vocal")
     if ok then
         A.last_played = entry.name
@@ -3374,6 +3512,33 @@ end
 local function horse_state_for(game_object)
     local address = object_address(game_object)
     return address and S.horses[tostring(address)] or nil
+end
+
+-- W3 full-bank audition. Keep this on the first registered horse and out of
+-- the automatic controller: it proves individual motions on the real horse
+-- before kick, jump, Blessing or steering state machines depend on them.
+local function play_w3_bank(motion_id, label)
+    local horse = first_horse()
+    if not valid(horse) then
+        S.status = "W3 bank: no live horse"
+        return false
+    end
+    local state = horse_state_for(horse)
+    if not (state and valid(state.motion) and valid(state.layer)) then
+        S.status = "W3 bank: horse motion layer not ready"
+        return false
+    end
+    local ok = issue_custom(state, motion_id, 0.2)
+    if ok then
+        -- Audition at authored speed. Normal locomotion reapplies the horse
+        -- speed/IV multiplier when it next takes ownership.
+        pcall(function() state.layer:call("set_Speed", 1.0) end)
+        state.live = read_layer(state.layer) or state.live
+        S.status = "W3 bank: playing " .. tostring(label)
+    else
+        S.status = "W3 bank: changeMotion failed for " .. tostring(label)
+    end
+    return ok
 end
 
 local function gait_category(horse)
@@ -3856,9 +4021,17 @@ rawset(_G, "__iris_wild_horses_api", {
         if not RP.load() then return nil end
         return { bank = RP.bank, gather = 1, thrust = 2, eat = 3 }
     end,
-    blessing_strike = function(go)
+    blessing_ready = function(go, key)
+        return RP.blessing_ready(go, key)
+    end,
+    blessing_strike = function(go, key)
         if not valid(go) then return nil end
-        pcall(function()
+        local ready, remaining = RP.blessing_ready(go, key)
+        if not ready then return nil, remaining end
+        -- This is the single authority for both the on-foot and ridden paths.
+        -- Charge at the strike, when the effect actually becomes committed.
+        RP.charge_blessing(go, key)
+        local ok = pcall(function()
             local tf = go:call("get_Transform")
             local p = tf:call("get_Position")
             local rot = tf:call("get_Rotation")
@@ -3871,7 +4044,7 @@ rawset(_G, "__iris_wild_horses_api", {
             pcall(function() play_category("hurt", go) end)
             RP.start_hot(circle)   -- 08-12: heal-over-time zone
         end)
-        return "HoT started"
+        return ok and "HoT started" or nil
     end,
 })
 
@@ -3883,12 +4056,8 @@ rawset(_G, "__iris_wild_horses_api", {
 -- (200-local ceiling law); cooldowns persist OUTSIDE the per-ritual table.
 -- ---------------------------------------------------------------------------
 
--- addr -> {t, go}. ⛔⛔ 08-15 (Aurora: "I set the cooldown to 180s but I can still do it
--- whenever"): this used to store the REGISTRY RECORD TABLE and compare it by identity.
--- The record is rebuilt whenever the reaper/stable-restore re-registers a body, so the
--- comparison silently failed and the cooldown was skipped entirely. Store the GAME OBJECT
--- instead: it is the same userdata for the same live creature across record rebuilds, and
--- it still catches address REUSE (a recycled address carries a different GameObject).
+-- addr -> {t, key}.  Both casting paths key this by the numeric GameObject address;
+-- managed userdata identity is not stable across wrapper/registry rebuilds.
 RP.cooldowns = RP.cooldowns or {}
 RP.blessing = nil
 RP.blessing_status = "idle"
@@ -4466,14 +4635,8 @@ function RP.try_cast()
         RP.blessing_status = "no unicorn within range"
         return false
     end
-    local cd = RP.cooldowns[addr]
-    if cd and cd.go == rec.game_object
-        and os.clock() - cd.t < (C.blessing_cooldown or 120) then
-        RP.blessing_status = string.format("cooling down (%.0fs left)",
-            (C.blessing_cooldown or 120) - (os.clock() - cd.t))
-        return false
-    end
     local go = rec.game_object
+    if not RP.blessing_ready(go, C.blessing_key) then return false end
     local character, motion, layer = character_motion(go)
     if not (valid(motion) and valid(layer)) then
         RP.blessing_status = "unicorn motion/layer not ready"
@@ -4507,8 +4670,8 @@ function RP.blessing_cleanup(aborted)
     -- The cooldown is normally charged at the strike (see the thrust phase). This is the
     -- backstop for a clean finish, and it must NOT overwrite a strike-time stamp with a
     -- later one -- that would silently extend every cooldown by the ritual's own length.
-    if not aborted and not (RP.cooldowns[b.addr] and RP.cooldowns[b.addr].go == b.go) then
-        RP.cooldowns[b.addr] = { t = os.clock(), go = b.go }
+    if not aborted and not RP.cooldowns[b.addr] then
+        RP.charge_blessing(b.go, C.blessing_key)
     end
     RP.blessing_status = aborted and "aborted" or "complete"
     log("blessing: " .. RP.blessing_status)
@@ -4521,12 +4684,99 @@ function RP.layer_frames(layer)
     return frame, endframe
 end
 
+-- One cooldown authority for every way of casting the blessing.  The ridden
+-- Y-button path previously called blessing_strike directly and therefore never
+-- touched the on-foot B-button cooldown table or its HUD feed.
+function RP.cooldown_key(go)
+    if not valid(go) then return nil end
+    return object_address(go)
+end
+
+function RP.cooldown_remaining(go, now)
+    local addr = RP.cooldown_key(go)
+    if not addr then return 0.0, nil end
+    local cd = RP.cooldowns[addr]
+    local duration = math.max(0.0, tonumber(C.blessing_cooldown) or 120.0)
+    if not cd or duration <= 0.0 then return 0.0, addr end
+    local remaining = duration - ((now or os.clock()) - (tonumber(cd.t) or 0.0))
+    if remaining <= 0.0 then
+        RP.cooldowns[addr] = nil
+        if RP.cooldown_hud_addr == addr then RP.cooldown_hud_addr = nil end
+        return 0.0, addr
+    end
+    return remaining, addr
+end
+
+function RP.blessing_ready(go, key)
+    local remaining, addr = RP.cooldown_remaining(go, os.clock())
+    if not addr then return false, 0.0 end
+    if remaining > 0.0 then
+        local cd = RP.cooldowns[addr]
+        if cd and key ~= nil then cd.key = math.floor(tonumber(key) or 66) end
+        RP.cooldown_hud_addr = addr
+        RP.blessing_status = string.format("cooling down (%.0fs left)", remaining)
+        return false, remaining
+    end
+    return true, 0.0
+end
+
+function RP.charge_blessing(go, key)
+    local addr = RP.cooldown_key(go)
+    if not addr then return nil end
+    RP.cooldowns[addr] = {
+        t = os.clock(),
+        key = math.floor(tonumber(key) or tonumber(C.blessing_key) or 66),
+    }
+    RP.cooldown_hud_addr = addr
+    return addr
+end
+
+-- Publish one small, renderer-agnostic cooldown feed.  GriffinRideProbe owns the
+-- shared D2D HUD, so Wild Horses supplies state rather than registering a second
+-- renderer.  The timestamp makes the consumer fail closed if this script stops.
+function RP.blessing_hud_tick(now)
+    local duration = math.max(0.0, tonumber(C.blessing_cooldown) or 120.0)
+    local addr = RP.cooldown_hud_addr
+    local cd = addr and RP.cooldowns[addr] or nil
+    if not cd then
+        local newest_t = -1.0
+        for candidate_addr, candidate in pairs(RP.cooldowns) do
+            local t = tonumber(candidate and candidate.t) or -1.0
+            if t > newest_t and now - t < duration then
+                addr, cd, newest_t = candidate_addr, candidate, t
+            end
+        end
+        RP.cooldown_hud_addr = addr
+    end
+    if not cd or duration <= 0.0 then
+        _G.IrisBlessingHUD = nil
+        return
+    end
+    local elapsed = math.max(0.0, now - (tonumber(cd.t) or now))
+    local remaining = math.max(0.0, duration - elapsed)
+    if remaining <= 0.0 then
+        if addr then RP.cooldowns[addr] = nil end
+        RP.cooldown_hud_addr = nil
+        _G.IrisBlessingHUD = nil
+        return
+    end
+    _G.IrisBlessingHUD = {
+        active = true,
+        t = now,
+        key = math.floor(tonumber(cd.key) or tonumber(C.blessing_key) or 66),
+        remaining = remaining,
+        duration = duration,
+        frac = math.max(0.0, math.min(1.0, elapsed / duration)),
+    }
+end
+
 -- Phase transitions ride the LIVE layer frame (atlas law: authored frame
 -- counts are not wall time); wall-clock acts only as a watchdog. The first
 -- 0.5s of every phase ignores frame reads -- changeMotion blends over ~4
 -- frames and get_Frame briefly reports the OUTGOING clip.
 function RP.blessing_tick()
     local now = os.clock()
+    RP.blessing_hud_tick(now)
     if C.blessing_enabled and not RP.blessing then
         local down = false
         pcall(function()
@@ -4618,7 +4868,7 @@ function RP.blessing_tick()
             -- used to leave no cooldown at all -- so a heal could be delivered and then
             -- immediately re-cast. Charge it here; a failure BEFORE this point still
             -- costs nothing, which is the fair split.
-            RP.cooldowns[b.addr] = { t = os.clock(), go = b.go }
+            RP.charge_blessing(b.go, C.blessing_key)
             local circle = nil
             pcall(function()
                 local fwd = UNI.qrot(b.rot, Vector3f.new(0.0, 0.0, 1.0), false)
@@ -5287,6 +5537,50 @@ re.on_draw_ui(function()
         if value then L.resource_attempted = false; load_motlist() end
         save_config()
     end
+    imgui.text("W3 bank 901 baseline motions (first horse):")
+    local pilot_clips = {
+        {1, "Walk"}, {2, "Trot"}, {3, "Gallop"},
+        {4, "Standing Idle"}, {5, "Canter"},
+    }
+    for index, clip in ipairs(pilot_clips) do
+        if imgui.button(clip[2] .. "##iris_w3_pilot_" .. tostring(clip[1])) then
+            play_w3_bank(clip[1], clip[2])
+        end
+        if index < #pilot_clips then imgui.same_line() end
+    end
+    if imgui.tree_node("W3 v2.1 full-bank audition (IDs 1-128)##iris_w3_full") then
+        S.w3_full_test_id = math.max(1, math.min(128,
+            math.floor(tonumber(S.w3_full_test_id) or 17)))
+        changed, value = imgui.slider_int(
+            "Motion ID##iris_w3_full_id", S.w3_full_test_id, 1, 128)
+        if changed then S.w3_full_test_id = value end
+        imgui.same_line()
+        if imgui.button("Play ID##iris_w3_full_play") then
+            play_w3_bank(S.w3_full_test_id,
+                "ID " .. tostring(S.w3_full_test_id))
+        end
+        imgui.text("Curated candidates (audition only; no gameplay binding yet):")
+        local full_bank_candidates = {
+            {7, "Turn L"}, {8, "Turn R"}, {17, "Back Kick"},
+            {18, "Rear"}, {19, "Eat Start"}, {20, "Eat Hold 1"},
+            {21, "Eat Hold 2"}, {22, "Eat Stop"}, {23, "Gallop Jump"},
+            {28, "Gallop Land"}, {29, "Hard Land"}, {30, "Trot Jump"},
+            {35, "Trot Land"}, {36, "Canter Jump"}, {41, "Canter End"},
+            {44, "Throw Rider"}, {45, "Turn L alt"}, {46, "Turn R alt"},
+        }
+        for index, clip in ipairs(full_bank_candidates) do
+            if imgui.button(string.format("%03d %s##iris_w3_full_%d",
+                    clip[1], clip[2], clip[1])) then
+                S.w3_full_test_id = clip[1]
+                play_w3_bank(clip[1], clip[2])
+            end
+            if index % 3 ~= 0 and index < #full_bank_candidates then
+                imgui.same_line()
+            end
+        end
+        imgui.text("IDs 24/27/31/34/37/40/42 are transition components, not complete jumps.")
+        imgui.tree_pop()
+    end
     -- Bank 902 (Gallop_Jump / Jump_toIdle / Buck) as its own switch, so the two custom
     -- motlists can be halved independently. Added during the 08-09 mount-crash hunt; that
     -- crash turned out to be an untyped GUI write in IrisHorseRodeo, so the motlists are
@@ -5296,6 +5590,14 @@ re.on_draw_ui(function()
 
     changed, value = imgui.checkbox("Horse sounds", C.audio_enabled)
     if changed then C.audio_enabled = value; save_config() end
+    imgui.text("Distance volume: four safe bank tiers")
+    imgui.text("  last emitter: " .. tostring(A.last_emitter or "-")
+        .. " | tier " .. tostring(A.last_audio_tier or "-")
+        .. " | metres " .. (A.last_audio_distance
+            and string.format("%.1f", A.last_audio_distance) or "-"))
+    changed, value = imgui.slider_float("Distance-volume range scale",
+        C.attenuation_scale or 1.0, 0.25, 3.0, "%.2f")
+    if changed then C.attenuation_scale = value; save_config() end
     imgui.same_line()
     changed, value = imgui.checkbox("Silence doe sounds", C.suppress_doe_audio)
     if changed then C.suppress_doe_audio = value; save_config() end
@@ -5410,6 +5712,18 @@ re.on_draw_ui(function()
         imgui.text("  ⛔ install IRIS_08_unicorn.pak FIRST -- requesting a path the")
         imgui.text("   engine cannot serve is an instant CTD, not a failed load.")
         imgui.text("  mesh: " .. tostring(R.unicorn_status or "not requested yet"))
+
+        changed, value = imgui.checkbox(
+            "W3 complete painted atlas (safe horse.mdf2)##w3_complete",
+            C.w3_complete_assets)
+        if changed then
+            C.w3_complete_assets = value
+            save_config()
+            repaint_all()
+        end
+        imgui.text("  Enable only with IRIS_W3_Horse_Complete installed.")
+        imgui.text("  Uses mesh UV bands for white coat, mint mane/tail and indigo horn;")
+        imgui.text("  it does NOT require the crash-prone custom MDF switch below.")
 
         -- ⛔ Every custom-mdf2 build so far CTD'd in EyeGlowController.onUpdate (v1.0
         -- five-mat AND v1.2 four-mat), while stock horse.mdf2 (v1.1) is proven stable.
@@ -6243,6 +6557,10 @@ re.on_draw_ui(function()
 end)
 
 load_config()
+-- The old RequestInfo positioning switch only produced full-volume audio plus
+-- a hard cull, and was involved in the silent-request regression. Distance is
+-- now handled by pre-gained bank tiers; keep that legacy path permanently off.
+C.spatial_audio = false
 -- 08-07 one-shot migration (Aurora: "the horse idling is only using doe
 -- sounds"): older saved configs carry suppress_doe_audio=false from the
 -- era when our vocals never played (unregistered-list drop). Now that the

@@ -4,6 +4,7 @@
     "ambient_max_s": 45,
     "ambient_min_s": 20,
     "ambient_vocal_migrated": true,
+    "attenuation_scale": 1.0,
     "audio_enabled": true,
     "blessing_cooldown": 180.0,
     "blessing_enabled": true,
@@ -28,6 +29,8 @@
     "hurt_vocal_max_s": 10,
     "hurt_vocal_min_s": 5,
     "jump_pack_enabled": true,
+    "spatial_audio": false,
+    "spatial_src_gameobj": false,
     "suppress_doe_audio": true,
     "suppress_vocal_migrated": true,
     "trot_max_speed": 6.0,
@@ -65,5 +68,6 @@
     "unicorn_rainbow": true,
     "unicorn_rainbow_speed": 0.17900000512599945,
     "unicorn_reassert_s": 2.0,
+    "w3_complete_assets": true,
     "walk_max_speed": 2.5
 }

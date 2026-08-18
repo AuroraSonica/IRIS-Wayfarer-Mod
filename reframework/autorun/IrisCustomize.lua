@@ -1,17 +1,32 @@
--- IrisCustomize.lua -- the D2D creature CUSTOMIZE screen (RiftSpeak child-creator style).
--- Hotkey -> frame the active tamed companion (IrisCreatureCam) + FREEZE the world (PauseManager
--- debug-camera type) + a D2D menu. Pick a PART (auto-grouped from mesh materials), a preset
--- COLOUR, or open ADVANCED RGB sliders. Controller: left stick nav, right stick camera, A keep /
--- B back / X advanced. Accept/cancel with confirm dialogs (revert snapshot on cancel).
+-- IrisCustomize.lua -- the D2D creature CUSTOMISE screen (RiftSpeak child-creator style).
+-- Framing = IrisCreatureCam + a PauseManager debug-camera freeze (no banner, no dim).
+--
+-- ⭐⭐ 08-16 REDESIGN (Aurora's tidy-up pass):
+--  1. NO GLOBAL HOTKEY. The Stable owns the door now ([C] / DpadLeft on a summoned row), so
+--     C stays free out in the world. Reached only through _G.IrisCustomize.open().
+--  2. TWO SECTIONS, not one list with a colour strip glued underneath:
+--       PART   -- walk to the part you want, A steps DOWN into the colour section
+--       COLOUR -- presets (or advanced RGB); A keeps the colour and steps back UP, B cancels
+--                 it back to what it was when you entered
+--     Under the last part sits ACCEPT CHANGES, which raises the usual confirm dialog.
+--  3. DOCKED LEFT + height fitted to its content, so the framed creature is never behind it
+--     (the panel used to sit dead centre over the animal you were trying to look at).
+--  4. The header reads the creature's real KIND from the stable row -- a converted ch299011
+--     body is a Horse or a Unicorn, never the "Doe" chassis it was built from.
+
+local PRESET_PER_ROW = 9
 
 local CU = {
     open = false,
-    parts = {}, part_i = 1,
-    mode = "parts", chan_i = 1, preset_i = 1, slider = { 1.0, 1.0, 1.0 },
+    parts = {}, part_i = 1, on_accept = false,
+    focus = "parts",          -- "parts" | "colour"  (which section owns the cursor)
+    adv = false,              -- inside COLOUR: RGB sliders instead of the preset grid
+    chan_i = 1, preset_i = 1, slider = { 1.0, 1.0, 1.0 },
     entry = {}, staged = {}, dirty = false, dialog = nil,
+    col_snap = nil,           -- the part's colour as it was when COLOUR was entered (B undoes to this)
     keys = {}, rep = {},
     fonts = nil, font_h = 0, reg = false,
-    key = 0x43, info = "",
+    kind = "Creature", info = "",
 }
 
 local PRESETS = {
@@ -33,8 +48,11 @@ local PART_KEYS = {
 }
 
 local function type_name(nm)
+    -- last-resort chassis ladder (see kind_name below -- this only runs when nothing that
+    -- actually knows the creature is loaded)
     nm = tostring(nm or "")
     if nm:find("ch253", 1, true) then return "Griffin" end
+    if nm:find("ch257", 1, true) then return "Drake" end
     -- 08-14: ch223001 is the Redwolf chassis and the IRIS cat pak makes both its prefabs cats
     -- (_01 Panther, _00 Puma) - this header used to read "DOG - PART" over a panther
     if nm:find("ch223001_01", 1, true) then return "Panther" end
@@ -51,6 +69,31 @@ local function active_go()
     pcall(function() if iris_active_go then g = iris_active_go() end end)
     if g and g.call then return g end
     return nil
+end
+
+-- ⭐ 08-16 (Aurora: "this UI says Doe, but this creature I'm customizing is a horse"): the
+-- STABLE ROW is the only place that knows a converted ch299011 body is a Horse -- or a
+-- Unicorn -- rather than the Doe chassis it was built from, because the KIND and VARIANT
+-- live on the record, not on the GameObject name. Ask the bridge first, then the shared
+-- name book (IrisSpecies), and only then this file's own chassis ladder. Resolved ONCE at
+-- open: stable_list() walks every companion and reads HP, so it is not a per-frame call.
+local function kind_name(go)
+    local lbl = nil
+    pcall(function()
+        local b = rawget(_G, "IrisGriffinBridge")
+        for _, r in ipairs((b and b.stable_list and b.stable_list()) or {}) do
+            if r.live and type(r.label) == "string" and r.label ~= "" then lbl = r.label; break end
+        end
+    end)
+    if lbl and lbl ~= "" then return lbl end
+    pcall(function()
+        local SP = rawget(_G, "IrisSpecies")
+        if SP and SP.name then lbl = SP.name(go) end
+    end)
+    if lbl and lbl ~= "" then return lbl end
+    local nm = nil
+    pcall(function() nm = go and go:call("get_Name") end)
+    return type_name(nm)
 end
 
 -- ===== gamepad (stolen from RiftSpeakCreatorInput) =====
@@ -152,6 +195,27 @@ local function build_parts(go)
     return parts
 end
 
+-- DIRTY is now MEASURED, not latched (08-16): the Accept Changes row dims itself when there
+-- is nothing to accept, and cancelling a colour has to be able to take dirty back off.
+local function same_c(a, b) return math.abs((a or 1.0) - (b or 1.0)) < 0.004 end
+-- an untinted material captures as BaseColor 1,1,1 -- so "has a colour" must mean "is tinted",
+-- otherwise EVERY part wears a white swatch and a * the moment the screen opens (08-16)
+local function is_tinted(c)
+    return c ~= nil and not (same_c(c[1], 1.0) and same_c(c[2], 1.0) and same_c(c[3], 1.0))
+end
+local function recompute_dirty()
+    local d = false
+    for mn, c in pairs(CU.staged) do
+        local e = CU.entry[mn]
+        if e then
+            if not (same_c(c[1], e[1]) and same_c(c[2], e[2]) and same_c(c[3], e[3])) then d = true; break end
+        elseif not (same_c(c[1], 1.0) and same_c(c[2], 1.0) and same_c(c[3], 1.0)) then
+            d = true; break   -- never customised + not plain Natural = a real change
+        end
+    end
+    CU.dirty = d
+end
+
 local function apply_part(part, rgb)
     if not part then return end
     local go = active_go(); if not go then return end
@@ -162,7 +226,7 @@ local function apply_part(part, rgb)
     end
     pcall(function() if iris_recolor then iris_recolor(go, matcolors) end end)   -- LIVE only (persist on accept)
     part.color = { rgb[1], rgb[2], rgb[3] }
-    CU.dirty = true
+    recompute_dirty()
 end
 
 local function do_revert()
@@ -176,7 +240,7 @@ end
 
 -- ===== open / close =====
 local function close_screen()
-    CU.open = false; CU.dialog = nil
+    CU.open = false; CU.dialog = nil; CU.col_snap = nil
     _G.IrisCustomizeOpen = false
     world_pause(false)
     pcall(function() if _G.IrisCreatureCam then _G.IrisCreatureCam.set_on(false) end end)
@@ -187,14 +251,26 @@ local function open_screen()
     CU.parts = build_parts(go)
     if #CU.parts == 0 then CU.info = "no colourable materials found"; return false end
     CU.entry = {}; pcall(function() if iris_get_active_colors then CU.entry = iris_get_active_colors() end end)
-    CU.staged = {}; CU.dirty = false; CU.dialog = nil
+    CU.staged = {}; CU.dirty = false; CU.dialog = nil; CU.col_snap = nil
+    CU.kind = kind_name(go)
     for _, part in ipairs(CU.parts) do
         local c = part.mats[1] and CU.entry[part.mats[1]]
         if c then part.color = { c[1], c[2], c[3] } else part.color = nil end
     end
-    CU.part_i = 1; CU.mode = "parts"; CU.chan_i = 1; CU.preset_i = 1; CU.slider = { 1.0, 1.0, 1.0 }
+    CU.part_i = 1; CU.on_accept = false; CU.focus = "parts"; CU.adv = false
+    CU.chan_i = 1; CU.preset_i = 1; CU.slider = { 1.0, 1.0, 1.0 }
     do local part = CU.parts[1]; local c = part and part.color
         if c then for i, pr in ipairs(PRESETS) do if math.abs(pr[2][1]-c[1])+math.abs(pr[2][2]-c[2])+math.abs(pr[2][3]-c[3]) < 0.06 then CU.preset_i = i; break end end end end
+    -- swallow whatever is already HELD as the screen opens: the button that opened this must
+    -- not also land as its first command (the same-frame double-edge trap the Stable hit).
+    -- Marking held keys as already-down makes the first edge require a genuine re-press.
+    CU.keys = {}; CU.rep = {}
+    for _, vk in ipairs({ 0x0D, 0x1B, 0x08, 0x46, 0x26, 0x28, 0x57, 0x53, 0x25, 0x27, 0x41, 0x44 }) do
+        local d = false; pcall(function() d = iris_kb(vk) == true end)
+        CU.keys[vk] = d
+    end
+    PAD.prev = pad_button()
+    PAD.held = pad_held_dir(PAD.prev); PAD.held_at = os.clock(); PAD.rep_at = PAD.held_at
     _G.IrisCustomizeOpen = true
     pcall(function() if _G.IrisCreatureCam then _G.IrisCreatureCam.set_on(true) end end)
     world_pause(true)
@@ -205,16 +281,13 @@ end
 -- ===== actions =====
 local function cam_orbit(d) pcall(function() if _G.IrisCreatureCam then _G.IrisCreatureCam.orbit(d) end end) end
 local function cam_zoom(d) pcall(function() if _G.IrisCreatureCam then _G.IrisCreatureCam.zoom(d) end end) end
-local function toggle_advanced()
-    if CU.mode == "parts" then
-        CU.mode = "advanced"
-        local c = CU.parts[CU.part_i] and CU.parts[CU.part_i].color or { 1, 1, 1 }
-        CU.slider = { c[1] or 1, c[2] or 1, c[3] or 1 }
-    else CU.mode = "parts" end
+
+local function set_preset(i)
+    CU.preset_i = math.max(1, math.min(#PRESETS, math.floor(i)))
+    local pr = PRESETS[CU.preset_i]; if pr then apply_part(CU.parts[CU.part_i], pr[2]) end
 end
 local function cycle_preset(delta)
-    CU.preset_i = ((CU.preset_i - 1 + delta) % #PRESETS) + 1
-    local pr = PRESETS[CU.preset_i]; if pr then apply_part(CU.parts[CU.part_i], pr[2]) end
+    set_preset(((CU.preset_i - 1 + delta) % #PRESETS) + 1)
 end
 local function adjust_slider(step)
     CU.slider[CU.chan_i] = math.max(0.0, math.min(2.0, (CU.slider[CU.chan_i] or 1.0) + step))
@@ -232,6 +305,59 @@ local function sync_preset()
     end
     -- a custom colour with no matching preset: leave the cursor where it is
 end
+
+-- ── section handover: PART -> COLOUR and back ───────────────────────────────────────────
+local function enter_colour()
+    local part = CU.parts[CU.part_i]; if not part then return end
+    sync_preset()
+    -- snapshot every mat this part owns EXACTLY as it stands, so B can put it back
+    local snap = {}
+    for _, mn in ipairs(part.mats or {}) do
+        local c = CU.staged[mn]
+        if c then snap[mn] = { c[1], c[2], c[3], c[4] or 1.0 } end
+    end
+    CU.col_snap = { mats = snap, color = part.color and { part.color[1], part.color[2], part.color[3] } or nil }
+    CU.focus = "colour"
+end
+local function keep_colour()
+    CU.col_snap = nil
+    CU.focus = "parts"; CU.adv = false
+end
+local function cancel_colour()
+    local part = CU.parts[CU.part_i]
+    local s = CU.col_snap
+    if part and s then
+        local restore = {}
+        for _, mn in ipairs(part.mats or {}) do
+            local c = s.mats[mn] or CU.entry[mn] or { 1.0, 1.0, 1.0, 1.0 }
+            restore[mn] = { c[1], c[2], c[3], c[4] or 1.0 }
+            -- ⛔ keep it STAGED (at its old value) rather than dropping it: the per-frame
+            -- re-assert below is what actually holds a colour on the body, and a mat that
+            -- leaves the staged table stops being held mid-preview. recompute_dirty()
+            -- knows an unchanged staged entry is not a change.
+            CU.staged[mn] = restore[mn]
+        end
+        pcall(function() local g = active_go(); if g and iris_recolor then iris_recolor(g, restore) end end)
+        part.color = s.color
+    end
+    CU.col_snap = nil
+    CU.focus = "parts"; CU.adv = false
+    recompute_dirty(); sync_preset()
+end
+local function toggle_advanced()
+    if CU.focus ~= "colour" then
+        if CU.on_accept then return end   -- the Accept row has no colour to open
+        enter_colour()
+        CU.adv = true
+    else
+        CU.adv = not CU.adv
+    end
+    if CU.adv then
+        local c = CU.parts[CU.part_i] and CU.parts[CU.part_i].color or { 1, 1, 1 }
+        CU.slider = { c[1] or 1, c[2] or 1, c[3] or 1 }
+    end
+end
+
 local function confirm_dialog()
     if CU.dialog == "apply" then
         pcall(function() if iris_save_active_colors then iris_save_active_colors(CU.staged) end end)
@@ -260,14 +386,9 @@ local function held_repeat(vk, name)
 end
 
 local function input_tick()
-    if edge(math.floor(tonumber(CU.key) or 0x43)) then
-        -- The Stable owns C while its list is open; it queues this screen only after the
-        -- paused menu has closed. Opening directly on the paused frame is unsafe.
-        if rawget(_G, "IrisStableUIOpen") == true or rawget(_G, "IrisFurnishUIOpen") == true
-            or rawget(_G, "IrisTypingActive") == true then return end
-        if CU.open then if CU.dirty then CU.dialog = "revert" else close_screen() end else open_screen() end
-        return
-    end
+    -- ⭐ 08-16: NO global open hotkey any more. The Stable screen is the only door (its row
+    -- action defers the open to a live frame, which is also the only SAFE way in -- opening
+    -- straight off the paused menu frame was never sound).
     if not CU.open then return end
     -- unified face buttons (keyboard + gamepad edge)
     local cur = pad_button()
@@ -289,10 +410,8 @@ local function input_tick()
     local rrx, rry = pad_axis_r()
     if math.abs(rrx) > 0.15 then cam_orbit(rrx * 3.0) end
     if math.abs(rry) > 0.15 then cam_zoom(-rry * 0.08) end
-    -- advanced toggle / accept / cancel
-    if x_hit then toggle_advanced() end
-    if a_hit then if CU.dirty then CU.dialog = "apply" else close_screen() end return end
-    if b_hit then if CU.dirty then CU.dialog = "revert" else close_screen() end return end
+    -- advanced sliders: one button, from either section
+    if x_hit then toggle_advanced(); return end
     -- NAV: keyboard + gamepad (with auto-repeat)
     local kb_up = edge(0x26) or edge(0x57)
     local kb_down = edge(0x28) or edge(0x53)
@@ -306,14 +425,50 @@ local function input_tick()
     local down = kb_down or (gfire and gdir == "down")
     local left = kb_left or (gfire and gdir == "left")
     local right = kb_right or (gfire and gdir == "right")
-    if CU.mode == "parts" then
-        if up then CU.part_i = ((CU.part_i - 2) % #CU.parts) + 1; sync_preset() end
-        if down then CU.part_i = (CU.part_i % #CU.parts) + 1; sync_preset() end
-        if left then cycle_preset(-1) elseif right then cycle_preset(1) end
+
+    if CU.focus == "parts" then
+        -- A = step DOWN into the colour section for this part (or fire Accept Changes)
+        if a_hit then
+            if CU.on_accept then
+                if CU.dirty then CU.dialog = "apply" else close_screen() end
+            else
+                enter_colour()
+            end
+            return
+        end
+        if b_hit then if CU.dirty then CU.dialog = "revert" else close_screen() end return end
+        local n = #CU.parts
+        if up then
+            if CU.on_accept then CU.on_accept = false; CU.part_i = n
+            elseif CU.part_i <= 1 then CU.on_accept = true
+            else CU.part_i = CU.part_i - 1 end
+            sync_preset()
+        end
+        if down then
+            if CU.on_accept then CU.on_accept = false; CU.part_i = 1
+            elseif CU.part_i >= n then CU.on_accept = true
+            else CU.part_i = CU.part_i + 1 end
+            sync_preset()
+        end
     else
-        if up then CU.chan_i = ((CU.chan_i - 2) % 3) + 1 end
-        if down then CU.chan_i = (CU.chan_i % 3) + 1 end
-        if left then adjust_slider(-0.04) elseif right then adjust_slider(0.04) end
+        -- COLOUR section: A keeps and steps back up, B undoes this part and steps back up
+        if a_hit then keep_colour(); return end
+        if b_hit then cancel_colour(); return end
+        if CU.adv then
+            if up then CU.chan_i = ((CU.chan_i - 2) % 3) + 1 end
+            if down then CU.chan_i = (CU.chan_i % 3) + 1 end
+            if left then adjust_slider(-0.04) elseif right then adjust_slider(0.04) end
+        else
+            if left then cycle_preset(-1) elseif right then cycle_preset(1) end
+            if up then
+                -- off the top row = back up to the part list, keeping what you picked
+                if CU.preset_i <= PRESET_PER_ROW then keep_colour(); return end
+                set_preset(CU.preset_i - PRESET_PER_ROW)
+            elseif down then
+                if CU.preset_i + PRESET_PER_ROW <= #PRESETS then set_preset(CU.preset_i + PRESET_PER_ROW)
+                elseif CU.preset_i <= PRESET_PER_ROW then set_preset(#PRESETS) end
+            end
+        end
     end
 end
 
@@ -361,107 +516,170 @@ function iris_cu_draw()
     local ok, w, h = pcall(d2d.surface_size); if ok and w and h and h > 0 then sw = w; sh = h end
     local ft = iris_cu_make_fonts(sh); if not ft then return end
     local scale = sh / 1080.0
+    local function u(v) return math.floor(v * scale) end
     local function argb(a, rgb) if a < 0 then a = 0 elseif a > 1 then a = 1 end return math.floor(255 * a) * 0x1000000 + (rgb % 0x1000000) end
     local function txt(font, s, x, y, col, a)
         pcall(d2d.text, font, s, x + 2, y + 2, argb((a or 1) * 0.7, 0x000000))
         pcall(d2d.text, font, s, x, y, argb(a or 1, col))
     end
     -- Same visual grammar as the Stable and decoration screen: smoke glass, fine gold
-    -- rules, cream headings and a translucent gold selection. Customisation stays left
-    -- of centre so the framed creature remains visible while colours are previewed.
+    -- rules, cream headings and a translucent gold selection.
     local C_ACCENT, C_PANEL, C_TITLE, C_ROW, C_DIM, C_SEL, C_INSET =
         0xC8A050, 0x14141A, 0xE8D8A8, 0xD8D0BC, 0x8E8A82, 0xC8A050, 0x000000
-    local pw = math.floor(math.min(sw * 0.39, 640 * scale))
-    local px = math.floor(math.max(24 * scale, (sw - 960 * scale) * 0.5))
-    local ph = math.floor(math.min(sh * 0.78, 690 * scale))
+
+    -- ── metrics: the panel is FITTED to its content (08-16) so it stops being a slab of
+    -- empty smoke, and DOCKED LEFT so the framed creature stays in the clear.
+    local tpx, rpx, spx = (ft.title_px or 34), (ft.row_px or 24), (ft.small_px or 18)
+    local pad_top   = u(18)
+    local title_h   = tpx + u(16)
+    local head_h    = spx + u(8)
+    local rowh      = math.floor(rpx * 1.45)
+    local acc_gap   = u(12)
+    local parts_h   = #CU.parts * rowh + acc_gap + rowh + u(8)
+    local gap_mid   = u(14)
+    local cur_h     = u(46)
+    local grid_rows = math.ceil(#PRESETS / PRESET_PER_ROW)
+    local grid_h    = grid_rows * u(30)
+    local adv_h     = 3 * u(28) + u(42)
+    local body_h    = head_h + (CU.adv and adv_h or (cur_h + grid_h))
+    local foot_h    = u(20) + spx + u(6) + spx + u(14)
+    local ph = pad_top + title_h + head_h + parts_h + gap_mid + body_h + foot_h
+    local pw = math.floor(math.min(sw * 0.40, 660 * scale))
+    local px = u(48)
     local py = math.floor((sh - ph) * 0.5)
-    local b = math.max(2, math.floor(2 * scale))
+    local b = math.max(2, u(2))
     pcall(d2d.fill_rect, px + b * 2, py + b * 2, pw, ph, argb(0.4, 0x000000))
     pcall(d2d.fill_rect, px, py, pw, ph, argb(0.95, C_PANEL))
-    pcall(d2d.fill_rect, px, py, pw, math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
-    pcall(d2d.fill_rect, px, py + ph - math.max(2, math.floor(2 * scale)), pw,
-        math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
-    local ix = px + math.floor(20 * scale)
-    local iw = pw - math.floor(40 * scale)
-    local y = py + math.floor(18 * scale)
-    local cname = "Creature"
-    pcall(function() local g = active_go(); if g then cname = type_name(g:call("get_Name")) end end)
-    txt(ft.title_f, "THE STABLE  /  CUSTOMISE", ix, y, C_TITLE, 1.0)
-    y = y + (ft.title_px or 34) + math.floor(16 * scale)
-    txt(ft.small_f, string.upper(cname) .. "  -  PART", ix, y, C_ACCENT, 1.0)
-    y = y + (ft.small_px or 18) + math.floor(8 * scale)
-    local rowh = math.floor((ft.row_px or 24) * 1.45)
+    pcall(d2d.fill_rect, px, py, pw, b, argb(1.0, C_ACCENT))
+    pcall(d2d.fill_rect, px, py + ph - b, pw, b, argb(1.0, C_ACCENT))
+    local ix = px + u(20)
+    local iw = pw - u(40)
+    local y = py + pad_top
+
+    local on_parts = (CU.focus == "parts")
+    local part_now = CU.parts[CU.part_i]
+
+    txt(ft.title_f, "The Stable  /  Customise", ix, y, C_TITLE, 1.0)
+    y = y + title_h
+
+    -- ── SECTION 1: PART ─────────────────────────────────────────────────────────────────
+    txt(ft.small_f, tostring(CU.kind or "Creature") .. "  -  Part", ix, y, C_ACCENT, on_parts and 1.0 or 0.5)
+    y = y + head_h
     local parts_y = y
-    local parts_h = #CU.parts * rowh + math.floor(8 * scale)
-    pcall(d2d.fill_rect, ix - math.floor(8 * scale), parts_y - math.floor(4 * scale),
-        iw + math.floor(16 * scale), parts_h, argb(0.32, C_INSET))
+    pcall(d2d.fill_rect, ix - u(8), parts_y - u(4), iw + u(16), parts_h, argb(0.32, C_INSET))
     for i, part in ipairs(CU.parts) do
-        local sel = (i == CU.part_i)
+        local sel = (i == CU.part_i) and not CU.on_accept
         if sel then
-            pcall(d2d.fill_rect, ix - math.floor(8 * scale), y - math.floor(2 * scale), iw + math.floor(16 * scale), rowh, argb(0.34, C_SEL))
-            pcall(d2d.fill_rect, ix - math.floor(8 * scale), y - math.floor(2 * scale), math.max(2, math.floor(3 * scale)), rowh, argb(1.0, C_ACCENT))
+            -- dimmer while the COLOUR section holds the cursor: you can still see which part
+            -- you are painting, but the bright selection lives where your input goes
+            pcall(d2d.fill_rect, ix - u(8), y - u(2), iw + u(16), rowh, argb(on_parts and 0.34 or 0.16, C_SEL))
+            pcall(d2d.fill_rect, ix - u(8), y - u(2), math.max(2, u(3)), rowh, argb(on_parts and 1.0 or 0.6, C_ACCENT))
         end
-        txt(ft.row_f, part.name .. (part.color and "  *" or ""), ix, y, sel and C_TITLE or C_ROW, sel and 1.0 or 0.8)
-        if part.color then pcall(d2d.fill_rect, ix + iw - math.floor(34 * scale), y + math.floor(2 * scale), math.floor(30 * scale), (ft.row_px or 24) - math.floor(2 * scale), argb(1.0, swatch_hex(part.color))) end
+        local tinted = is_tinted(part.color)
+        txt(ft.row_f, part.name .. (tinted and "  *" or ""), ix, y, sel and C_TITLE or C_ROW, sel and 1.0 or 0.8)
+        if tinted then pcall(d2d.fill_rect, ix + iw - u(34), y + u(2), u(30), rpx - u(2), argb(1.0, swatch_hex(part.color))) end
         y = y + rowh
     end
-    y = y + math.floor(14 * scale)
-    if CU.mode == "parts" then
-        txt(ft.small_f, "COLOUR", ix, y, C_ACCENT, 1.0); y = y + (ft.small_px or 18) + math.floor(8 * scale)
+    -- ── the ACCEPT CHANGES line, under the last part (Aurora, 08-16) ────────────────────
+    pcall(d2d.fill_rect, ix - u(8), y + math.floor(acc_gap * 0.5), iw + u(16), math.max(1, u(1)), argb(0.35, C_ACCENT))
+    y = y + acc_gap
+    do
+        local sel = CU.on_accept
+        if sel then
+            pcall(d2d.fill_rect, ix - u(8), y - u(2), iw + u(16), rowh, argb(on_parts and 0.34 or 0.16, C_SEL))
+            pcall(d2d.fill_rect, ix - u(8), y - u(2), math.max(2, u(3)), rowh, argb(on_parts and 1.0 or 0.6, C_ACCENT))
+        end
+        txt(ft.row_f, "Accept Changes", ix, y,
+            sel and C_TITLE or (CU.dirty and C_ACCENT or C_ROW), CU.dirty and 1.0 or 0.5)
+        y = y + rowh
+    end
+    y = y + u(8) + gap_mid
+
+    -- ── SECTION 2: COLOUR ───────────────────────────────────────────────────────────────
+    local ca = on_parts and 0.55 or 1.0     -- the inactive section reads as context, not input
+    local chead = "Colour"
+    if not on_parts and part_now then chead = "Colour  -  " .. tostring(part_now.name) end
+    txt(ft.small_f, CU.adv and (chead .. "  (Advanced)") or chead, ix, y, C_ACCENT, on_parts and 0.5 or 1.0)
+    y = y + head_h
+    if not CU.adv then
         local pr = PRESETS[CU.preset_i]
         if pr then
-            pcall(d2d.fill_rect, ix, y, math.floor(48 * scale), math.floor(34 * scale), argb(1.0, swatch_hex(pr[2])))
-            txt(ft.row_f, pr[1], ix + math.floor(60 * scale), y + math.floor(3 * scale), C_TITLE, 1.0)
+            pcall(d2d.fill_rect, ix, y, u(48), u(34), argb(ca, swatch_hex(pr[2])))
+            txt(ft.row_f, pr[1], ix + u(60), y + u(3), C_TITLE, ca)
         end
-        y = y + math.floor(46 * scale)
-        local per = 9
-        local sww = math.floor(iw / per)
+        y = y + cur_h
+        local sww = math.floor(iw / PRESET_PER_ROW)
         for i, p2 in ipairs(PRESETS) do
-            local col = (i - 1) % per
-            local rown = math.floor((i - 1) / per)
+            local col = (i - 1) % PRESET_PER_ROW
+            local rown = math.floor((i - 1) / PRESET_PER_ROW)
             local rx = ix + col * sww
-            local ry = y + rown * math.floor(30 * scale)
-            pcall(d2d.fill_rect, rx, ry, sww - math.floor(4 * scale), math.floor(24 * scale), argb(1.0, swatch_hex(p2[2])))
-            if i == CU.preset_i then pcall(d2d.fill_rect, rx, ry, sww - math.floor(4 * scale), math.max(3, math.floor(3 * scale)), argb(1.0, C_TITLE)) end
+            local ry = y + rown * u(30)
+            pcall(d2d.fill_rect, rx, ry, sww - u(4), u(24), argb(ca, swatch_hex(p2[2])))
+            if i == CU.preset_i then
+                -- the cursor is a full ring while COLOUR owns the input, a hairline otherwise
+                if on_parts then
+                    pcall(d2d.fill_rect, rx, ry, sww - u(4), math.max(2, u(2)), argb(0.7, C_TITLE))
+                else
+                    local t = math.max(2, u(3))
+                    pcall(d2d.fill_rect, rx - t, ry - t, sww - u(4) + t * 2, t, argb(1.0, C_TITLE))
+                    pcall(d2d.fill_rect, rx - t, ry + u(24), sww - u(4) + t * 2, t, argb(1.0, C_TITLE))
+                    pcall(d2d.fill_rect, rx - t, ry - t, t, u(24) + t * 2, argb(1.0, C_TITLE))
+                    pcall(d2d.fill_rect, rx + sww - u(4), ry - t, t, u(24) + t * 2, argb(1.0, C_TITLE))
+                end
+            end
         end
+        y = y + grid_h
     else
-        txt(ft.small_f, "ADVANCED COLOUR", ix, y, C_ACCENT, 1.0); y = y + (ft.small_px or 18) + math.floor(10 * scale)
         local chans = { { "R", 0xC04030 }, { "G", 0x40A040 }, { "B", 0x4060C0 } }
         for ci, cc in ipairs(chans) do
             local val = CU.slider[ci] or 1.0
             local sel = (ci == CU.chan_i)
-            txt(ft.row_f, cc[1], ix, y, sel and C_TITLE or C_ROW, sel and 1.0 or 0.8)
-            local barx = ix + math.floor(30 * scale)
-            local barw = iw - math.floor(90 * scale)
-            pcall(d2d.fill_rect, barx, y + math.floor(6 * scale), barw, math.floor(14 * scale), argb(0.5, 0x000000))
-            pcall(d2d.fill_rect, barx, y + math.floor(6 * scale), math.floor(barw * math.min(val / 2.0, 1.0)), math.floor(14 * scale), argb(1.0, cc[2]))
-            if sel then pcall(d2d.fill_rect, barx - math.floor(3 * scale), y + math.floor(4 * scale), math.max(3, math.floor(3 * scale)), math.floor(18 * scale), argb(1.0, C_ACCENT)) end
-            txt(ft.small_f, string.format("%.2f", val), barx + barw + math.floor(10 * scale), y + math.floor(3 * scale), C_ROW, 1.0)
-            y = y + math.floor(28 * scale)
+            txt(ft.row_f, cc[1], ix, y, sel and C_TITLE or C_ROW, (sel and 1.0 or 0.8) * ca)
+            local barx = ix + u(30)
+            local barw = iw - u(90)
+            pcall(d2d.fill_rect, barx, y + u(6), barw, u(14), argb(0.5, 0x000000))
+            pcall(d2d.fill_rect, barx, y + u(6), math.floor(barw * math.min(val / 2.0, 1.0)), u(14), argb(ca, cc[2]))
+            if sel then pcall(d2d.fill_rect, barx - u(3), y + u(4), math.max(3, u(3)), u(18), argb(ca, C_ACCENT)) end
+            txt(ft.small_f, string.format("%.2f", val), barx + barw + u(10), y + u(3), C_ROW, ca)
+            y = y + u(28)
         end
-        pcall(d2d.fill_rect, ix, y + math.floor(4 * scale), math.floor(60 * scale), math.floor(30 * scale), argb(1.0, swatch_hex(CU.slider)))
+        pcall(d2d.fill_rect, ix, y + u(4), u(60), u(30), argb(ca, swatch_hex(CU.slider)))
+        y = y + u(42)
     end
-    local fy = py + ph - math.floor(54 * scale)
-    txt(ft.small_f, "L-stick / arrows: navigate      R-stick: camera (Q/E turn, Z/X zoom)", ix, fy, C_DIM, 1.0)
-    txt(ft.small_f, "A / Enter: accept    B / Esc: back    X / F: " .. (CU.mode == "parts" and "advanced" or "presets"), ix, fy + (ft.small_px or 18) + math.floor(6 * scale), C_DIM, 1.0)
+
+    -- ── footer: the two lines say what THIS section's buttons do, not a fixed legend ─────
+    local fy = py + ph - (spx + u(6) + spx + u(14))
+    txt(ft.small_f, "L-Stick / Arrows: Navigate      R-Stick: Camera  (Q/E Turn, Z/X Zoom)", ix, fy, C_DIM, 1.0)
+    local line2
+    if on_parts then
+        if CU.on_accept then
+            line2 = "A / Enter: Accept Changes      B / Esc: Back"
+        else
+            line2 = "A / Enter: Choose Colour      B / Esc: Back      X / F: Advanced"
+        end
+    else
+        line2 = "A / Enter: Keep Colour      B / Esc: Cancel      X / F: "
+            .. (CU.adv and "Presets" or "Advanced")
+    end
+    txt(ft.small_f, line2, ix, fy + spx + u(6), C_DIM, 1.0)
+
     -- confirm dialog over everything
     if CU.dialog then
         local dw = math.floor(math.min(sw * 0.44, 680 * scale))
-        local dh = math.floor(190 * scale)
+        local dh = u(190)
         local dx = math.floor((sw - dw) * 0.5)
         local dy = math.floor((sh - dh) * 0.42)
         pcall(d2d.fill_rect, 0, 0, sw, sh, argb(0.45, 0x000000))
         pcall(d2d.fill_rect, dx, dy, dw, dh, argb(0.98, C_PANEL))
-        pcall(d2d.fill_rect, dx, dy, dw, math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
-        pcall(d2d.fill_rect, dx, dy + dh - math.max(2, math.floor(2 * scale)), dw,
-            math.max(2, math.floor(2 * scale)), argb(1.0, C_ACCENT))
-        local q = (CU.dialog == "apply") and "Apply these changes?" or "Revert these changes?"
+        pcall(d2d.fill_rect, dx, dy, dw, b, argb(1.0, C_ACCENT))
+        pcall(d2d.fill_rect, dx, dy + dh - b, dw, b, argb(1.0, C_ACCENT))
+        local q = (CU.dialog == "apply") and "Apply These Changes?" or "Revert These Changes?"
         local function cen(font, s, ty, col)
             local mw = #tostring(s) * 9; pcall(function() local ok2, m = pcall(d2d.measure_text, font, s); if ok2 and m and m > 0 then mw = m end end)
             txt(font, s, math.floor(dx + (dw - mw) * 0.5), ty, col, 1.0)
         end
-        cen(ft.title_f, q, dy + math.floor(40 * scale), C_TITLE)
-        cen(ft.row_f, "A / Enter:  Yes            B / Esc:  No", dy + math.floor(40 * scale) + (ft.title_px or 34) + math.floor(24 * scale), C_ROW)
+        cen(ft.title_f, q, dy + u(40), C_TITLE)
+        cen(ft.row_f, "A / Enter:  Yes            B / Esc:  No", dy + u(40) + tpx + u(24), C_ROW)
     end
 end
 
@@ -485,11 +703,8 @@ end)
 
 re.on_draw_ui(function()
     if not imgui.tree_node("I.R.I.S. customize screen") then return end
-    imgui.text("Hotkey frames the active companion + freezes the world + opens the colour menu.")
-    local c
-    c, CU.key = imgui.drag_int("open hotkey (VK)", math.floor(tonumber(CU.key) or 0x43), 1, 0x08, 0xFE)
-    local kc = math.floor(tonumber(CU.key) or 0x43)
-    imgui.text("hotkey: " .. ((kc >= 0x41 and kc <= 0x5A) and string.char(kc) or string.format("0x%X", kc)))
+    imgui.text("Frames the active companion + freezes the world + opens the colour menu.")
+    imgui.text("No hotkey: open it from THE STABLE screen ([C] / DpadLeft on a summoned row).")
     if imgui.button(CU.open and "Close screen" or "Open screen") then if CU.open then close_screen() else open_screen() end end
     imgui.text(tostring(CU.info or ""))
     imgui.text("D2D: " .. (CU.reg and "on" or "waiting") .. "   pad face A/B/X: " .. string.format("0x%X/0x%X/0x%X", PAD.face.a, PAD.face.b, PAD.face.x))
@@ -500,8 +715,6 @@ _G.IrisCustomize = {
     open = function() return open_screen() end,
     close = function() close_screen() end,
     is_open = function() return CU.open end,
-    get_key = function() return math.floor(tonumber(CU.key) or 0x43) end,
-    set_key = function(vk) CU.key = math.floor(tonumber(vk) or 0x43) end,
 }
 
 re.on_script_reset(function()

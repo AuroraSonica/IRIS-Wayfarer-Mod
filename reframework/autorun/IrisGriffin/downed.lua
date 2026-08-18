@@ -1154,6 +1154,17 @@ function griffin_downed_release(e, reason)
     if e.addr then
         griffin_downed_state()[e.addr] = nil
         if type(_G.IrisDownedAddrs) == "table" then _G.IrisDownedAddrs[e.addr] = nil end
+        -- ⛔⛔ 08-17 (Aurora: "they get back up briefly and then lie back down again") -- THE
+        -- INSTANT RE-DOWN LOOP. The floor detector (~:1780) downs a body when its HP sits at the
+        -- floor, gated on `seen_above` = "we witnessed this body above the floor". Its own comment
+        -- states the rule as **a witnessed fall from above the floor** -- but S.last_safe_hp was
+        -- written in exactly ONE place and cleared in NONE, so that witness survived for the whole
+        -- session. A body released at/near the floor therefore satisfied `seen_above` on the very
+        -- next frame using evidence from BEFORE the down it just finished, and went straight back
+        -- down: up, then down, then up, forever.
+        -- ⇒ the witness dies with the down that consumed it. A re-down now needs the body to be
+        -- seen healthy AGAIN first, which is what "a witnessed fall" meant all along.
+        if type(S.last_safe_hp) == "table" then S.last_safe_hp[e.addr] = nil end
     end
     pcall(function() route3_grab_set_immunity(e.ch, false) end)
     -- ⛔⛔ 08-09 r67 -- CLEAR THE DOWN ACTION *BEFORE* THE AI COMES BACK.
@@ -1394,6 +1405,35 @@ function griffin_downed_enter(addr)
             end
         end)
     end
+    -- ⛔⛔⛔ 08-17 -- AND THROW THE PILOT OFF TOO. A SCOUT IS A RIDER BY ANY OTHER NAME.
+    -- The block above has always thrown a rider off a downed mount for exactly the reason
+    -- spelled out there: you cannot ride a body that is playing its own death animation with
+    -- its AI switched off. A SCOUT DRONE is the same relationship -- the player is flying that
+    -- body directly, writing its transform every frame, with the camera on it and the Arisen
+    -- frozen and input-starved -- and it was never covered here. Aurora's crow dive-stole over
+    -- the sea, the brine downed it mid-dive, the scout kept flying it, and the game CTD'd on
+    -- two owners writing one action-claimed body.
+    -- ⭐ Order matters exactly as it does for the dismount: this runs BEFORE griffin_downed_reassert
+    -- and before anything disables components or claims the animation layer. IrisTaming's own
+    -- watchdog catches this too, one frame later; this is the earliest frame that exists.
+    -- (_G.IrisDownedAddrs[addr] is already true above, so the unwind over there correctly
+    -- refuses to re-arm the shoulder perch on a downed bird.)
+    pcall(function()
+        local api = rawget(_G, "IrisTaming")
+        if not (api and api.scout_abort) then return end
+        local mine = true
+        if api.is_scouting then
+            local a = nil
+            pcall(function() a = go:get_address() end)
+            mine = (a ~= nil) and api.is_scouting(a) == true
+        end
+        if not mine then return end          -- a DIFFERENT companion went down: leave the flight alone
+        if api.scout_abort("your companion went down") then
+            e.was_scouted = true
+            status(tostring(e.name) .. " went down while you were flying it")
+            log.info("[IrisDowned] scout drone ENDED: the bird being flown went down")
+        end
+    end)
     griffin_downed_reassert(e)
     griffin_downed_map_add(e)
     -- PROVEN on the rabbit 07-21: a Damage-tree down node fires safely on a FRIENDLY body.
@@ -1569,6 +1609,37 @@ function griffin_downed_to_stable(e)
     pcall(function()
         local dismiss = rawget(_G, "griffin_dismiss")
         if dismiss then dismiss() else delete_griffin() end
+    end)
+    -- ⛔⛔ 08-17 (Aurora: "Quoth still comes back out of the stable at max HP instantly") -- THE
+    -- BENCH WAS BEING UNDONE BY THE DISMISS. Two paths both believe they own rec.hp:
+    --   * THIS function writes the FLOOR (that is the whole point of a bench), then
+    --   * griffin_dismiss -> griffin_tamed_save -> griffin_stable_bank_live_hp reads the LIVE
+    --     HitController and writes rec.hp/rec.hp_max straight over the top of it.
+    -- Last writer wins, and the receipt says the wrong one did: _stable.json had Quoth at
+    -- `hp: 28.0, hp_max: 28.0` -- FULL -- immediately after a bench that had just set him to 1.
+    -- (Aurora's own theory was a 1-HP native crow scaled up by the HP IV; the saved record
+    -- refutes that -- his max is a perfectly ordinary 28. It was never the IV, and never the
+    -- rest RATE either: no amount of rate tuning matters when the stored value is already full.)
+    -- ⇒ re-assert the floor AFTER the dismiss, so the bench is the last word, and start the rest
+    -- clock here rather than trusting whichever path happened to stamp it.
+    pcall(function()
+        local rec = griffin_stable_active()
+        if type(rec) ~= "table" then return end
+        local floor9 = tonumber(C.route3_downed_floor_hp) or 1.0
+        local was9 = tonumber(rec.hp)
+        rec.hp = floor9
+        if not (tonumber(rec.hp_max) and tonumber(rec.hp_max) > 0.0) then
+            rec.hp_max = tonumber(e.maxhp) or floor9
+        end
+        -- the bench clock: apply_elapsed_rest needs away_since or it never regenerates at all
+        -- (Quoth's record had hp_rest_at but NO away_since, so he was resting at zero per second)
+        local now9 = os.time()
+        rec.away_since = now9
+        rec.hp_rest_at = now9
+        griffin_stable_write()
+        log.info(string.format(
+            "[IrisDowned] bench HP asserted after dismiss: %s -> %.1f / %.1f (rest clock started)",
+            tostring(was9), floor9, tonumber(rec.hp_max) or -1))
     end)
     status(nm .. " was carried back to the stable -- it needs time to recover")
 end

@@ -67,16 +67,37 @@ function griffin_stable_begin_rest(comp)
     return true
 end
 
+-- ⭐⭐ 08-17 THE BENCH RATE, IN ONE PLACE (Aurora: "he is instantly back to full health").
+-- The old flat `route3_stable_regen_hp_per_sec = 1.0` is a GRIFFIN's rate: 250 max HP takes ~4
+-- real minutes, which is already brisk, but a crow with a few dozen HP was topped up in well
+-- under a minute -- the bench had no cost at all for exactly the creatures most likely to go down.
+-- Scaling by max HP makes "it needs time to recover" mean the same thing for every species.
+-- ⛔ GLOBAL and shared: the identical formula also lives in GriffinRideProbe's read-only stable
+-- projection, and two copies of a rate is how a displayed bar starts lying about the real number.
+function griffin_stable_rest_rate(maxhp)
+    local mins = tonumber(C.route3_stable_rest_full_mins)
+    local mx = tonumber(maxhp) or 0.0
+    if mins and mins > 0.0 and mx > 0.0 then return mx / (mins * 60.0) end
+    return math.max(0.0, tonumber(C.route3_stable_regen_hp_per_sec) or 1.0)
+end
+
 function griffin_stable_apply_elapsed_rest(comp)
     if not (comp and tonumber(comp.away_since)) then return false end
     local now = os.time()
     local since = tonumber(comp.hp_rest_at) or tonumber(comp.away_since) or now
     local hp, maxhp = tonumber(comp.hp), tonumber(comp.hp_max)
     if hp and maxhp and maxhp > 0.0 then
-        local rate = math.max(0.0,
-            tonumber(C.route3_stable_regen_hp_per_sec) or 1.0)
+        local rate = griffin_stable_rest_rate(maxhp)
+        local was = hp
         hp = math.min(maxhp, math.max(0.0, hp) + math.max(0, now - since) * rate)
         comp.hp = hp
+        -- receipt: the ONLY place bench recovery is actually applied. If a companion ever comes
+        -- back fuller than it should, this line says whether the rest did it or whether the
+        -- record was already full when it got here (08-17: it was the latter -- see
+        -- griffin_downed_to_stable, where the dismiss was overwriting the bench).
+        pcall(function() log.info(string.format(
+            "[IrisStable] rest applied to %s: %.1f -> %.1f / %.1f over %ds at %.3f hp/s",
+            tostring(comp.name or "?"), was, hp, maxhp, math.max(0, now - since), rate)) end)
     end
     comp.hp_rest_at = now
     comp.away_since = nil
@@ -546,6 +567,20 @@ function griffin_tamed_tick()
                 -- ground body has not converged yet (the 2%% ease takes ~10s from a
                 -- fresh spawn) or the critter drama in iris_iv_size_mult is the real
                 -- complaint - tune THERE, never with a second writer.
+                -- ⭐⭐ 08-17 REINSTATED, DELIBERATELY, AS ONE GLOBAL DIAL. The 08-13 fix
+                -- was right about the mechanism (ground SHRINK, not shoulder growth) and
+                -- the field STILL reads bigger up there, so Aurora's call is to stop
+                -- theorising and measure: C.perch_shrink in IrisTaming, one number for
+                -- every perched creature. It is NOT a second writer - it lands HERE, at
+                -- the same choke point, multiplying the value this easer already owns,
+                -- and IrisTaming's pin multiplies its captured hold by the identical
+                -- number. Default 1.0 = the 08-13 behaviour exactly, byte for byte.
+                pcall(function()
+                    if rawget(_G, "IrisTamingPerchGoAddr") ~= tostring(sgo:get_address()) then return end
+                    local shr = tonumber(rawget(_G, "IrisTamingPerchShrink")) or 1.0
+                    if shr ~= shr or shr < 0.25 or shr > 2.0 then return end   -- NaN/rogue = ignore
+                    want = want * shr
+                end)
                 local tf = sgo:call("get_Transform")
                 local cur = tf:call("get_LocalScale")
                 local cx = tonumber(cur and cur.x) or want

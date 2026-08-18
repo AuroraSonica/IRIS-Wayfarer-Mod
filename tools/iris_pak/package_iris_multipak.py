@@ -1,10 +1,10 @@
-"""IRIS_Assets v3.3.3 -- complete multi-pak plus runtime files.
+"""IRIS_Assets v3.4.2 -- complete multi-pak plus runtime files.
 
 ONE Fluffy mod entry containing the SEVEN proven pak files, byte-identical to
 the builds running in-game today. Fluffy installs every .pak in a mod folder,
 so this gives Aurora a single thing to manage without any custom container.
-The Lua modules and their JSON audio manifests are included as well: shipping
-only the paks left custom audio permanently unavailable.
+The JSON audio manifests are included beside the PAKs.  Runtime Lua remains
+owned by the live REFramework installation so Fluffy cannot redeploy stale code.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 GAME = Path(r"D:\SteamLibrary\steamapps\common\Dragons Dogma 2")
 HERE = Path(__file__).parent
-OUT = HERE / "IRIS_Assets_v3.4_MultiPak_FluffyMod.zip"
+OUT = HERE / "IRIS_Assets_v3.4.2_MultiPak_FluffyMod.zip"
 
 # (zip name, expected md5 prefix, candidate source paths in priority order)
 PAKS = [
@@ -55,8 +55,8 @@ RUNTIME_FILES = [
 
 MODINFO = """[Mod]
 name=IRIS - Assets (multi-pak)
-version=3.4.0
-description=Every I.R.I.S. custom asset in one Fluffy mod: griffin egg/nest/shells, wild horses, wild cats (puma/panther), baby bundle + bassinet, woodcutting/mining tools, ritual music, farmland and the weapon wall-plaque. Includes the Wild Cats/Horses runtime scripts and audio manifests. Horse locomotion uses the field-proven compressed Walk/Trot/Gallop motlist; v3.3.3 repairs horse durability and cat recognition, bank loading and native-template vocal fallback. Replaces the separate IRIS asset mods; uninstall those first. Requires REFramework.
+version=3.4.2
+description=Every I.R.I.S. custom asset in one Fluffy mod: griffin egg/nest/shells, wild horses, wild cats (puma/panther), baby bundle + bassinet, woodcutting/mining tools, ritual music, farmland and the weapon wall-plaque. Includes the Wild Cats/Horses audio manifests; v3.4.2 restores their field-proven audible Wwise banks after withdrawing the incompatible experimental spatial-bank edit. Horse locomotion uses the field-proven compressed Walk/Trot/Gallop motlist. Replaces the separate IRIS asset mods; uninstall those first. Requires REFramework.
 author=Aurora, Lyra and Iris
 """
 

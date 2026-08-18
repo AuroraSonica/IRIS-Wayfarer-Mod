@@ -1373,6 +1373,17 @@ function griffin_combat_lease_tick()
     pcall(function() stop_navigation(gch, false) end)
     pcall(function() griffin_lease_root_motion(gch, true) end)
     S.route3_companion_moving = false
+    -- ⭐⭐⭐ REPUBLISH HER IDENTITY EVERY TICK, from the LIVE body (08-15).
+    -- The AI tracer's match used a global stamped ONCE at lease start, and the decider log then
+    -- showed a ch253000 choosing actions with an address AND a name that both disagreed with it
+    -- (seen ch253000_00_19 @1066432048 vs ours ch253000_00 @1007537344). A cached identity cannot
+    -- tell "that is a different griffin" from "our stamp went stale" -- and AI[self]=0, the number
+    -- this entire investigation has rested on, is only meaningful if this match is right.
+    pcall(function()
+        rawset(_G, "IrisCombatLeaseAddr", go:get_address())
+        S.route3_lease_go_name = tostring(go_name(go) or "")
+        S.route3_lease_me = S.route3_lease_go_name .. "@" .. tostring(go:get_address())
+    end)
     -- both hooks are load-installed, but a load-time miss must not mean "silently absent all
     -- session" -- retry from the tick, the pattern every other hook in this tree uses.
     pcall(function() griffin_install_lease_hate_door() end)
@@ -1474,7 +1485,8 @@ function griffin_combat_lease_tick()
         log.info(string.format(
             "[IrisAttack] lease %.0fs node=%s clip=%s AI[self=%s other=%s %s] TTYPE[%s hits=%s] grp[hold=%s set=%s] ANGRY[%s] idle=%.1fs kicks=%s switches=%s hate=%s nav=%s puppet=%s enemyList=%s relForced=%s hateBlocks=%s | %s",
             now - (tonumber(lease.started) or now), node, clip,
-            tostring(S.route3_lease_ai_self or 0), tostring(S.route3_lease_ai_other or 0),
+            tostring(S.route3_lease_ai_self or 0),
+            tostring(S.route3_lease_ai_other or 0) .. " me=" .. tostring(S.route3_lease_me or "?"),
             "acts=" .. tostring(S.route3_lease_actions_passed or 0)
                 .. " DM[" .. tostring(S.route3_dm_repair or "?")
                 .. "] BG[" .. tostring(select(2, griffin_battle_group_status(gch)) or "?")

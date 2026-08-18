@@ -1,8 +1,15 @@
 {
-  "ambient_enabled": true,
-  "audio_enabled": true,
-  "cat_pack_chance": 0.33,
-  "enabled": true,
-  "panther_share": 0.5,
-  "replace_wolf_vocals": true
+    "ambient_enabled": true,
+    "attenuation_scale": 1.0,
+    "audio_enabled": true,
+    "cat_pack_chance": 0.33,
+    "enabled": true,
+    "panther_own_material": true,
+    "panther_share": 0.5,
+    "recolour_panther_material": true,
+    "replace_wolf_vocals": true,
+    "spatial_audio": false,
+    "spatial_src_gameobj": false,
+    "wolf_howl_event_id": 513202017,
+    "wolf_howl_trigger_id": 1077053777
 }
