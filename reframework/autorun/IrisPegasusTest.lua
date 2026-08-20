@@ -25,10 +25,19 @@ local MESH_PATH      = "character/ch/ch53_000/pegasus.mesh"
 local MATERIAL_PATH  = "riftspeak/pegasus/pegasus.mdf2"
 local LOGTAG         = "[IrisPegasus] "
 
+-- ⛔ STREAMING WARM GATE (restored 08-19): create_resource returns while the
+-- mesh is still STREAMING from disk; setMesh on a half-streamed resource skins
+-- partial buffers = the crumpled "pulsating bag" that ate a whole day of false
+-- mesh forensics. The holder object exposes no readiness signal our valid()
+-- can read (the pcall fallback rubber-stamped it), so the field-proven fixed
+-- wait from v0.1-v0.10 is back. Do not remove it again without a REAL signal.
+local WARM_SECONDS = 15.0
+
 local C = { armed = false, use_custom_material = false }
 local R = {
     res = nil, holder = nil, failed = false,
     mdf_res = nil, mdf_holder = nil,
+    warm_started = nil,
     status = "disarmed", last = "", swapped = {},
 }
 
@@ -49,9 +58,15 @@ local function get_component(go, tname)
     return nil
 end
 
+local function warm_remaining()
+    if not R.warm_started then return WARM_SECONDS end
+    return math.max(0.0, WARM_SECONDS - (os.clock() - R.warm_started))
+end
+
 local function resources_ready()
     return valid(R.holder)
         and (not C.use_custom_material or valid(R.mdf_holder))
+        and warm_remaining() <= 0.0
 end
 
 -- ---------------------------------------------------------------- resources
@@ -68,7 +83,8 @@ local function warm()
             R.status = "resource NIL - is IRIS_09_pegasus.pak installed?"
             log(R.status); return false
         end
-        log("Pegasus mesh resource pinned")
+        R.warm_started = os.clock()
+        log("Pegasus mesh resource pinned - streaming warm-up started")
     end
     if C.use_custom_material and not R.mdf_res then
         local ok = pcall(function()
@@ -104,10 +120,14 @@ local function warm()
     if resources_ready() then
         R.status = C.use_custom_material and "mesh + white coat READY"
             or "pegasus mesh READY (stock material)"
+        log(R.status)
+    elseif valid(R.holder) and warm_remaining() > 0.0 then
+        R.status = string.format("streaming warm-up: %.0fs left - DO NOT swap yet",
+            warm_remaining())
     else
         R.status = "holder build failed"
+        log(R.status)
     end
-    log(R.status)
     return resources_ready()
 end
 
@@ -278,6 +298,11 @@ local function swap(go)
         R.holder = nil
         return false, "setMesh threw: " .. tostring(err) .. " | " .. note
     end
+    -- ⛔ use-after-free law: pin the cached originals or the engine frees them
+    -- once they leave the renderer, and Revert restores a dangling ref (the
+    -- "Griff disappears on revert" bug). Released again in revert_all().
+    if old then pcall(function() old:add_ref() end) end
+    if old_mat then pcall(function() old_mat:add_ref() end) end
     R.swapped[#R.swapped+1] = {
         go = go, old = old, old_mat = old_mat, mesh = mesh,
         used_custom_material = C.use_custom_material,
@@ -301,6 +326,8 @@ local function revert_all()
             end
             s.mesh:call("set_Enabled", true)
         end)
+        if s.old then pcall(function() s.old:release() end) end
+        if s.old_mat then pcall(function() s.old_mat:release() end) end
         n = n + 1
     end
     R.swapped = {}
@@ -309,7 +336,14 @@ end
 
 -- ----------------------------------------------------------------------- UI
 re.on_frame(function()
-    if C.armed and not R.failed and not resources_ready() then warm() end
+    if C.armed and not R.failed then
+        if not resources_ready() then
+            warm()
+        elseif tostring(R.status):find("warm%-up") then
+            R.status = C.use_custom_material and "mesh + white coat READY"
+                or "pegasus mesh READY (stock material)"
+        end
+    end
 end)
 
 re.on_draw_ui(function()

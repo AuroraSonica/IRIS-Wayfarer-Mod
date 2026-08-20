@@ -7,9 +7,39 @@ local ok_spawn, SpawnRequest = pcall(require, "EnemySpawner/spawnRequest")
 -- Native ch223 controller experiment: use the exact GenerateManager spawner
 -- Puppeteer uses.  Kept global because this monolith sits on Lua's local limit.
 IrisNativeCh223Spawner = nil
-pcall(function()
-    IrisNativeCh223Spawner = require("SkillCreator/EnemySpawner")
-end)
+IrisNativeCh223SpawnerErr = nil
+-- ⛔⛔ 08-20 (Aurora: "I summon them from the stable, it says summoning but
+-- nothing appears"). This require is why. Chain:
+--   NarutoShadowClonePrototype.lua sets Bestiary_installed = true and stubs
+--   package.loaded["Bestiary/VariantData"] -- but REFramework loads autorun
+--   ALPHABETICALLY, so "G"riffinRideProbe requires the spawner long BEFORE
+--   "N"aruto installs that shim. With the Bestiary mod uninstalled,
+--   SkillCreator/EnemySpawner line 4 blows up, this pcall swallowed the
+--   error, and the module handle stayed nil forever -> every ch223 (wolf /
+--   puma) spawn was refused with "SkillCreator/EnemySpawner unavailable".
+-- Two fixes: SAY why it failed, and RETRY later (by spawn time the shim has
+-- run, so the same require succeeds).
+function iris_try_load_ch223_spawner()
+    if IrisNativeCh223Spawner then return true end
+    -- a failed require leaves a poisoned cache entry; clear it before retrying
+    pcall(function() package.loaded["SkillCreator/EnemySpawner"] = nil end)
+    pcall(function()
+        if not package.loaded["Bestiary/VariantData"] then
+            -- the same stub the Naruto prototype installs, in case that file
+            -- has not loaded yet (or is not installed at all)
+            package.loaded["Bestiary/VariantData"] = { variantList = {} }
+        end
+    end)
+    local ok, res = pcall(require, "SkillCreator/EnemySpawner")
+    if ok and type(res) == "table" then
+        IrisNativeCh223Spawner = res
+        IrisNativeCh223SpawnerErr = nil
+        return true
+    end
+    IrisNativeCh223SpawnerErr = tostring(res)
+    return false
+end
+iris_try_load_ch223_spawner()
 
 local DEFAULT = {
     enabled = true,
@@ -1530,6 +1560,56 @@ local DEFAULT = {
     route3_eat_cruise_clear = 5.0, route3_eat_timeout = 25.0, route3_eat_clip_bank = 20,
     route3_eat_pounce_clip = 4010, route3_eat_pounce_hit_clip = 4012, route3_eat_start_clip = 5300,
     route3_eat_loop_clip = 5310, route3_eat_end_clip = 5320,
+    -- ⭐ 08-19 r16 PECK TIMING, stamped live by Aurora during a real meal
+    -- ("5310:45,51,202,296" -- 45/51 was one stab double-tapped). Blood and
+    -- the pain cry fire on these frames of the eat loop, minus the reaction
+    -- lead below. Re-stamp with `.` in-game and hit "use the stamps above"
+    -- to replace them; empty = fall back to the wall-clock interval.
+    -- ⛔ 08-19 r18: EVERY new key must live HERE. merge_config only accepts a
+    -- saved value when `type(DEFAULT[k]) == type(v)`, so a key missing from
+    -- this table is silently DISCARDED on load -- which is exactly why the
+    -- meal camera sliders reset on every restart (Aurora, r18).
+    route3_eat_heal_pct = 5.0,
+    route3_eat_cam_side_deg = -150.0,
+    route3_eat_cam_dist = 6.5,
+    route3_eat_cam_height = 3.0,
+    route3_eat_cam_meal_bias = 0.92,
+    route3_eat_cam_blend_s = 0.9,
+    route3_eat_cam_smooth = 0.12,
+    route3_eat_cam_orbit_speed = 110.0,
+    route3_ground_eat_enabled = true,
+    route3_ground_eat_range = 5.0,
+    route3_ground_eat_combat_radius = 14.0,
+    route3_ground_eat_max_height = 3.2,
+    route3_ground_eat_secs = 15.0,
+    route3_ground_eat_cooldown = 12.0,
+    route3_ground_eat_align = true,
+    route3_ground_eat_lie = false,
+    route3_ground_eat_hint_enabled = false,
+    route3_ground_eat_hint_px = 16.0,
+    route3_ground_eat_hint_dx = 232.0,
+    route3_ground_eat_hint_dy = 66.0,
+    route3_predation_eat_total_secs = 15.0,
+    route3_predation_eat_chomp_secs = 2.4,
+    route3_predation_eat_chomp_dmg = 90.0,
+    route3_predation_eat_lie = true,
+    route3_predation_eat_lie_pitch_deg = 90.0,
+    route3_meal_align_by_head = true,
+    route3_meal_frame_hud = true,
+    route3_mount_button_native_b = true,
+    -- r18: ragdolling a LIVE meal victim is the standing suspect for the
+    -- blood refusing (every case that paints is a body whose ragdoll is its
+    -- natural DEATH ragdoll; the wolf's living prey is pinned, not ragdolled)
+    route3_meal_ragdoll_prey = false,
+    -- r19: if a chomp's paint is refused on a LIVING victim, finish it there
+    -- so every later beat bleeds (one live reaction beat, then gore)
+    route3_meal_kill_for_blood = true,
+    route3_meal_think_stop_prey = false,   -- r23: see the meal tick note
+    route3_meal_think_wake_s = 0.4,
+    route3_meal_peck_frames = "5310:48,202,296",
+    route3_meal_peck_lead = 6,      -- fire this many frames early (human lag)
+    route3_meal_stamp_merge = 12,   -- taps this close = the same stab
+    route3_meal_stamp_key = 0xBE,   -- `.` ⛔ NOT F8 (RiftSpeak talk)
     route3_eat_pounce_dur = 0.37, route3_eat_hit_dur = 0.3, route3_eat_start_dur = 3.8,
     route3_eat_loop_dur = 16.0, route3_eat_end_dur = 0.4,
     route3_eat_leash = 30.0,                -- metres: past this she abandons the meal and comes back.
@@ -10232,6 +10312,12 @@ function reacquire_critter_reference()
         S.critter_go = char_go(S.critter)
         return S.critter, S.critter_go
     end
+    -- 08-20: IrisSpawner's handle is the primary source now
+    local hc = S.iris_critter_handle
+    if hc and hc.chara and not is_dead(hc.chara) then
+        register_critter_reference(hc.chara)
+        return S.critter, S.critter_go
+    end
     if S.critter_spawner and S.critter_spawner.instances then
         for i = #S.critter_spawner.instances, 1, -1 do
             local inst = S.critter_spawner.instances[i]
@@ -10247,10 +10333,43 @@ function reacquire_critter_reference()
 end
 
 function spawn_critter_reference()
-    if not ok_spawn then
-        S.critter_neutral_status = "critter spawn failed: EnemySpawner unavailable"
+    -- 08-20: try IRIS's own spawner first; EnemySpawner is only a fallback
+    local ISPc = rawget(_G, "IrisSpawner")
+    if not (ok_spawn or ISPc) then
+        S.critter_neutral_status = "critter spawn failed: no spawner available"
         status(S.critter_neutral_status)
         return false
+    end
+    if ISPc then
+        local posc, rotc = player_front(
+            tonumber(C.critter_reference_spawn_distance)
+            or ((tonumber(C.spawn_distance) or 8.0) + 4.0))
+        if not posc then
+            S.critter_neutral_status = "critter spawn failed: no player position"
+            status(S.critter_neutral_status)
+            return false
+        end
+        if S.iris_critter_handle then
+            pcall(function() ISPc.destroy(S.iris_critter_handle) end)
+        end
+        S.critter, S.critter_go, S.critter_name = nil, nil, "(pending)"
+        local code_c = tostring(C.critter_reference_code or "ch299003_A_00")
+        local hc2, errc = ISPc.spawn(code_c, posc, rotc,
+            { idle = true, label = code_c })
+        if hc2 then
+            S.iris_critter_handle = hc2
+            S.pending_critter_spawn = true
+            S.critter_neutral_status = "requested critter " .. code_c
+                .. " via IrisSpawner"
+            status(S.critter_neutral_status)
+            return true
+        end
+        log("IrisSpawner refused critter " .. code_c .. ": " .. tostring(errc))
+        if not ok_spawn then
+            S.critter_neutral_status = "critter spawn failed: " .. tostring(errc)
+            status(S.critter_neutral_status)
+            return false
+        end
     end
     if not S.critter_spawner then
         S.critter_spawner = SpawnRequest:new()
@@ -10546,6 +10665,212 @@ local function clear_griffin()
     clear_motion_queue()
 end
 
+-- === 08-20 NATIVE ch223 SPAWNER - IRIS's OWN, no SkillCreator required ===
+-- Aurora: "is there any way to make it so that IRIS doesn't require skill
+-- creator? that's a weird dependency considering skill creator was designed
+-- by nick to make in game vocations". Right: all IRIS ever wanted from that
+-- mod was ONE function, and that function is just the engine's GenerateManager
+-- spawn with a character prefab. We already run that exact recipe ourselves
+-- for the bone-pile gimmicks, so this is the same queue with a CharacterID
+-- instead of a GimmickID. SkillCreator becomes a FALLBACK, never a
+-- requirement. (Read from their file, never edited - the other-mods law.)
+local IRIS_CH223_ENUM = nil
+function iris_ch223_enum_value(idstring)
+    if not idstring then return nil end
+    if IRIS_CH223_ENUM and IRIS_CH223_ENUM[idstring] then
+        return IRIS_CH223_ENUM[idstring]
+    end
+    -- (re)build the cache: a script reset wipes it, so a nil hit rebuilds
+    local built = {}
+    pcall(function()
+        local td = sdk.find_type_definition("app.CharacterID")
+        if not td then return end
+        for _, f in ipairs(td:get_fields() or {}) do
+            pcall(function()
+                local n = f:get_name()
+                -- skip value__ and anything whose data is not a plain number:
+                -- that field is the enum's storage, not a member
+                if n and n ~= "value__" then
+                    local v = f:get_data(nil)
+                    if type(v) == "number" then built[n] = v end
+                end
+            end)
+        end
+    end)
+    IRIS_CH223_ENUM = built
+    local n = 0
+    for _ in pairs(built) do n = n + 1 end
+    S.route3_ch223_enum_size = n
+    if n > 0 and not built[idstring] then
+        -- diagnosis aid: name a few real members so a wrong key is obvious
+        local sample = {}
+        for k in pairs(built) do
+            sample[#sample + 1] = k
+            if #sample >= 5 then break end
+        end
+        S.route3_ch223_enum_note = "no '" .. tostring(idstring)
+            .. "' in app.CharacterID; e.g. " .. table.concat(sample, ", ")
+    end
+    return built[idstring]
+end
+
+function iris_ch223_idstring_for(code7)
+    -- the _01 test MUST precede the bare ch223001 test
+    local id = tostring(code7 or "")
+    if id:find("^ch223001_01") then return "ch223001_01", "Redwolf alpha" end
+    if id:find("^ch223001") then return "ch223001_00", "Redwolf" end
+    if id:find("^ch223") then return "ch223000_00", "Wolf" end
+    return nil, nil
+end
+
+-- Returns the shared handle {name, go, chara} (go/chara populate over later
+-- frames, exactly like SkillCreator's), or nil, err.
+function iris_native_ch223_spawn_request(code7, pos)
+    local idstring, nick = iris_ch223_idstring_for(code7)
+    if not idstring then return nil, "not a ch223 code" end
+    if not pos then return nil, "no spawn position" end
+    local enum_v = iris_ch223_enum_value(idstring)
+    if not enum_v then
+        return nil, "app.CharacterID lookup failed for " .. idstring
+            .. (S.route3_ch223_enum_note
+                and (" (" .. S.route3_ch223_enum_note .. ")") or "")
+    end
+    -- resolve the singleton + method HERE, not at file load: a fresh Lua state
+    -- (script reset) and pre-load timing both make a load-time capture a lie
+    local gm = sdk.get_managed_singleton("app.GenerateManager")
+    if not gm then return nil, "no app.GenerateManager yet" end
+    local method = nil
+    pcall(function()
+        method = sdk.find_type_definition("app.GenerateManager"):get_method(
+            "requestCreateInstance(app.PrefabController, app.GenerateInfo.GenerateInfoContainer, System.Int32, app.InstanceInfo, System.Action`2<app.PrefabInstantiateResults,app.DummyArg>, System.Action`2<app.PrefabInstantiateResults,app.DummyArg>)")
+    end)
+    if not method then return nil, "requestCreateInstance not found" end
+
+    local job = nil
+    local ok = pcall(function()
+        local prefab = sdk.create_instance("via.Prefab"):add_ref()
+        prefab:set_Path("AppSystem/ch/ch223/prefab/" .. idstring .. ".pfb")
+        local ctrl = sdk.create_instance("app.PrefabController"):add_ref()
+        ctrl._Item = prefab
+        local gi = sdk.create_instance(
+            "app.GenerateInfo.GenerateInfoContainer"):add_ref()
+        gi._CommonInfo._InitialPosition = pos
+        gi._CommonInfo._ContextPosition = pos
+        gi._CommonInfo._ObjectID._SelectedCharacterID = enum_v
+        -- one pcall around each nested backing-field write: these are the
+        -- likeliest name mismatch, and a throw must not take the spawn with it
+        pcall(function()
+            gi._StatusInfo["<ScaleRate>k__BackingField"] = 1.0
+        end)
+        pcall(function() gi._CharaInfo._IsThinkStop = false end)
+        pcall(function()
+            gi["<HumanInfo>k__BackingField"]["<Job>k__BackingField"] = 1
+            gi["<HumanInfo>k__BackingField"]["<HumanEnemyCombatParamId>k__BackingField"] = 1
+        end)
+        local ii = sdk.create_instance("app.InstanceInfo"):add_ref()
+        job = {
+            stage = "wait", prefab = prefab, ctrl = ctrl, gi = gi, ii = ii,
+            method = method, gm = gm, code7 = tostring(code7), pos = pos,
+            shared = { name = nick }, deadline = os.clock() + 6.0,
+            poll_frames = 0,
+        }
+    end)
+    if not (ok and job) then return nil, "spawn objects failed to build" end
+    S.route3_ch223_jobs = S.route3_ch223_jobs or {}
+    S.route3_ch223_jobs[#S.route3_ch223_jobs + 1] = job
+    return job.shared
+end
+
+-- Drained one op per frame beside the bones queue. The JOB TABLE is the only
+-- thing holding the four managed refs alive - SkillCreator got away with
+-- closure upvalues; drop them early here and the instance info is collected
+-- mid-flight and Chara stays nil forever.
+function iris_ch223_spawn_pump()
+    local q = S.route3_ch223_jobs
+    if not q or #q == 0 then return end
+    for i = #q, 1, -1 do
+        local job = q[i]
+        local drop = false
+        if job.stage == "wait" then
+            local ready = false
+            pcall(function() ready = job.prefab:get_Ready() == true end)
+            if ready then
+                local fired = pcall(function()
+                    job.method:call(job.gm, job.ctrl, job.gi, 0, job.ii, nil, nil)
+                end)
+                if fired then
+                    job.stage = "poll"
+                    job.poll_frames = 0
+                else
+                    job.stage = "failed"
+                    job.err = "requestCreateInstance threw"
+                end
+            elseif os.clock() > (tonumber(job.deadline) or 0.0) then
+                job.stage = "failed"
+                job.err = "prefab never became ready (path?)"
+            end
+        elseif job.stage == "poll" then
+            job.poll_frames = job.poll_frames + 1
+            pcall(function()
+                job.shared.go = job.ii["<Instance>k__BackingField"]
+                job.shared.chara = job.ii["<Chara>k__BackingField"]
+            end)
+            if job.shared.go and job.shared.chara then
+                job.stage = "done"
+                S.route3_native_ch223_spawn_status =
+                    "native ch223 spawned by IRIS: " .. tostring(job.code7)
+                log("native ch223 spawned by IRIS (no SkillCreator): "
+                    .. tostring(job.code7))
+                drop = true
+            elseif job.poll_frames > 900 then
+                job.stage = "failed"
+                job.err = "body never arrived"
+            end
+        end
+        if job.stage == "failed" and not job.consumed then
+            -- mark consumed BEFORE the fallback: a late native body must not
+            -- race a second spawn
+            job.consumed = true
+            drop = true
+            iris_ch223_spawn_fallback(job)
+        end
+        if drop then table.remove(q, i) end
+    end
+end
+
+-- The native route fails ASYNCHRONOUSLY (prefab never loaded / no body), so
+-- the fallback cannot live at the call site - it fires from the pump.
+function iris_ch223_spawn_fallback(job)
+    local why = tostring(job.err or "unknown")
+    -- our handle is dead; never destroy() - the engine may still deliver it
+    if S.route3_native_ch223_spawn == job.shared then
+        S.route3_native_ch223_spawn = nil
+        S.pending_native_ch223_spawn = nil
+    end
+    if not IrisNativeCh223Spawner then iris_try_load_ch223_spawner() end
+    local shared = nil
+    if IrisNativeCh223Spawner
+        and type(IrisNativeCh223Spawner.spawn_enemy) == "function" then
+        local _, nick = iris_ch223_idstring_for(job.code7)
+        pcall(function()
+            shared = IrisNativeCh223Spawner.spawn_enemy(nick or "Wolf", job.pos)
+        end)
+    end
+    if shared then
+        S.route3_native_ch223_spawn = shared
+        S.pending_native_ch223_spawn = true
+        S.route3_native_ch223_spawn_at = os.clock()
+        S.route3_native_ch223_spawn_status =
+            "IRIS spawn failed (" .. why .. ") -> SkillCreator fallback"
+    else
+        S.route3_native_ch223_spawn_status =
+            "ch223 spawn FAILED: " .. why .. " | SkillCreator fallback "
+            .. (IrisNativeCh223Spawner and "returned nothing"
+                or "unavailable (" .. tostring(IrisNativeCh223SpawnerErr or "?") .. ")")
+    end
+    log(tostring(S.route3_native_ch223_spawn_status))
+end
+
 function iris_native_ch223_spawn_destroy(reason)
     local shared = S.route3_native_ch223_spawn
     local go = shared and shared.go or nil
@@ -10587,6 +10912,11 @@ local function spawn_griffin()
     end
 
     if S.spawner then pcall(function() S.spawner:deleteAll() end) end
+    pcall(function()
+        local ISP0 = rawget(_G, "IrisSpawner")
+        if ISP0 and S.iris_spawn_handle then ISP0.destroy(S.iris_spawn_handle) end
+        S.iris_spawn_handle = nil
+    end)
     pcall(function() iris_native_ch223_spawn_destroy("replacement") end)
     clear_griffin()
 
@@ -10654,6 +10984,35 @@ local function spawn_griffin()
     -- bind the resulting body to the ordinary stable soul at register_griffin.
     -- CurrentActionList[0] can legitimately be Invalid on this fresh body: it
     -- is a vacant current-action slot, not a verdict on the authored graph.
+    -- 08-20: OUR OWN spawner first. SkillCreator is now a fallback, not a
+    -- requirement (Aurora: "that's a weird dependency considering skill
+    -- creator was designed by nick to make in game vocations").
+    if code7:find("^ch223") then
+        local own, own_err = iris_native_ch223_spawn_request(code7, pos)
+        if own then
+            S.spawner = nil
+            S.route3_native_ch223_spawn = own
+            S.pending_native_ch223_spawn = true
+            S.route3_native_ch223_spawn_at = os.clock()
+            S.route3_native_ch223_ready_at = nil
+            S.route3_native_ch223_setup_cut = nil
+            S.route3_native_ch223_idle_at = nil
+            S.route3_native_ch223_idle_tries = 0
+            S.route3_native_ch223_spawn_status =
+                "IRIS native ch223 spawn requested: " .. tostring(code7)
+            status(S.route3_native_ch223_spawn_status)
+            log(S.route3_native_ch223_spawn_status)
+            return true
+        end
+        S.route3_ch223_own_err = tostring(own_err or "?")
+        log("IRIS ch223 spawn unavailable (" .. S.route3_ch223_own_err
+            .. ") - trying SkillCreator")
+    end
+    -- retry the load here: at spawn time every other autorun script has run,
+    -- so a require that failed during OUR load usually succeeds now
+    if code7:find("^ch223") and not IrisNativeCh223Spawner then
+        iris_try_load_ch223_spawner()
+    end
     if code7:find("^ch223") and IrisNativeCh223Spawner
         and type(IrisNativeCh223Spawner.spawn_enemy) == "function" then
         local nick_name = code7:find("^ch223001_01") and "Redwolf alpha"
@@ -10690,7 +11049,10 @@ local function spawn_griffin()
     end
     if code7:find("^ch223") then
         S.route3_native_ch223_spawn_status =
-            "native ch223 spawn refused: SkillCreator/EnemySpawner unavailable"
+            "ch223 spawn refused | IRIS route: "
+            .. tostring(S.route3_ch223_own_err or "?")
+            .. " | SkillCreator: "
+            .. tostring(IrisNativeCh223SpawnerErr or "no error captured")
         status(S.route3_native_ch223_spawn_status)
         log(S.route3_native_ch223_spawn_status .. " module="
             .. tostring(IrisNativeCh223Spawner) .. " method="
@@ -10702,15 +11064,25 @@ local function spawn_griffin()
     -- not know -- an unknown string used to flow nil into getPfbCtrl and CRASH (the rabbit).
     local code9 = tostring(C.spawn_code or "")
     local band9 = code9:match("ch%d+")
+    -- 08-20: IrisSpawner owns the CharacterID enum now (1458 entries, probed
+    -- in-game). No third-party module needed to validate a code.
+    local ISP = rawget(_G, "IrisSpawner")
     local cid9 = nil
-    pcall(function() cid9 = S.spawner:getCharID(code9) end)
+    if ISP then cid9 = ISP.char_id(code9) end
+    if not cid9 and S.spawner then
+        pcall(function() cid9 = S.spawner:getCharID(code9) end)
+    end
     -- ⛔ a BARE band name (ch299200) RESOLVES in the enum but is NOT a spawnable body -- the
     -- catalog holds the lettered variants (ch299200_A_00 = the rabbit Aurora actually tamed).
     -- The old "shortest name" pick chose the bare band and poisoned the saved code. Rule:
     -- prefer band_A_00; else the shortest REAL variant; never settle for the bare band.
     if band9 and (not cid9 or code9 == band9) then
         pcall(function()
-            local byName9 = S.spawner.enums and S.spawner.enums.charID and S.spawner.enums.charID.byName
+            local byName9 = ISP and ISP.names() or nil
+            if not byName9 and S.spawner then
+                byName9 = S.spawner.enums and S.spawner.enums.charID
+                    and S.spawner.enums.charID.byName
+            end
             if not byName9 then return end
             local pick9 = byName9[band9 .. "_A_00"] and (band9 .. "_A_00") or nil
             if not pick9 then
@@ -10724,7 +11096,10 @@ local function spawn_griffin()
             if pick9 then
                 code9 = pick9
                 C.spawn_code = pick9   -- heal the saved code for next time
-                pcall(function() cid9 = S.spawner:getCharID(code9) end)
+                if ISP then cid9 = ISP.char_id(code9) end
+                if not cid9 and S.spawner then
+                    pcall(function() cid9 = S.spawner:getCharID(code9) end)
+                end
             end
         end)
     end
@@ -10732,7 +11107,35 @@ local function spawn_griffin()
         status("spawn refused: '" .. tostring(C.spawn_code) .. "' is not in the spawner's CharacterID enum (no crash, no spawn)")
         return false
     end
-    local ok8 = pcall(function() S.spawner:requestAddInstances(code9, pos, rot, cfg, 1) end)
+    -- === 08-20: IRIS SPAWNS ITS OWN COMPANIONS =============================
+    -- Griffin, drake and every stable species now go through IrisSpawner's
+    -- catalog route (probed in-game: all 8 IRIS codes resolve, wildlife
+    -- included). EnemySpawner stays as IrisSpawner's own internal fallback,
+    -- so it is no longer a prerequisite for summoning anything.
+    local ok8 = false
+    if ISP then
+        local handle9, err9 = ISP.spawn(code9, pos, rot, {
+            idle = cfg.spawnIdle == true,
+            scale = sc7,
+            label = code9,
+        })
+        if handle9 then
+            S.iris_spawn_handle = handle9
+            S.pending_spawn = true
+            status("spawn requested: " .. tostring(code9)
+                .. " via IrisSpawner (" .. tostring(detail or "safe floor") .. ")")
+            return true
+        end
+        S.iris_spawn_err = tostring(err9 or "?")
+        log("IrisSpawner refused " .. tostring(code9) .. ": "
+            .. S.iris_spawn_err .. " - falling back to EnemySpawner")
+    end
+    if not S.spawner then
+        status("spawn refused: IrisSpawner said '"
+            .. tostring(S.iris_spawn_err or "?") .. "' and no fallback spawner is loaded")
+        return false
+    end
+    ok8 = pcall(function() S.spawner:requestAddInstances(code9, pos, rot, cfg, 1) end)
     if not ok8 then
         -- the CharacterID EXISTS but the ENEMY catalog refuses it (wildlife like the rabbit
         -- lives outside the enemy list): refuse cleanly + dump forensics for the next lever
@@ -10773,6 +11176,11 @@ local function delete_griffin()
     if route3_recover_rider_state then route3_recover_rider_state("delete") end
     set_griffin_puppet(false)
     if S.spawner then pcall(function() S.spawner:deleteAll() end) end
+    pcall(function()
+        local ISP = rawget(_G, "IrisSpawner")
+        if ISP and S.iris_spawn_handle then ISP.destroy(S.iris_spawn_handle) end
+        S.iris_spawn_handle = nil
+    end)
     pcall(function() iris_native_ch223_spawn_destroy("delete") end)
     clear_griffin()
     -- a deliberate delete releases the active companion's soul too
@@ -13827,9 +14235,28 @@ function route3_toggle_flight(reason)
             S.route3_predation_native_until = 0.0
             S.route3_predation_replay_stage = "handed-off"
             if prey then
-                pcall(function() griffin_apply_attack_damage(prey, 99999.0) end)
-                pcall(function() prey:call("EnableRagdoll(System.Boolean)", true) end)
-                pcall(function() prey:call("startRagdoll") end)
+                -- ⛔⛔ r8 THE BLOODLESS-MEAL BUG, FOUND (Aurora: "I think that
+                -- was the goblin dying -- which might be why the blood and
+                -- cries won't work"). SHE WAS RIGHT: this line killed the
+                -- prey at the LANDING HANDOFF, seconds before the meal even
+                -- began, so every chomp beat landed on a corpse -- and a
+                -- corpse neither bleeds nor cries. (r6 removed the kill from
+                -- the eat START; this earlier one was still standing.)
+                -- The wolf's savaging law: hold the prey ALIVE and mindless
+                -- through the meal, kill it at the consume.
+                if C.route3_meal_think_stop_prey == true then
+                    pcall(function() prey:call("set_IsThinkStop", true) end)
+                end
+                pcall(function() stop_navigation(prey, true) end)
+                -- r18: ragdoll only if explicitly asked for. Every body that
+                -- PAINTS is either dead or animated; the one that refuses is
+                -- a LIVING body forced into ragdoll, and the wolf -- whose
+                -- blood works on living prey -- pins its victim instead of
+                -- ragdolling it. The lie-flat pin already lays this one down.
+                if C.route3_meal_ragdoll_prey == true then
+                    pcall(function() prey:call("EnableRagdoll(System.Boolean)", true) end)
+                    pcall(function() prey:call("startRagdoll") end)
+                end
                 S.route3_predation_eat_pending = { prey = prey, t0 = os.clock() }
             end
         end
@@ -17859,10 +18286,17 @@ re.on_application_entry("UpdateBehavior", function()
 
     if S.pending_spawn and not S.world_paused then
         local ch = nil
-        pcall(function()
-            local inst = S.spawner and S.spawner.instances and S.spawner.instances[1]
-            ch = inst and inst.instance and inst.instance:get_Chara()
-        end)
+        -- our own handle first (IrisSpawner fills .chara over a few frames);
+        -- the legacy spawner's instance list is only read if it is still live
+        local h9 = S.iris_spawn_handle
+        if h9 and h9.chara then
+            ch = h9.chara
+        else
+            pcall(function()
+                local inst = S.spawner and S.spawner.instances and S.spawner.instances[1]
+                ch = inst and inst.instance and inst.instance:get_Chara()
+            end)
+        end
         if ch then
             S.pending_spawn = false
             register_griffin(ch)
@@ -17943,6 +18377,7 @@ re.on_application_entry("UpdateBehavior", function()
         end
     end)
     safe_run("griffin_bones_pump", griffin_bones_pump)   -- eat-remains gimmick spawner (inert when idle)
+    safe_run("iris_ch223_spawn_pump", iris_ch223_spawn_pump)   -- our own wolf/puma spawner (inert when idle)
     safe_run("griffin_civilian_hate_shield", griffin_civilian_hate_shield)   -- bystanders never grudge her
     safe_run("adjust_terrain_flight_guard", function()
         -- the skid leaves AdjustTerrain (terrain snap) ON for a grounded end -- the moment she
@@ -18087,6 +18522,20 @@ re.on_application_entry("LateUpdateBehavior", function()
     -- carry displacement/jitter that came from pinning off the griffin ROOT a frame early)
     safe_run("route3_grab_pin_late", route3_grab_pin_late)
     safe_run("griffin_predation_pin_late", griffin_predation_pin_late)
+    -- ⭐ r7 (Aurora: the ground meal "can still be moved by the player"): the
+    -- UpdateBehavior pin was being overwritten by her native grounded
+    -- locomotion later in the frame. Same answer as the seat and the carry
+    -- pin -- write LAST. Whoever moved her, ours is what renders.
+    safe_run("griffin_ground_eat_pin_late", function()
+        local st = S.route3_ground_eat
+        if not (st and st.pin) then return end
+        local ch, go = reacquire_griffin()
+        if not go then return end
+        local pp2 = make_position(st.pin.x, st.pin.y, st.pin.z)
+        local pr2 = st.yaw and make_quat_yaw(st.yaw) or nil
+        set_transform(go, pp2, pr2)
+        if ch then set_character_transform(ch, pp2, pr2) end
+    end)
     if C.drive_in_late_update then safe_run("flight_tick/late", function() flight_tick("LateUpdateBehavior") end) end
     safe_run("route3_air_authority_tick", route3_air_authority_tick)
     -- This MUST be after flight_tick and air authority. The previous order locked the rider
@@ -18603,6 +19052,10 @@ function route3_drake_attack_tick()
     elseif pressed.R2 then
         if airborne then
             S.route3_drake_attack_status = "Fireball Mines unassigned: native cast needs target/cast setup"
+        elseif S.route3_ground_eat or S.route3_ground_eat_ready then
+            -- 08-19: a ready meal owns ground RT (the HUD reads Eat here);
+            -- griffin_ground_eat_tick consumes this same edge
+            S.route3_drake_attack_status = "RT is Eat while a corpse is in reach"
         else
             route3_drake_attack_start(C.route3_drake_ground_r2_node, "Tail Cleave", 4.0)
         end
@@ -27164,11 +27617,22 @@ function griffin_rt_mount_tick()
         or S.airborne == true then
         S.route3_rt_mount_prev = false; return
     end
+    -- ⭐ 08-19 B-MOUNT (Aurora: every mount moves onto the native "B Mount"
+    -- prompt; RT stops being mount). The prompt/press/arbiter machinery is
+    -- IrisHorseRodeo's shared service, reached by rawget(_G) at call time
+    -- (the cross-file law). If the rodeo isn't loaded, RT still works.
+    local mount_pub = rawget(_G, "iris_mount_prompt_publish")
+    local b_down_fn = rawget(_G, "iris_mount_b_down")
+    local native_b = C.route3_mount_button_native_b ~= false
+        and type(mount_pub) == "function" and type(b_down_fn) == "function"
     local down = false
-    pcall(function() down = raw_gamepad_button_down(tostring(C.route3_rt_mount_buttons or "r2")) end)
+    if native_b then
+        pcall(function() down = b_down_fn() == true end)
+    else
+        pcall(function() down = raw_gamepad_button_down(tostring(C.route3_rt_mount_buttons or "r2")) end)
+    end
     local pressed = down and (S.route3_rt_mount_prev ~= true)
     S.route3_rt_mount_prev = down
-    if not pressed then return end
     local _, ggo = reacquire_griffin()
     if not ggo or C.route3_mountable == false then return end
     local pgo = char_go(get_player())
@@ -27176,8 +27640,45 @@ function griffin_rt_mount_tick()
     local gp = transform_pos(ggo)
     if not (pp and gp) then return end
     local dx, dz = (tonumber(pp.x) or 0.0) - (tonumber(gp.x) or 0.0), (tonumber(pp.z) or 0.0) - (tonumber(gp.z) or 0.0)
-    if math.sqrt(dx * dx + dz * dz) > (tonumber(C.route3_rt_mount_range) or 4.5) then return end
+    local mount_d = math.sqrt(dx * dx + dz * dz)
+    if mount_d > (tonumber(C.route3_rt_mount_range) or 4.5) then return end
     local horse_mount = route3_active_horse_mount(ggo)
+    -- OFFER (native-B only): publish "B Mount" while stood facing an
+    -- eligible companion. Eligibility (downed + species) is throttled --
+    -- the press path below re-runs the full authoritative gates anyway.
+    if native_b then
+        if os.clock() - (tonumber(S.route3_mount_offer_at) or 0.0) > 0.35 then
+            S.route3_mount_offer_at = os.clock()
+            local ok = false
+            pcall(function()
+                local daddr = ggo and ggo:get_address()
+                if daddr and type(_G.IrisDownedAddrs) == "table"
+                    and _G.IrisDownedAddrs[daddr] then return end
+                if horse_mount then return end   -- the rodeo owns that offer
+                if C.route3_mount_species_gate ~= true then ok = true; return end
+                local mnm = tostring(go_name(ggo) or "")
+                if mnm:find("ch253", 1, true) or mnm:find("ch257", 1, true) then
+                    ok = true
+                end
+            end)
+            S.route3_mount_offer_ok = ok
+        end
+        if S.route3_mount_offer_ok == true then
+            pcall(function() mount_pub("mount_griffin", ggo, mount_d) end)
+        end
+    end
+    if not pressed then return end
+    if native_b then
+        local may = rawget(_G, "iris_mount_b_may_fire")
+        local ok = true
+        -- horses fire under the rodeo's own offer, so accept any mount_ win
+        pcall(function()
+            if type(may) == "function" then
+                ok = may("mount_griffin", horse_mount ~= nil) == true
+            end
+        end)
+        if not ok then return end
+    end
     -- ⛔⛔ MOUNTABLE SPECIES ONLY (08-08 -- Aurora called this four rounds before I found it:
     -- "unless this is a mount creature, don't mount ... the only creatures that should allow
     -- this are horses, and wolf/cat if they have had the wyrmlife crystal rite").
@@ -28251,6 +28752,12 @@ function griffin_ride_hud_tick()
     if carrying then
         if tostring(C.route3_hud_Y_carrying or "") ~= "" then labels.Y = C.route3_hud_Y_carrying end
         if tostring(C.route3_hud_X_carrying or "") ~= "" then labels.X = C.route3_hud_X_carrying end
+    end
+    -- ⭐ 08-19 MEAL: with a fresh corpse in reach (and nothing living near),
+    -- ground RT reads Eat; while she feeds it reads Eating.
+    if not airborne then
+        if S.route3_ground_eat then labels.R2 = "Eating"
+        elseif S.route3_ground_eat_ready then labels.R2 = "Eat" end
     end
     S.route3_ride_hud_set = (airborne and "flight" or "ground")
         .. (charge_ready and "+charge" or "") .. (carrying and "+carrying" or "")
@@ -38437,6 +38944,13 @@ function griffin_predation_carry_eat_tick()
                         end
                     end)
                     S.base_owner = nil
+                    -- r6 (Aurora: "reacts in pain with blood gushing like the
+                    -- wolf maul"): the r4 kill-at-start is GONE -- the prey
+                    -- is held ALIVE through the meal (the wolf's savaging
+                    -- law: dead bodies neither bleed nor react, and live
+                    -- ones don't dissolve). Chomp beats below deal the real
+                    -- damage; the kill belongs to the consume.
+                    pcall(function() prey:call("EnableRagdoll(System.Boolean)", true) end)
                     S.route3_predation_eat = { prey = prey, t0 = os.clock(), phase = "start",
                         locked_yaw = lyaw, big = _big, diag = {}, from_air = true }
                     status(tostring(C.route3_griffin_name or "Griffin") .. " pins its catch to feed")
@@ -38487,10 +39001,13 @@ function griffin_predation_carry_eat_tick()
                 c253r:call("set_PredationTarget(via.GameObject)", nil)   -- else she auto-faces/circles the prey after
             end
         end)
-        -- kill + ragdoll the prey so it flops flat for the meal (ported from route3_grab_eat)
-        pcall(function() griffin_apply_attack_damage(prey, 99999.0) end)
-        pcall(function() prey:call("EnableRagdoll(System.Boolean)", true) end)
-        pcall(function() prey:call("startRagdoll") end)
+        -- r6: no kill here -- the prey stays ALIVE for the chomp beats (blood
+        -- + pain); the kill belongs to the consume. r18: and no ragdoll on a
+        -- living body either (see the handoff note) unless asked for.
+        if C.route3_meal_ragdoll_prey == true then
+            pcall(function() prey:call("EnableRagdoll(System.Boolean)", true) end)
+            pcall(function() prey:call("startRagdoll") end)
+        end
         -- LIVE eat state -> the block below (set_griffin_puppet think-alive + ground pin + clip chain)
         -- becomes the driver. It was ORPHANED since v8 (trigger set S.route3_grab). Fable xhigh caught it.
         S.route3_predation_eat = { prey = prey, t0 = now, phase = "start", locked_yaw = lyaw, big = _big, diag = {} }
@@ -38505,23 +39022,57 @@ function griffin_predation_carry_eat_tick()
     if not (prey and cgo and go) then
         griffin_predation_restore_meal_collision(eat)
         S.route3_predation_eat = nil
+        griffin_meal_camera_release()
         pcall(function() set_griffin_puppet(false) end)
+        -- 08-19 r4: the GAME dissolves a killed goblin's body on its own
+        -- schedule -- a despawn mid-meal used to end here with NO bones
+        -- ("corpse disappeared but no bones"). If she genuinely fed for a
+        -- few seconds, the meal still counts: heal + bones at the last
+        -- position the corpse was seen.
+        local age = os.clock() - (tonumber(eat.t0) or os.clock())
+        local lastp = eat.last_meal_pos
+        if age >= 3.0 and lastp then
+            griffin_meal_heal()
+            if C.route3_eat_leave_bones ~= false then
+                pcall(function() griffin_bones_spawn_queue(
+                    tonumber(lastp.x) or 0.0, tonumber(lastp.y) or 0.0,
+                    tonumber(lastp.z) or 0.0, tonumber(lastp.yaw) or 0.0) end)
+            end
+            S.route3_post_landing_recover_at = os.clock()
+            pcall(function() route3_flap_after_action() end)
+            S.route3_predation_status = "meal finished (the body dissolved early - bones left)"
+            pcall(function() log.info(
+                "[GriffinRideProbe (IRIS)] prey dissolved mid-feed -> consumed at last position (bones queued)") end)
+        else
+            S.route3_predation_status = "meal lost: prey despawned mid-feed"
+            pcall(function() log.info(
+                "[GriffinRideProbe (IRIS)] meal lost: prey despawned mid-feed (no bones)") end)
+        end
         return
     end
     local now = os.clock()
     S.base_owner = { name = "eat", until_clock = now + 1.0 }   -- hold the layer against the ride painters
     S.audition_until_clock = now + 0.3
+    -- 08-19: the wolf's side-on camera treatment, per frame while she feeds
+    pcall(function() griffin_meal_camera_tick(cgo) end)
+    -- remember where the meal lies -- the despawn fallback consumes here
+    pcall(function()
+        local lp0 = transform_pos(cgo)
+        if lp0 then eat.last_meal_pos = { x = lp0.x, y = lp0.y, z = lp0.z,
+            yaw = tonumber(eat.locked_yaw) or 0.0 } end
+    end)
+    -- ⭐ 08-19 SET-LENGTH MEAL (Aurora: "make the griffin eat a set length,
+    -- ~15 seconds, then use the _end animation"). The old movement-cancel
+    -- fired BEFORE the devour block ever could, so every meal she ended by
+    -- moving left the corpse whole -- no bones, ever. Movement no longer
+    -- ends the meal (the pin owns her position anyway); TAKEOFF is the one
+    -- escape hatch, and it abandons without consuming.
     local eat_abort = S.airborne == true
-    if not eat_abort and (now - (tonumber(eat.t0) or now)) > 0.75 then
-        local amx, amz = 0.0, 0.0
-        pcall(function() amx, amz = read_axis() end)
-        if (math.abs(tonumber(amx) or 0.0) > 0.3) or (math.abs(tonumber(amz) or 0.0) > 0.3) then eat_abort = true end
-        -- the stick is only one way to move; walking away counts whatever moved you
-        if not eat_abort and griffin_predation_eat_player_moved(eat, C.route3_predation_eat_move_dist) then
-            eat_abort = true
-        end
-    end
     if eat_abort then
+        griffin_meal_camera_release()
+        -- r6: the abandoned prey gets its mind back (it is still alive)
+        pcall(function() prey:call("set_IsThinkStop", false) end)
+        pcall(function() stop_navigation(prey, false) end)
         -- ABORT (takeoff or movement, any phase): end the meal instantly, hand everything back
         griffin_predation_restore_meal_collision(eat)
         S.route3_predation_eat = nil
@@ -38658,6 +39209,13 @@ function griffin_predation_carry_eat_tick()
                 erot = make_quat_yaw(yaw + (tonumber(C.route3_predation_eat_big_yaw_deg) or 90.0) * math.pi / 180.0)
             elseif eat.big == true and C.route3_predation_eat_big_align == true then
                 erot = make_quat_yaw(yaw + math.pi)
+            elseif eat.big ~= true and C.route3_predation_eat_lie ~= false then
+                -- ⭐ r6 (Aurora: "have him lying down"): a root-pinned body
+                -- STANDS between her talons (the eat-nearest comment's
+                -- exact trap) -- pin a yaw+pitch rotation and it lies flat.
+                -- Pivot is at the feet, so the body lies away from the pin.
+                erot = griffin_make_quat_yaw_pitch(yaw + math.pi,
+                    math.rad(tonumber(C.route3_predation_eat_lie_pitch_deg) or 90.0))
             elseif eat.big ~= true and C.route3_predation_eat_meal_rotate == true then
                 -- ⭐ small-meal ROTATE (2026-08-08, Aurora: "might need a rotate option too"):
                 -- forces the corpse's lie-angle relative to HER heading (180 = facing her,
@@ -38665,6 +39223,18 @@ function griffin_predation_carry_eat_tick()
                 erot = make_quat_yaw(yaw + (tonumber(C.route3_predation_eat_meal_yaw_deg) or 180.0) * math.pi / 180.0)
             end
             local collision_hits = griffin_predation_disable_meal_collision(prey, cgo, eat.big == true, eat)
+            -- r13 head-aligned; r15 measured ONCE (see the grab path note --
+            -- per-frame remeasurement chases its own tail)
+            if C.route3_meal_align_by_head ~= false then
+                if eat.head_off == nil then
+                    eat.head_off = griffin_meal_head_offset(cgo) or false
+                end
+                local hoff = eat.head_off
+                if hoff then
+                    epos = make_position(ex + hoff.x,
+                        tonumber(epos.y) or ey, ez + hoff.z)
+                end
+            end
             pcall(function() set_transform(cgo, epos, erot) end)
             pcall(function() set_character_transform(prey, epos, erot) end)
             eat.prey_position_status = anchor
@@ -38675,10 +39245,91 @@ function griffin_predation_carry_eat_tick()
                     dist, side, yraise, tostring(eat.big == true), collision_hits)
         end
     end
+    -- r6: the prey is ALIVE now -- hold its mind still (position is pinned
+    -- below; think-stop keeps its AI from fighting the meal)
+    -- r21: except in the short wake window around a chomp -- a stopped body
+    -- never dispatches the blood effect.
+    -- ⭐ r23: waking the body one frame before the paint was not enough (dmg
+    -- 488, 18 fields restored, awake -- and still refused). The bodies that
+    -- PAINT were never think-stopped AT ALL, so stop doing it: the transform
+    -- pin and disabled collision already hold the prey still, which is why
+    -- the wolf's pinned prey does not thrash either. Opt back in with
+    -- route3_meal_think_stop_prey if it starts struggling.
+    if C.route3_meal_think_stop_prey == true
+        and now >= (tonumber(eat.think_wake_until) or 0.0) then
+        pcall(function() prey:call("set_IsThinkStop", true) end)
+    end
+    -- ⭐ r6 CHOMP BEATS (Aurora: "reacts in pain with blood gushing like the
+    -- wolf maul"): every beat fires a REAL pipeline damage transaction =
+    -- native blood + hit FX, HP-floored at 1 so the kill stays with the
+    -- consume. The wolf's paint-anchor flag (the rodeo's converter hook)
+    -- aims the spray at the victim's live head.
+    if eat.phase == "loop" and griffin_meal_beat_due(eat, now) then
+        -- ⛔ r7 WHY r6's CHOMPS WERE BLOODLESS: griffin_apply_attack_damage's
+        -- two native routes (damage_via_pipeline / _via_update) are BOTH
+        -- latched OFF behind IRIS_UNSAFE_DAMAGE_PACKET, retired 08-14 after
+        -- access violations from fabricated packets -- so every "hit" she
+        -- lands is a silent raw setHp with no blood and no reaction. Blood
+        -- needs the WOLF's primitive: replay an engine-RESOLVED packet into
+        -- the victim's own EPV unit (IrisHorseRodeo's shared blood service,
+        -- reached by rawget the cross-file way).
+        pcall(function()
+            local hc = get_component(cgo, "app.HitController")
+            local hp = hc and tonumber(hc:call("get_Hp")) or nil
+            if hc and hp and hp > 2.0 then
+                local bite = math.min(
+                    math.max(10.0, tonumber(C.route3_predation_eat_chomp_dmg) or 90.0),
+                    hp - 1.0)
+                pcall(function()
+                    hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+                        hp - bite, true, 0)
+                end)
+            end
+            S.route3_meal_path = "predation"
+                    -- ⭐⭐ r21 THE THINK-STOP. Every body that PAINTS is one we left
+            -- thinking (the TEST corpse, the ground-meal corpse); the only
+            -- refusal is the carry prey, which I think-stopped in r8 to keep
+            -- it from struggling. A stopped character does not run its own
+            -- update, so the EPV effect the callback requests is never
+            -- dispatched -- "converter NEVER RAN" all along. Alive/dead and
+            -- packet strength were confounds. Wake it around the beat (it is
+            -- transform-pinned, so it cannot go anywhere) and let the tick
+            -- re-stop it after.
+            pcall(function()
+                if valid_meal_body(cgo) then
+                    griffin_meal_wake_body(cgo, true)
+                    eat.think_wake_until = now
+                        + math.max(0.1, tonumber(C.route3_meal_think_wake_s) or 0.4)
+                end
+            end)
+    -- r11: the wolf paints IMMEDIATELY after its HP bite with
+            -- nothing in between -- match that order exactly before blaming
+            -- anything more exotic.
+            griffin_meal_blood_burst(cgo, go)
+            pcall(function()
+                local cry = rawget(_G, "IrisPlayHurtCry")
+                if type(cry) == "function" then
+                    local cok, cwhy = cry(cgo)
+                    S.route3_meal_cry = tostring(cwhy or (cok and "cried" or "?"))
+                end
+            end)
+            -- the prey must survive to the end of the meal: floor at 1 HP
+            if hc then
+                pcall(function()
+                    local nhp = tonumber(hc:call("get_Hp")) or 0.0
+                    if nhp < 1.0 then
+                        hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+                            1.0, true, 0)
+                    end
+                end)
+            end
+        end)
+    end
     -- CLIP CHAIN: claws-on START -> after start_secs -> eat LOOP. Played plainly (force) once per
     -- phase like the eat-nearest command -- the clip is left to run/loop on its own.
     local bank = math.floor(tonumber(C.route3_grab_clip_bank) or 20)
     local want = (eat.phase == "start") and math.floor(tonumber(C.route3_predation_eat_start_clip) or 5300)
+        or (eat.phase == "end") and math.floor(tonumber(C.route3_eat_end_clip) or 5320)
         or math.floor(tonumber(C.route3_grab_eat_clip) or 5310)
     pcall(function()
         local playing = tonumber(route3_flap_layer_clip())
@@ -38747,21 +39398,81 @@ function griffin_predation_carry_eat_tick()
             pcall(function() play_griffin_motion(math.floor(tonumber(C.route3_grab_eat_clip) or 5310), bank, true, "eat") end)
         end
     end
-    -- END on movement (Aurora: "played continuously until you moved") or a safety timeout
+    -- ⭐ 08-19 SET-LENGTH ENDING (Aurora): total_secs of feed -> the authored
+    -- get_eat END clip (5320) -> consume. Deterministic: bones/heal cannot
+    -- be skipped by player movement any more.
+    local total = math.max(6.0,
+        tonumber(C.route3_predation_eat_total_secs) or 15.0)
     local ended = false
-    if eat.phase == "loop" and (now - (tonumber(eat.loop_at) or now)) > 0.5 then
-        local mx, mz = 0.0, 0.0
-        pcall(function() mx, mz = read_axis() end)
-        if (math.abs(tonumber(mx) or 0.0) > 0.3) or (math.abs(tonumber(mz) or 0.0) > 0.3) then ended = true end
-        if not ended and griffin_predation_eat_player_moved(eat, C.route3_predation_eat_move_dist) then
+    if eat.phase ~= "end" and (now - (tonumber(eat.t0) or now)) >= total then
+        eat.phase = "end"; eat.end_at = now
+        pcall(function() play_griffin_motion(
+            math.floor(tonumber(C.route3_eat_end_clip) or 5320), bank, true, "eat") end)
+    elseif eat.phase == "end" then
+        local efr, eendf = -1, -1
+        pcall(function()
+            local m = ch:call("get_Motion")
+            local l = m and m:call("getLayer", 0)
+            if l then
+                efr = tonumber(l:call("get_Frame")) or -1
+                eendf = tonumber(l:call("get_EndFrame")) or -1
+            end
+        end)
+        if (eendf > 1 and efr >= 0 and efr >= eendf - 4)
+            or (now - (tonumber(eat.end_at) or now)) > 3.0 then
             ended = true
         end
     end
     if (now - (tonumber(eat.t0) or now)) > (tonumber(C.route3_predation_eat_max_secs) or 60.0) then ended = true end
     if ended then
-        pcall(function() griffin_apply_attack_damage(prey, 99999.0) end)   -- devoured
+        -- wolf law: un-think-stop BEFORE the kill or the die loop never runs
+        pcall(function() prey:call("set_IsThinkStop", false) end)
+        -- ⛔ r22 DOUBLE XP (Aurora: "2x the xp gain, 1 at the beginning, 1 at
+        -- the end"): the chomp's blood-kill and this consume kill were both
+        -- paying out. Only finish a body that is still breathing.
+        local still_alive = true
+        pcall(function()
+            local hc9 = get_component(cgo, "app.HitController")
+            local hp9 = hc9 and tonumber(hc9:call("get_Hp")) or nil
+            if hp9 and hp9 <= 0.0 then still_alive = false end
+            if still_alive and prey:call("get_IsDead") == true then
+                still_alive = false
+            end
+        end)
+        if still_alive then
+            pcall(function() griffin_apply_attack_damage(prey, 99999.0) end)   -- devoured
+        end
         griffin_predation_restore_meal_collision(eat)
+        -- ⭐ 08-19 CONSUME (was missing here entirely -- this end path had no
+        -- bones/vanish, which is why her carry meals left the corpse whole):
+        -- heal 5%, bones where it lay, warp the body away (never destroy),
+        -- remember it as eaten, hand the camera back.
+        griffin_meal_heal()
+        griffin_meal_camera_release()
+        pcall(function()
+            local mp0 = cgo and transform_pos(cgo)
+            if mp0 then
+                if C.route3_eat_leave_bones ~= false then
+                    local byaw = tonumber(eat.locked_yaw)
+                        or yaw_from_transform(go) or 0.0
+                    pcall(function() griffin_bones_spawn_queue(
+                        tonumber(mp0.x) or 0.0, tonumber(mp0.y) or 0.0,
+                        tonumber(mp0.z) or 0.0, byaw,
+                        cgo, eat.big == true and 2.2 or 1.4) end)
+                end
+                local away = make_position((tonumber(mp0.x) or 0.0) + 400.0,
+                    (tonumber(mp0.y) or 0.0) - 120.0,
+                    (tonumber(mp0.z) or 0.0) + 400.0)
+                pcall(function() cgo:call("get_Transform")
+                    :call("set_UniversalPosition", away) end)
+                pcall(function() prey:call("set_UniversalPosition", away) end)
+            end
+            S.route3_eaten = S.route3_eaten or {}
+            if cgo then S.route3_eaten[cgo:get_address()] = true end
+        end)
         S.route3_predation_eat = nil
+        S.route3_ground_eat_cool_until = os.clock()
+            + math.max(0.0, tonumber(C.route3_ground_eat_cooldown) or 12.0)
         S.base_owner = nil
         S.audition_until_clock = 0.0
         pcall(function() set_griffin_puppet(false) end)   -- hand her back to normal flight/control
@@ -38789,7 +39500,29 @@ end
 -- corpse vanishes. One pile fits every species; nobody autopsies the femurs. Minimal port
 -- of IrisFurnish's PROVEN gimmick-spawn state machine (prefab -> ready ->
 -- requestCreateInstance -> poll). ⛔ UNIVERSAL coords (the gimmick-spawn law).
-function griffin_bones_spawn_queue(ux, uy, uz, yaw)
+function griffin_bones_spawn_queue(ux, uy, uz, yaw, corpse_go, body_h)
+    -- ⭐ 08-19 r5 THE BONES BUG: this pump's prefab path was
+    -- "AppSystem/gimmick/prefab/gm51_581.pfb" -- wrong case AND missing the
+    -- Sign/ folder (the wolf's proven path is
+    -- "AppSystem/Gimmick/Prefab/Sign/gm51_581.pfb"). The prefab never
+    -- became Ready, and the wait-stage timeout dropped the job with NO
+    -- receipt: bones that silently never appeared, since birth. Delegate
+    -- to the wolf's FIELD-PROVEN remains spawner (species-aware, scaled,
+    -- self-expiring); this pump survives only as the fallback, path fixed.
+    do
+        local spawn = rawget(_G, "iris_wyrm_remains_spawn")
+        if type(spawn) == "function" then
+            local ok = pcall(spawn, { x = ux, y = uy, z = uz },
+                tonumber(body_h) or 1.4, corpse_go)
+            if ok then
+                S.route3_bones_status = "bones -> rodeo spawner"
+                pcall(function() log.info(string.format(
+                    "[GriffinRideProbe (IRIS)] bones -> rodeo spawner at %.1f %.1f %.1f",
+                    ux, uy, uz)) end)
+                return true
+            end
+        end
+    end
     local gid
     pcall(function()
         local fld = sdk.find_type_definition("app.GimmickID"):get_field("Gm51_581")
@@ -38798,6 +39531,8 @@ function griffin_bones_spawn_queue(ux, uy, uz, yaw)
     if not gid then S.route3_bones_status = "no GimmickID for gm51_581"; return false end
     S.route3_bones_jobs = S.route3_bones_jobs or {}
     table.insert(S.route3_bones_jobs, { gid = gid, x = ux, y = uy, z = uz, yaw = yaw or 0.0, stage = "prefab", f = 0 })
+    pcall(function() log.info(string.format(
+        "[GriffinRideProbe (IRIS)] bones queued at %.1f %.1f %.1f", ux, uy, uz)) end)
     return true
 end
 
@@ -38810,7 +39545,8 @@ function griffin_bones_pump()
         if q.stage == "prefab" then
             local ok = pcall(function()
                 local prefab = sdk.create_instance("via.Prefab"):add_ref()
-                prefab:set_Path("AppSystem/gimmick/prefab/gm51_581.pfb")
+                -- r5: corrected to the wolf's proven path (case + Sign/)
+                prefab:set_Path("AppSystem/Gimmick/Prefab/Sign/gm51_581.pfb")
                 pcall(function() prefab:set_Standby(true) end)
                 local ctrl = sdk.create_instance("app.PrefabController"):add_ref()
                 ctrl._Item = prefab
@@ -38844,6 +39580,12 @@ function griffin_bones_pump()
             q.f = q.f + 1
             local ready = false
             pcall(function() ready = q.prefab:get_Ready() == true end)
+            if q.f > 880 and not ready then
+                -- r5: this silent drop was where every bone died -- say so
+                S.route3_bones_status = "bones prefab never became ready"
+                pcall(function() log.info(
+                    "[GriffinRideProbe (IRIS)] bones prefab never became ready (path?)") end)
+            end
             if ready then
                 S.route3_bones_seq = (tonumber(S.route3_bones_seq) or 0) + 1
                 local okr = pcall(function()
@@ -38860,9 +39602,13 @@ function griffin_bones_pump()
             if not bgo then pcall(function() bgo = q.inst["<Instance>k__BackingField"] end) end
             if bgo then
                 S.route3_bones_status = "bones left at the kill"
+                pcall(function() log.info(
+                    "[GriffinRideProbe (IRIS)] bones left at the kill") end)
                 drop = true
             elseif q.f > 900 then
                 S.route3_bones_status = "bones spawn timed out"
+                pcall(function() log.info(
+                    "[GriffinRideProbe (IRIS)] bones spawn TIMED OUT") end)
                 drop = true
             end
         else
@@ -39167,6 +39913,24 @@ function route3_grab_tick(ch, go, now)
             end
             if pdeg ~= 0.0 then erot = griffin_make_quat_yaw_pitch(body_yaw, pdeg * math.pi / 180.0) end
             griffin_predation_disable_meal_collision(carried, cgo, big, st)
+            -- r13: shift so the body's HEAD lands on the anchor, not its root
+            -- ⛔ r15 MEASURE ONCE. Recomputing this every frame was a feedback
+            -- loop: the correction MOVES the body, which moves the head joint
+            -- it was measured from, which changes the correction -- the camera
+            -- (anchored on the meal) swung left and right forever. The
+            -- root->head delta is a property of the BODY, so read it once per
+            -- meal and keep it.
+            if C.route3_meal_align_by_head ~= false then
+                if st.head_off == nil then
+                    st.head_off = griffin_meal_head_offset(cgo) or false
+                end
+                local hoff = st.head_off
+                if hoff then
+                    epos = make_position(ex + hoff.x,
+                        tonumber(epos.y) or ey, ez + hoff.z)
+                    st.prey_head_joint = hoff.joint
+                end
+            end
             pcall(function() set_transform(cgo, epos, erot) end)
             pcall(function() set_character_transform(carried, epos, erot) end)
             st.prey_position_status = anchor
@@ -39206,6 +39970,32 @@ function route3_grab_tick(ch, go, now)
                     axis = string.format("%.2f,%.2f", tonumber(amx) or 0.0, tonumber(amz) or 0.0) })
             end)
         end
+        -- ⭐ 08-19 (Aurora): the meal gets the wolf's camera treatment --
+        -- side-on through the rodeo's guest channel, released on every exit
+        pcall(function()
+            griffin_meal_camera_tick(st.carried and char_go(st.carried) or nil)
+        end)
+        -- ⛔ r13 THE MEAL THAT NEVER BLED: the chomps went into the PREDATION
+        -- eat, but the homebrew grab has its own eat phase -- this one -- and
+        -- Aurora's grab>land>eat runs HERE (receipt "meal blood: -" = the
+        -- chomp code never executed). Same beats, same shared services.
+        S.route3_meal_path = "grab"
+        do
+            local mnow = os.clock()
+            local mcgo = st.carried and char_go(st.carried) or nil
+            -- r14: fires ON the authored stab frame once the peck frames are
+            -- configured; wall-clock interval until then
+            if mcgo and griffin_meal_beat_due(st, mnow) then
+                griffin_meal_blood_burst(mcgo, go)
+                pcall(function()
+                    local cry = rawget(_G, "IrisPlayHurtCry")
+                    if type(cry) == "function" then
+                        local _, cwhy = cry(mcgo)
+                        S.route3_meal_cry = tostring(cwhy or "?")
+                    end
+                end)
+            end
+        end
         local eat_done = false
         if st.carry_from_native == true then
             if S.airborne == true then eat_done = true end
@@ -39220,6 +40010,10 @@ function route3_grab_tick(ch, go, now)
                 and now - (tonumber(st.eat_loop_at) or now) > math.max(0.5, tonumber(C.route3_grab_eat_duration) or 3.0)
         end
         if eat_done then
+            -- ⭐ 08-19 (Aurora): a finished meal restores 5% max HP; the
+            -- guest camera hands the view back to the native controller
+            griffin_meal_heal()
+            griffin_meal_camera_release()
             pcall(function() griffin_apply_attack_damage(carried, 99999.0) end)   -- devoured
             griffin_predation_restore_meal_collision(st)
             route3_grab_restore_ground_components()   -- undo the carry's component disables before it's gone
@@ -39239,7 +40033,8 @@ function route3_grab_tick(ch, go, now)
                         if C.route3_eat_leave_bones ~= false then
                             local byaw = yaw_from_transform(go) or S.heading_yaw or 0.0
                             pcall(function() griffin_bones_spawn_queue(
-                                tonumber(mp0.x) or 0.0, tonumber(mp0.y) or 0.0, tonumber(mp0.z) or 0.0, byaw) end)
+                                tonumber(mp0.x) or 0.0, tonumber(mp0.y) or 0.0, tonumber(mp0.z) or 0.0, byaw,
+                                mgo, 1.4) end)
                         end
                         local away = make_position((tonumber(mp0.x) or 0.0) + 400.0,
                             (tonumber(mp0.y) or 0.0) - 120.0, (tonumber(mp0.z) or 0.0) + 400.0)
@@ -39538,6 +40333,928 @@ end
 --
 -- griffin_eat_start clears companion_order, so any order sitting here was issued DURING the meal
 -- and is the player explicitly asking for her back. That outranks lunch.
+-- ═══ MEAL SUITE (Aurora 08-19): every griffin/drake meal now ends the
+-- wolf's way -- side-on camera while she feeds, 5% of max HP restored,
+-- bones where the corpse lay. The camera borrows IrisHorseRodeo's proven
+-- lateUpdate writer through the _G.IrisGuestCam channel (rawget law).
+function griffin_meal_heal()
+    pcall(function()
+        local _, go = reacquire_griffin()
+        local hc = go and get_component(go, "app.HitController")
+        if not hc then S.route3_meal_heal = "no HitController"; return end
+        -- ⛔ get_OriginalMaxHp is the canonical max; get_MaxHp is a phantom
+        -- (the wolf's silent-pcall lesson, twice)
+        local hp = tonumber(hc:call("get_Hp"))
+        local mx, mxg = nil, "?"
+        for _, m in ipairs({ "get_OriginalMaxHp", "get_MaxHitPoint",
+            "get_MaxHp", "get_HpMax" }) do
+            pcall(function() mx = tonumber(hc:call(m)) end)
+            if mx then mxg = m break end
+        end
+        if not (hp and mx and mx > 0 and hp > 0) then
+            S.route3_meal_heal = string.format("hp=%s max=%s",
+                tostring(hp), tostring(mx))
+            return
+        end
+        local new = math.min(mx, hp + mx * (math.max(0.0,
+            tonumber(C.route3_eat_heal_pct) or 5.0) / 100.0))
+        if new > hp + 0.5 then
+            pcall(function()
+                hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+                    new, true, 0)
+            end)
+            local rb = tonumber(hc:call("get_Hp")) or hp
+            if rb < new - 0.5 then
+                pcall(function() hc:call("setHp(System.Single)", new) end)
+            end
+            S.route3_meal_heal = string.format("healed %.0f -> %.0f (%s)",
+                hp, tonumber(hc:call("get_Hp")) or new, mxg)
+            pcall(function() log.info("[GriffinRideProbe (IRIS)] meal heal: "
+                .. tostring(S.route3_meal_heal)) end)
+        else
+            S.route3_meal_heal = string.format("already full (%.0f/%.0f)", hp, mx)
+        end
+    end)
+end
+
+function griffin_meal_camera_tick(look_go)
+    if C.route3_eat_camera == false then return end
+    if rawget(_G, "__iris_rodeo_mountcam_hooked") ~= true then return end
+    pcall(function()
+        local _, go = reacquire_griffin()
+        -- ⛔ 08-19 field fix (Aurora's abyss/upside-down meal camera): the
+        -- guest camera writer sets the primary camera's RENDER position --
+        -- transform_pos here is UNIVERSAL (offset by the streaming rebase),
+        -- which parked the camera under the world. Render reads only.
+        local gp = go and transform_render_pos(go)
+        if not gp then return end
+        local lp = gp
+        pcall(function()
+            local p2 = look_go and transform_render_pos(look_go)
+            if p2 then lp = p2 end
+        end)
+        -- side-on (the wolf's field lesson: a boom behind the beast shows
+        -- nothing but beast) -- swing the boom off her heading, aim at the
+        -- meal. Render space, same as the guest writer.
+        local yaw = yaw_from_transform(go) or S.heading_yaw or 0.0
+        -- r7 (Aurora: "allow horizontal camera movement during that scene"):
+        -- the RIGHT STICK orbits the meal camera live, on top of the framing
+        -- default. Accumulated in S so it survives per-frame recompute, and
+        -- cleared by griffin_meal_camera_release so the next meal starts
+        -- from the authored angle.
+        pcall(function()
+            local rx = nil
+            if type(scout_read_axis_R) == "function" then
+                rx = select(1, scout_read_axis_R())
+            end
+            rx = tonumber(rx) or 0.0
+            -- r15: a wider deadzone -- stick drift was accumulating into a
+            -- slow permanent orbit
+            if math.abs(rx) > 0.35 then
+                S.route3_meal_cam_orbit = (tonumber(S.route3_meal_cam_orbit) or 0.0)
+                    + rx * math.rad(tonumber(C.route3_eat_cam_orbit_speed) or 110.0)
+                        * (1.0 / 60.0)
+            end
+        end)
+        -- r6 (Aurora: +120 swung toward the wing/tail -- the sign was
+        -- mirrored): NEGATIVE swings toward the head end. Live slider.
+        local a = yaw + math.rad(tonumber(C.route3_eat_cam_side_deg) or -150.0)
+            + (tonumber(S.route3_meal_cam_orbit) or 0.0)
+        local d = tonumber(C.route3_eat_cam_dist) or 6.5
+        local bias = math.max(0.0, math.min(1.0,
+            tonumber(C.route3_eat_cam_meal_bias) or 0.92))
+        local mx = ((tonumber(gp.x) or 0.0) * (1.0 - bias)
+            + (tonumber(lp.x) or 0.0) * bias)
+        local mz = ((tonumber(gp.z) or 0.0) * (1.0 - bias)
+            + (tonumber(lp.z) or 0.0) * bias)
+        local my = math.min(tonumber(gp.y) or 0.0, tonumber(lp.y) or 0.0)
+        -- ⭐ r15 SETTLED AIM: her head bobs through the eat clip and the meal
+        -- is pinned to her jaw, so an aim point that tracks it 1:1 makes the
+        -- whole frame sway. Smooth the anchor (heavy lag) so the shot holds
+        -- still while the animation moves inside it.
+        local prev = S.route3_meal_cam_pt
+        local k = math.max(0.0, math.min(1.0,
+            tonumber(C.route3_eat_cam_smooth) or 0.12))
+        if type(prev) == "table" then
+            mx = prev.x + (mx - prev.x) * k
+            my = prev.y + (my - prev.y) * k
+            mz = prev.z + (mz - prev.z) * k
+        end
+        S.route3_meal_cam_pt = { x = mx, y = my, z = mz }
+        rawset(_G, "IrisGuestCam", {
+            cam = { x = mx + math.sin(a) * d,
+                    y = my + (tonumber(C.route3_eat_cam_height) or 3.0),
+                    z = mz + math.cos(a) * d },
+            look = { x = mx, y = my + 0.7, z = mz },
+            until_t = os.clock() + 0.35,
+        })
+    end)
+end
+
+-- ⭐ r10 THE BLOOD, FINALLY. Receipt from the field: "converter NEVER RAN" --
+-- the replayed RESOLVED packet was being rejected by the EPV dispatcher
+-- before it did any work (its attack-side references are stale by the time
+-- we replay: the sword that made it is long gone). DismemberLab already
+-- solved this problem from the other end: `_G.IrisNativeBloodPulse` fires a
+-- FULLY-FORMED synthetic packet copied field-for-field from a captured real
+-- sword hit -- master Flag bitfield 8195, MainSurfaceMaterial 1 (flesh, so
+-- blood not sparks), HitEffType 13 (BiteMiddle -- the predator-maul family),
+-- HitEffectFlag 3, non-zero Damage -- straight into the victim's own
+-- callbackHit, visual only (it never touches damageProc, so it cannot alter
+-- HP or storm the receiver). That is the wolf maul's own fallback route.
+-- Try the resolved replay first (it is the better-looking one when it takes),
+-- and fall back the moment the converter refuses it.
+-- ⭐ r13 (Aurora: "is there a better way of getting the carried creature into
+-- the perfect position? this manual position stuff is unreliable and varies
+-- by creature"). She is right -- every offset so far has been tuned against
+-- the body's ROOT, which sits in a different place on every rig (a goblin's
+-- root is between its feet, an ox's is under its belly), so one number can
+-- never suit two species. Align by JOINT instead: work out where that body's
+-- HEAD sits relative to its root, and shift the root so the HEAD lands on the
+-- beak target. Self-tuning for any creature, no per-species numbers.
+-- ⚠ X/Z only. Y stays with the existing ground cast -- a head-derived Y would
+-- bury a standing body under the terrain.
+function valid_meal_body(go)
+    return go ~= nil and transform_pos(go) ~= nil
+end
+
+-- ⚠ named for what it DOES, not for a flag to invert: wake(true) lets the
+-- body think again. The first draft took a `thinking` argument and I called
+-- it with false meaning "wake", which set think-stop ON -- the exact silent
+-- inversion this session keeps paying for.
+function griffin_meal_wake_body(go, wake)
+    pcall(function()
+        local ch = get_component(go, "app.Character")
+        if ch then ch:call("set_IsThinkStop", wake ~= true) end
+    end)
+end
+
+function griffin_meal_head_offset(cgo)
+    if not cgo then return nil end
+    local rp = transform_render_pos(cgo)
+    if not rp then return nil end
+    local tf = nil
+    pcall(function() tf = cgo:call("get_Transform") end)
+    if not tf then return nil end
+    for _, jn in ipairs({ "Head_0", "Head", "Neck_1", "Neck_0", "Spine_2" }) do
+        local j, jp = nil, nil
+        pcall(function() j = tf:call("getJointByName", jn) end)
+        if j then pcall(function() jp = j:call("get_Position") end) end
+        if jp and tonumber(jp.x) then
+            return {
+                x = (tonumber(rp.x) or 0.0) - (tonumber(jp.x) or 0.0),
+                z = (tonumber(rp.z) or 0.0) - (tonumber(jp.z) or 0.0),
+                joint = jn,
+            }
+        end
+    end
+    return nil
+end
+
+-- ═══ r14 MEAL BEAT ENGINE (Aurora: "the blood needs to be timed for each
+-- beak stab -- add a frame counter so I can give you the frame numbers").
+-- Two halves:
+--   1. A live readout + a STAMP key. Watch the meal, tap the key on every
+--      peck; each tap records the clip and frame it landed on, prints them
+--      to the log and holds them on screen. No squinting at a moving number.
+--   2. A frame-driven beat gate. Once the frames are known they go in the
+--      config and the blood/cry fire ON the authored stab instead of on a
+--      wall-clock interval. Empty config = the old interval, so nothing
+--      breaks before the numbers exist.
+function griffin_meal_layer_frame()
+    local ch = reacquire_griffin()
+    local bank, clip, frame, endf = -1, -1, -1, -1
+    pcall(function()
+        local m = ch and ch:call("get_Motion")
+        local l = m and m:call("getLayer", 0)
+        if not l then return end
+        bank = tonumber(l:call("get_MotionBankID")) or -1
+        clip = tonumber(l:call("get_MotionID")) or -1
+        frame = tonumber(l:call("get_Frame")) or -1
+        endf = tonumber(l:call("get_EndFrame")) or -1
+    end)
+    return bank, clip, frame, endf
+end
+
+function griffin_meal_frames_for(clip)
+    -- "5300:40,118 5310:12,64,120" -- per-clip stab frames, whitespace or
+    -- comma separated groups. Returns a list (possibly empty).
+    local out = {}
+    local spec = tostring(C.route3_meal_peck_frames or "")
+    if spec == "" then return out end
+    for group in spec:gmatch("[^%s;|]+") do
+        local cid, list = group:match("^(%d+):(.+)$")
+        if cid and tonumber(cid) == tonumber(clip) then
+            for f in list:gmatch("[^,]+") do
+                local n = tonumber(f)
+                if n then out[#out + 1] = n end
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- Returns true on the frame a stab lands. Falls back to the interval when no
+-- frames are authored for the live clip.
+function griffin_meal_beat_due(st, now)
+    local _, clip, frame = griffin_meal_layer_frame()
+    st.beat_clip = clip
+    st.beat_frame = frame
+    local frames = griffin_meal_frames_for(clip)
+    -- r16: a stamp is taken when a human SEES the stab, which is a few frames
+    -- after it lands. Fire that much earlier so the spray reads as caused by
+    -- the beak rather than trailing it. route3_meal_peck_lead, in frames.
+    local lead = math.max(0, tonumber(C.route3_meal_peck_lead) or 6)
+    if lead > 0 then
+        for i, f in ipairs(frames) do frames[i] = math.max(0, f - lead) end
+    end
+    if #frames == 0 then
+        if now >= (tonumber(st.chomp_at) or 0.0) then
+            st.chomp_at = now + math.max(1.2,
+                tonumber(C.route3_predation_eat_chomp_secs) or 2.4)
+            return true
+        end
+        return false
+    end
+    local prev = tonumber(st.beat_prev_frame)
+    st.beat_prev_frame = frame
+    -- a clip that looped (frame went backwards) re-arms every mark
+    if prev == nil or frame < prev then
+        st.beat_seen = {}
+        prev = -1
+    end
+    st.beat_seen = st.beat_seen or {}
+    for _, f in ipairs(frames) do
+        if not st.beat_seen[f] and frame >= f and prev < f then
+            st.beat_seen[f] = true
+            return true
+        end
+    end
+    return false
+end
+
+function griffin_meal_stamp_frame()
+    local bank, clip, frame, endf = griffin_meal_layer_frame()
+    S.route3_meal_stamps = S.route3_meal_stamps or {}
+    local list = S.route3_meal_stamps
+    -- r16: merge double-taps. Aurora's first pass came back
+    -- "5310:45,51,202,296" -- 45 and 51 are one stab tapped twice, six frames
+    -- apart. Anything within the merge window folds into the earlier stamp
+    -- instead of authoring a phantom second peck.
+    local merge = math.max(0, math.floor(tonumber(C.route3_meal_stamp_merge) or 12))
+    local dup = false
+    for _, rec in ipairs(list) do
+        if rec.clip == clip
+            and math.abs((tonumber(rec.frame) or -999) - (tonumber(frame) or 0)) <= merge then
+            dup = true
+            break
+        end
+    end
+    if not dup then list[#list + 1] = { clip = clip, frame = frame } end
+    if #list > 24 then table.remove(list, 1) end
+    -- group them per clip so the line can be pasted straight into the config
+    local per = {}
+    for _, rec in ipairs(list) do
+        per[rec.clip] = per[rec.clip] or {}
+        table.insert(per[rec.clip], math.floor(tonumber(rec.frame) or -1))
+    end
+    local parts = {}
+    for cid, fr in pairs(per) do
+        table.sort(fr)
+        parts[#parts + 1] = string.format("%d:%s", cid, table.concat(fr, ","))
+    end
+    S.route3_meal_stamp_line = table.concat(parts, " ")
+    pcall(function() log.info(string.format(
+        "[GriffinRideProbe (IRIS)] PECK STAMP b%d:%d frame %.0f/%.0f  ->  %s",
+        bank, clip, frame, endf, tostring(S.route3_meal_stamp_line))) end)
+    return S.route3_meal_stamp_line
+end
+
+function griffin_meal_hud_active()
+    return (S.route3_predation_eat or S.route3_ground_eat
+        or (type(S.route3_grab) == "table" and S.route3_grab.phase == "eat"))
+        and true or false
+end
+
+-- the readout + the stamp key
+re.on_frame(function()
+    pcall(function()
+        if C.route3_meal_frame_hud == false then return end
+        if not griffin_meal_hud_active() then
+            S.route3_meal_stamp_latch = false
+            return
+        end
+        -- STAMP KEY. ⛔ NOT F8 -- that is Aurora's RiftSpeak talk key, and the
+        -- F-row is AffinityBar's hotkey pool (F5-F12). `.` (period, 0xBE) is
+        -- unbound everywhere in autorun: the only hits were key-NAME lookup
+        -- tables, not bindings. Rebindable via route3_meal_stamp_key.
+        local key = math.floor(tonumber(C.route3_meal_stamp_key) or 0xBE)
+        local down = false
+        pcall(function()
+            if type(iris_kb) == "function" then down = iris_kb(key) == true end
+        end)
+        if down and not S.route3_meal_stamp_latch then
+            griffin_meal_stamp_frame()
+        end
+        S.route3_meal_stamp_latch = down
+
+        local font = rawget(_G, "IrisFont")
+        if not (font and type(font.text) == "function") then return end
+        local bank, clip, frame, endf = griffin_meal_layer_frame()
+        local sw, sh = 1920.0, 1080.0
+        pcall(function()
+            local ds = imgui.get_display_size()
+            if ds then sw = tonumber(ds.x) or sw; sh = tonumber(ds.y) or sh end
+        end)
+        local sc = sh / 1080.0
+        local x = 40.0 * sc
+        local y = 120.0 * sc
+        pcall(font.text, string.format("MEAL  b%d:%d   frame %.0f / %.0f",
+            bank, clip, frame, endf), x, y, 0xFFFFE080, 22 * sc)
+        pcall(font.text, "[ . ] = stamp this frame as a peck",
+            x, y + 26 * sc, 0xFF9C9C9C, 16 * sc)
+        if S.route3_meal_stamp_line then
+            pcall(font.text, "stamps: " .. tostring(S.route3_meal_stamp_line),
+                x, y + 48 * sc, 0xFF80FF80, 18 * sc)
+        end
+    end)
+end)
+
+function griffin_meal_blood_burst(victim_go, eater_go)
+    if not victim_go then return false end
+    local reason = "no blood service"
+    local painted = false
+    pcall(function()
+        local paint = rawget(_G, "IrisPaintBloodOn")
+        if type(paint) ~= "function" then return end
+        local ok, why = paint(victim_go, "Head_0", eater_go)
+        reason = tostring(why or "?")
+        -- "fired" is not enough: only a converter that RAN proves the engine
+        -- walked the paint path
+        painted = ok and (reason:find("converter ran", 1, true) ~= nil)
+    end)
+    -- ⛔ r11 (Aurora): DO NOT fall back to DismemberLab's IrisNativeBloodPulse.
+    -- That reconstructed-packet route never actually produced blood in the
+    -- field -- the FIRST working forced blood in this project was the wolf
+    -- mount's resolved-packet replay. Chasing it here just adds a second
+    -- silent failure to reason about.
+    --
+    -- ⭐⭐ r19 THE ALIVE/DEAD RULE. Every case that PAINTS is a dead body
+    -- (TEST on a corpse, the ground corpse meal); the only case that refuses
+    -- is the carry meal's LIVING prey -- with its own packet, hook on, and
+    -- the ragdoll theory disproven. So the painter wants a body the engine
+    -- considers finished. Rather than kill at meal start (which cost us the
+    -- flinch and the cry), let the FIRST chomp land on the living prey for
+    -- its reaction, and if the paint is refused, finish it there: every
+    -- chomp after that bleeds. One live beat, then gore.
+    -- ⛔ r20 ONE KILL PER BODY (Aurora: "I got the kill xp about 5 times").
+    -- The HP read lags the kill by a frame or two, so an hp>0 guard let the
+    -- next beat fire killAndSetDieLoop again -- and the engine paid out XP
+    -- each time. Latch by body address.
+    S.route3_meal_killed = S.route3_meal_killed or {}
+    local vaddr = nil
+    pcall(function() vaddr = victim_go:get_address() end)
+    if not painted and C.route3_meal_kill_for_blood ~= false
+        and vaddr and not S.route3_meal_killed[vaddr] then
+        S.route3_meal_killed[vaddr] = true
+        local n = 0
+        for _ in pairs(S.route3_meal_killed) do n = n + 1 end
+        if n > 32 then S.route3_meal_killed = { [vaddr] = true } end
+        pcall(function()
+            local hc = get_component(victim_go, "app.HitController")
+            local hp = hc and tonumber(hc:call("get_Hp")) or nil
+            if not (hp and hp > 0.0) then return end
+            local ch = get_component(victim_go, "app.Character")
+            if not ch then return end
+            -- wolf law: un-think-stop FIRST or the die loop never runs
+            pcall(function() ch:call("set_IsThinkStop", false) end)
+            pcall(function() ch:call("killAndSetDieLoop", nil) end)
+            local after = tonumber(hc:call("get_Hp")) or hp
+            if after > 0.0 then
+                pcall(function()
+                    hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+                        0.0, true, 0)
+                end)
+            end
+            reason = reason .. " -> killed for the next beat"
+        end)
+    end
+    S.route3_meal_blood = reason
+    if S.route3_meal_blood_logged ~= reason then
+        S.route3_meal_blood_logged = reason
+        pcall(function() log.info(
+            "[GriffinRideProbe (IRIS)] meal blood: " .. reason) end)
+    end
+    return true
+end
+
+function griffin_meal_camera_release()
+    -- r13 (Aurora: the hand-back "is at a very odd angle" and cuts hard):
+    -- keep OUR last shot and ease it into the native camera's own pose over
+    -- route3_eat_cam_blend_s, rather than cutting mid-frame. The rodeo's
+    -- guest channel does the interpolation; we just mark the request.
+    local g = rawget(_G, "IrisGuestCam")
+    if type(g) == "table" and type(g.cam) == "table" and not g.blend_out then
+        local dur = math.max(0.15, tonumber(C.route3_eat_cam_blend_s) or 0.9)
+        g.blend_out = true
+        g.blend_t0 = os.clock()
+        g.until_t = os.clock() + dur
+        rawset(_G, "IrisGuestCam", g)
+    elseif type(g) ~= "table" then
+        rawset(_G, "IrisGuestCam", nil)
+    end
+    S.route3_meal_cam_orbit = nil   -- next meal starts from the authored angle
+    S.route3_meal_cam_pt = nil
+end
+
+-- ── GROUND EAT (Aurora 08-19: "a ground RT for eat that only appears when
+-- you're next to a corpse... camera > eat > heal > bones"). Mounted, feet
+-- down, fresh corpse in reach, nothing living near -> RT reads Eat.
+function griffin_living_enemy_near(radius)
+    -- ⛔ EnemyManager entries are BEHAVIOR refs (app.Ch2xx), NOT
+    -- app.Character (the predation ref-type trap) -- is_dead's get_IsDead
+    -- can silently miss on them, so griffin_find_enemy could return a
+    -- CORPSE as a "living hostile" and block the meal forever. Normalize
+    -- to app.Character, read HP off the GameObject's component (the wolf's
+    -- r27 law), and only a provably-dead entry passes.
+    local pgo = char_go(get_player())
+    local pp = pgo and transform_pos(pgo)
+    if not pp then return nil end
+    local r2 = (tonumber(radius) or 14.0) ^ 2
+    local found = nil
+    pcall(function()
+        local em = singleton("app.EnemyManager")
+        if not em then return end
+        for _, getter in ipairs({ "get_EnemyList", "getAllEnemies",
+            "get_ActiveEnemyList", "get_EnemyCharacterList" }) do
+            local list = nil
+            pcall(function() list = em:call(getter) end)
+            local n = 0
+            pcall(function() n = list and list:call("get_Count") or 0 end)
+            if (tonumber(n) or 0) > 0 then
+                for i = 0, n - 1 do
+                    pcall(function()
+                        if found then return end
+                        local e = list:call("get_Item", i)
+                        if not e then return end
+                        local ch = e
+                        pcall(function()
+                            local norm = griffin_as_character(e)
+                            if norm then ch = norm end
+                        end)
+                        if griffin_is_self(ch) then return end
+                        if is_player_or_party(ch) then return end
+                        local ego = char_go(ch)
+                        local pos = ego and transform_pos(ego)
+                        if not pos then return end
+                        local ddx = (tonumber(pos.x) or 0.0) - (tonumber(pp.x) or 0.0)
+                        local ddz = (tonumber(pos.z) or 0.0) - (tonumber(pp.z) or 0.0)
+                        if ddx * ddx + ddz * ddz > r2 then return end
+                        local hc = get_component(ego, "app.HitController")
+                        local hp = hc and tonumber(griffin_hp_from_component(hc))
+                            or nil
+                        if hp and hp <= 0.5 then return end   -- a corpse
+                        if not hp then
+                            local dead = false
+                            pcall(function()
+                                dead = ch:call("get_IsDead") == true
+                            end)
+                            if dead then return end
+                        end
+                        found = ch
+                    end)
+                    if found then return end
+                end
+                return
+            end
+        end
+    end)
+    return found
+end
+
+function griffin_ground_eat_recover(ch, go)
+    -- give the carcass its physics back before anything else
+    pcall(function()
+        local st = S.route3_ground_eat
+        if st and st.meal_collision_disabled then
+            griffin_predation_restore_meal_collision(st)
+        end
+    end)
+    -- the carry meal's proven hand-back, one place, used by every ground-meal
+    -- exit. ORDER MATTERS: clear ownership -> hand the body back -> repose ->
+    -- re-arm the ride's AI suppression -> let the landing recover normalise.
+    S.base_owner = nil
+    S.audition_until_clock = 0.0
+    pcall(function() if go then set_motion_fsm_puppet(go, false) end end)
+    pcall(function() set_griffin_puppet(false) end)   -- restores AI + resetActionAndAI
+    pcall(function() stop_griffin_animation() end)    -- repaint an idle: no statue
+    pcall(function() if ch and go then
+        griffin_predation_rearm_ride_suppression(ch, go) end end)
+    S.route3_flap_phase = nil
+    S.route3_native_flight_node = nil
+    S.route3_native_flight_last_check = 0.0
+    S.route3_post_landing_recover_at = os.clock()
+    pcall(function() route3_flap_after_action() end)
+end
+
+function griffin_ground_eat_scan()
+    if C.route3_ground_eat_enabled == false then
+        S.route3_ground_eat_ready = nil; return
+    end
+    if S.mounted ~= true or S.airborne == true or S.route3_ground_eat
+        or type(S.route3_grab) == "table"
+        or S.route3_predation_eat or S.route3_predation_eat_pending then
+        S.route3_ground_eat_ready = nil; return
+    end
+    -- r8 (Aurora: "after grab>land>eat it should not allow regular ground RT
+    -- eat to work"): a meal earns a breather. Any finished meal arms this.
+    if os.clock() < (tonumber(S.route3_ground_eat_cool_until) or 0.0) then
+        S.route3_ground_eat_ready = nil
+        S.route3_ground_eat_status = "just fed"
+        return
+    end
+    -- ⛔ the eat clips (20:5300/5310) are GRIFFIN atlas ids; the drake's are
+    -- unverified and the atlas law forbids guessing -- no drake ground eat
+    -- until its ids are read from the ch257 atlas.
+    if route3_drake_mounted and route3_drake_mounted() then
+        S.route3_ground_eat_ready = nil
+        S.route3_ground_eat_status = "(drake: eat clips not mapped yet)"
+        return
+    end
+    local now = os.clock()
+    if now < (tonumber(S.route3_ground_eat_scan_at) or 0.0) then return end
+    S.route3_ground_eat_scan_at = now + 0.8
+    S.route3_ground_eat_ready = nil
+    local _, go = reacquire_griffin()
+    local gp = go and transform_pos(go)
+    if not gp then return end
+    -- the wolf's law: a living hostile near means the hunt comes first.
+    -- 08-19 fix: griffin_find_enemy's dead-filter misses on behavior refs
+    -- (a corpse could read "living" and block the meal forever) -- use the
+    -- normalized component-HP check instead.
+    local live = nil
+    pcall(function() live = griffin_living_enemy_near(
+        tonumber(C.route3_ground_eat_combat_radius) or 14.0) end)
+    if live then
+        S.route3_ground_eat_status = "living target near - no meal"
+        return
+    end
+    local range = tonumber(C.route3_ground_eat_range) or 5.0
+    local best, best_go, best_d = nil, nil, range
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene = sm and sdk.call_native_func(sm, smt, "get_CurrentScene")
+        local comps = scene and scene:call("findComponents(System.Type)",
+            sdk.typeof("app.Character"))
+        for _, cch in ipairs(system_array_to_table(comps) or {}) do
+            pcall(function()
+                if griffin_is_self(cch) then return end
+                if is_player_or_party(cch) then return end
+                local cgo = char_go(cch)
+                if not cgo then return end
+                if type(S.route3_eaten) == "table"
+                    and S.route3_eaten[cgo:get_address()] then return end
+                -- dead only: a READABLE hp rules (get_IsDead lies TRUE on a
+                -- downed-but-alive body -- the liveness law)
+                local hc = griffin_target_hit_controller(cch)
+                local hp = hc and griffin_hp_from_component(hc) or nil
+                local dead
+                if hp ~= nil then dead = tonumber(hp) <= 0.5
+                else dead = is_dead(cch) == true end
+                if not dead then return end
+                -- boss gate: authored controller height, like the wolf
+                local h = nil
+                pcall(function()
+                    local cc = get_component(cgo,
+                        "via.physics.CharacterController")
+                    h = cc and tonumber(cc:call("get_Height"))
+                end)
+                if (h or 1.4) > (tonumber(C.route3_ground_eat_max_height)
+                    or 3.2) then return end
+                local pos = transform_pos(cgo)
+                if not pos then return end
+                local ddx = (tonumber(pos.x) or 0.0) - (tonumber(gp.x) or 0.0)
+                local ddz = (tonumber(pos.z) or 0.0) - (tonumber(gp.z) or 0.0)
+                local d = math.sqrt(ddx * ddx + ddz * ddz)
+                if d < best_d then best, best_go, best_d = cch, cgo, d end
+            end)
+        end
+    end)
+    if best then
+        S.route3_ground_eat_ready = { target = best, go = best_go, d = best_d }
+        S.route3_ground_eat_status = string.format("corpse ready (%.1fm)", best_d)
+    else
+        S.route3_ground_eat_status = "no corpse in reach"
+    end
+    -- field receipt: one log line per status CHANGE, so "Eat never came up"
+    -- names its own reason in the log instead of being guessed at
+    if S.route3_ground_eat_status ~= S.route3_ground_eat_status_logged then
+        S.route3_ground_eat_status_logged = S.route3_ground_eat_status
+        pcall(function() log.info("[GriffinRideProbe (IRIS)] ground eat: "
+            .. tostring(S.route3_ground_eat_status)) end)
+    end
+end
+
+-- fallback on-screen offer: the native panel's ground R2 slot can sit in
+-- DISABLE_HIDETXT (the "B only shows with LB held" wall), which silently
+-- swallows our Eat label -- so a fresh corpse also gets an IrisFont fake
+-- prompt (the wolf dismount-hint convention), tied to the panel oracle.
+re.on_frame(function()
+    pcall(function()
+        -- 08-19 r2: OFF by default -- the native panel R2 relabel proved out
+        -- in the field, and this fallback drew on top of the panel's own
+        -- text. Flip route3_ground_eat_hint_enabled if the panel label ever
+        -- goes missing (the DISABLE_HIDETXT wall).
+        if C.route3_ground_eat_hint_enabled ~= true then return end
+        if not (S.route3_ground_eat_ready or S.route3_ground_eat) then return end
+        if S.mounted ~= true or S.airborne == true then return end
+        if S.route3_hud_panel_drawn ~= true then return end
+        local font = rawget(_G, "IrisFont")
+        if not (font and type(font.text) == "function") then return end
+        local sw, sh = 1920.0, 1080.0
+        pcall(function()
+            local ds = imgui.get_display_size()
+            if ds then sw = tonumber(ds.x) or sw; sh = tonumber(ds.y) or sh end
+        end)
+        local sc = sh / 1080.0
+        local px = math.max(10.0, math.min(28.0,
+            tonumber(C.route3_ground_eat_hint_px) or 16.0))
+        local x = sw - (tonumber(C.route3_ground_eat_hint_dx) or 232.0) * sc
+        local y = sh - (tonumber(C.route3_ground_eat_hint_dy) or 66.0) * sc
+        local word = S.route3_ground_eat and "Eating" or "Eat"
+        pcall(font.text, "RT", x, y, 0xFFC9C9C9, px, nil, "Alegreya.ttf")
+        pcall(font.text, word, x + (px * 2.2) * sc, y,
+            0xFF9C9C9C, px, nil, "Alegreya.ttf")
+    end)
+end)
+
+function griffin_ground_eat_start()
+    local rec = S.route3_ground_eat_ready
+    if not (rec and rec.go) then return false end
+    local now = os.clock()
+    S.route3_ground_eat = {
+        t0 = now,
+        until_t = now + math.max(3.0, tonumber(C.route3_ground_eat_secs) or 15.0),
+        stage = 0, target = rec.target, go = rec.go,
+    }
+    S.route3_ground_eat_ready = nil
+    pcall(function()
+        local _, go = reacquire_griffin()
+        local gp = go and transform_pos(go)
+        local cp = transform_pos(rec.go)
+        if gp and cp then
+            S.route3_ground_eat.yaw = math.atan(
+                (tonumber(cp.x) or 0.0) - (tonumber(gp.x) or 0.0),
+                (tonumber(cp.z) or 0.0) - (tonumber(gp.z) or 0.0))
+        end
+    end)
+    S.route3_ground_eat_status = "feeding"
+    return true
+end
+
+function griffin_ground_eat_tick()
+    local st = S.route3_ground_eat
+    if not st then
+        -- dispatch: scan, then an edge-armed RT (KB: E) starts the meal
+        griffin_ground_eat_scan()
+        if S.route3_ground_eat_ready and S.mounted == true
+            and S.airborne ~= true then
+            local down = false
+            pcall(function() down = raw_gamepad_button_down("r2") == true end)
+            pcall(function()
+                if not down and type(iris_kb) == "function" then
+                    down = iris_kb(0x45) == true
+                end
+            end)
+            local pressed = down and S.route3_ground_eat_prev ~= true
+            S.route3_ground_eat_prev = down
+            if pressed then griffin_ground_eat_start() end
+        else
+            S.route3_ground_eat_prev = nil
+        end
+        return
+    end
+    local now = os.clock()
+    local ch, go = reacquire_griffin()
+    if S.mounted ~= true or S.airborne == true or not go then
+        griffin_ground_eat_recover(ch, go)
+        S.route3_ground_eat = nil
+        griffin_meal_camera_release()
+        return
+    end
+    -- r4 (Aurora: "doesn't do the eat -- and you can move to cancel still"):
+    -- movement no longer cancels; the position PIN below owns the body for
+    -- the whole meal, exactly like the carry-eat. Takeoff is the escape
+    -- hatch (the airborne exit above). And r3's single un-forced play was
+    -- repainted by the ride the same frame -- the carry-eat's WORKING
+    -- recipe is base_owner + audition + FSM puppet + FORCED re-assert, so
+    -- this is now exactly that.
+    S.audition_until_clock = now + 0.4
+    S.base_owner = { name = "ground_eat", until_clock = now + 0.5 }
+    -- r5 (Aurora: "still isn't animating at all"): the ridden body is
+    -- THINK-STOPPED, and a clip on a think-stopped griffin sits on frame 0
+    -- forever. The working meals (eat-nearest command + carry-eat) all run
+    -- think ALIVE + nav stopped + AI off + speed 1.0 -- so does this now.
+    pcall(function() set_think_stop(ch, false) end)
+    pcall(function() stop_navigation(ch, true) end)
+    if C.disable_griffin_ai then
+        pcall(function() disable_record(get_component(go,
+            "app.AIDecisionMaker"), "app.AIDecisionMaker") end)
+        pcall(function() disable_record(get_component(go,
+            "app.NavigationAI"), "app.NavigationAI") end)
+    end
+    if not st.speed_set then
+        st.speed_set = true
+        pcall(function() set_griffin_motion_speed(1.0) end)
+    end
+    pcall(function() set_motion_fsm_puppet(go, true) end)
+    -- position pin (captured once) + locked facing on the meal
+    pcall(function()
+        if not st.pin then
+            local gp = transform_pos(go)
+            if gp then st.pin = { x = tonumber(gp.x) or 0.0,
+                y = tonumber(gp.y) or 0.0, z = tonumber(gp.z) or 0.0 } end
+        end
+        if st.pin then
+            local pp2 = make_position(st.pin.x, st.pin.y, st.pin.z)
+            local pr2 = st.yaw and make_quat_yaw(st.yaw) or nil
+            set_transform(go, pp2, pr2)
+            if ch then set_character_transform(ch, pp2, pr2) end
+        end
+    end)
+    -- ⭐ r9 (Aurora: "can the griffin align to the corpse, or the corpse to
+    -- the griffin, so the talons always go on the corpse and the beak always
+    -- reaches the body?"): the CARRY meal already solves this -- it lays the
+    -- body on the mouth anchor every tick. The ground meal never had it, so
+    -- the carcass sat wherever it fell. Same machinery, same helpers, plus a
+    -- short ease so a body 3m away slides in rather than teleporting.
+    if C.route3_ground_eat_align ~= false then
+        pcall(function()
+            local cgo2 = st.go
+            if not cgo2 then return end
+            local gpos = transform_pos(go)
+            -- liveness test without a helper that does not exist in this
+            -- file: a despawned body has no readable transform
+            if not (gpos and transform_pos(cgo2)) then return end
+            local yaw2 = tonumber(st.yaw) or yaw_from_transform(go) or 0.0
+            local a = griffin_predation_meal_mouth_anchor(go, gpos, yaw2, st)
+            if not a then return end
+            -- freeze the carcass's own physics once, so the root pin owns it
+            if not st.meal_collision_disabled then
+                griffin_predation_disable_meal_collision(st.target, cgo2, true, st)
+            end
+            local ex, ez = tonumber(a.x) or 0.0, tonumber(a.z) or 0.0
+            local ey = tonumber(gpos.y) or 0.0
+            pcall(function()
+                local grp = transform_render_pos(go)
+                local rex = grp and ((tonumber(grp.x) or 0.0) + ex - (tonumber(gpos.x) or 0.0)) or ex
+                local rez = grp and ((tonumber(grp.z) or 0.0) + ez - (tonumber(gpos.z) or 0.0)) or ez
+                local gh = route3_cast_ground_below(rex, (tonumber(gpos.y) or 0.0) + 5.0,
+                    rez, 3.0, 60.0)
+                if gh and tonumber(gh.y) then ey = tonumber(gh.y) end
+            end)
+            -- ease in over the first beat (from wherever it lay)
+            if not st.meal_from then
+                local cp0 = transform_pos(cgo2)
+                st.meal_from = cp0 and { x = tonumber(cp0.x) or ex,
+                    y = tonumber(cp0.y) or ey, z = tonumber(cp0.z) or ez } or nil
+            end
+            local u = math.min(1.0, (now - (tonumber(st.t0) or now)) / 0.45)
+            if st.meal_from and u < 1.0 then
+                ex = st.meal_from.x + (ex - st.meal_from.x) * u
+                ey = st.meal_from.y + (ey - st.meal_from.y) * u
+                ez = st.meal_from.z + (ez - st.meal_from.z) * u
+            end
+            if C.route3_meal_align_by_head ~= false then
+                if st.head_off == nil then
+                    st.head_off = griffin_meal_head_offset(cgo2) or false
+                end
+                local hoff = st.head_off
+                if hoff then ex, ez = ex + hoff.x, ez + hoff.z end
+            end
+            local epos = make_position(ex, ey + 0.1, ez)
+            -- lie flat under the beak, same pin the carry meal uses
+            -- ⛔ r10 (Aurora: "moving the corpse also made it go from flat
+            -- horizon to vertical -- we only need to move position"): a
+            -- GROUND corpse is already lying down; the carry meal's lie-flat
+            -- pitch is for a body that arrives upright in her talons. Ground
+            -- meal = POSITION ONLY, rotation untouched. (Opt-in if a corpse
+            -- ever stands up: route3_ground_eat_lie.)
+            local erot = nil
+            if C.route3_ground_eat_lie == true then
+                erot = griffin_make_quat_yaw_pitch(yaw2 + math.pi,
+                    math.rad(tonumber(C.route3_predation_eat_lie_pitch_deg) or 90.0))
+            end
+            set_transform(cgo2, epos, erot)
+            if st.target then set_character_transform(st.target, epos, erot) end
+        end)
+    end
+    -- stage ladder by time; the forced re-assert owns the layer
+    if st.stage == 0 then st.stage = 1 end
+    if st.stage == 1 and now - (tonumber(st.t0) or now)
+        >= (tonumber(C.route3_eat_start_dur) or 3.8) then
+        st.stage = 2
+    end
+    local want = (st.stage <= 1)
+            and math.floor(tonumber(C.route3_eat_start_clip) or 5300)
+        or (st.stage == 3)
+            and math.floor(tonumber(C.route3_eat_end_clip) or 5320)
+        or math.floor(tonumber(C.route3_eat_loop_clip) or 5310)
+    pcall(function()
+        local playing = tonumber(route3_flap_layer_clip())
+        if playing ~= want
+            and now - (tonumber(st.reassert_at) or 0.0) > 0.25 then
+            st.reassert_at = now
+            -- ⛔ r6 THE FROZEN-EAT BUG: play_griffin_motion's base-owner
+            -- gate blocks any caller whose owner string differs from
+            -- S.base_owner.name -- we claimed the layer as "ground_eat"
+            -- but pushed clips as "eat", so EVERY push was refused (the
+            -- receipt was sitting in S.base_owner_blocked all along).
+            play_griffin_motion(want, 20, true, "ground_eat")
+        end
+    end)
+    griffin_meal_camera_tick(st.go)
+    -- r7: the ground meal gets chomp blood too. The corpse is already dead
+    -- (no HP to drain) but it DIED to a real hit, so the shared service
+    -- usually holds a resolved packet for exactly this body -- replaying it
+    -- sprays from the carcass under her beak.
+    -- r14 (Aurora: "same for the dead body one too, but minus the screams"):
+    -- beat-timed blood on the corpse meal, and NO cry -- it is already dead.
+    if st.stage == 2 and griffin_meal_beat_due(st, now) then
+        griffin_meal_blood_burst(st.go, go)
+    end
+    -- remember the meal spot -- the consume falls back here if the game
+    -- dissolves the corpse first
+    pcall(function()
+        local lp0 = transform_pos(st.go)
+        if lp0 then st.last_meal_pos = { x = tonumber(lp0.x) or 0.0,
+            y = tonumber(lp0.y) or 0.0, z = tonumber(lp0.z) or 0.0 } end
+    end)
+    -- 08-19 r2: finish with the authored END clip (5320) before consuming,
+    -- matching the carry-meal's set-length shape
+    if st.stage ~= 3 and now >= (tonumber(st.until_t) or 0.0) then
+        st.stage = 3
+        st.consume_at = now + 1.4
+        -- the forced re-assert above pushes the 5320 end clip next tick
+        return
+    end
+    if st.stage == 3 and now >= (tonumber(st.consume_at) or 0.0) then
+        griffin_meal_heal()
+        pcall(function()
+            local cgo = st.go
+            local mp0 = cgo and transform_pos(cgo)
+            -- the game may have dissolved the corpse mid-meal -- the meal
+            -- still ends where it lay
+            if not mp0 and st.last_meal_pos then
+                mp0 = st.last_meal_pos
+                cgo = nil
+            end
+            if mp0 then
+                if C.route3_eat_leave_bones ~= false then
+                    local byaw = tonumber(st.yaw)
+                        or yaw_from_transform(go) or 0.0
+                    pcall(function() griffin_bones_spawn_queue(
+                        tonumber(mp0.x) or 0.0, tonumber(mp0.y) or 0.0,
+                        tonumber(mp0.z) or 0.0, byaw) end)
+                end
+                -- ⛔ never destroy() a native body -- warp it away (the
+                -- shipped grab-eat pattern)
+                if cgo then
+                    local away = make_position((tonumber(mp0.x) or 0.0) + 400.0,
+                        (tonumber(mp0.y) or 0.0) - 120.0,
+                        (tonumber(mp0.z) or 0.0) + 400.0)
+                    pcall(function() cgo:call("get_Transform")
+                        :call("set_UniversalPosition", away) end)
+                    pcall(function() if st.target then
+                        st.target:call("set_UniversalPosition", away) end end)
+                end
+            end
+            S.route3_eaten = S.route3_eaten or {}
+            local n = 0
+            for _ in pairs(S.route3_eaten) do n = n + 1 end
+            if n > 64 then S.route3_eaten = {} end
+            if st.go then S.route3_eaten[st.go:get_address()] = true end
+        end)
+        -- ⛔ r8 THE FOREVER-FREEZE (Aurora's video: "ends the animation early
+        -- and then completely freezes her motion until you move again"). The
+        -- exit un-puppeted the FSM but left the layer holding the last eat
+        -- frame with nobody repainting an idle -- so she stood as a statue
+        -- until movement painted a walk clip. Mirror the carry meal's FULL
+        -- recovery set instead: puppet off (resetActionAndAI), owners
+        -- cleared, an explicit idle repaint, then the landing-recover tick.
+        griffin_ground_eat_recover(ch, go)
+        S.route3_ground_eat = nil
+        S.route3_ground_eat_cool_until = os.clock()
+            + math.max(0.0, tonumber(C.route3_ground_eat_cooldown) or 12.0)
+        griffin_meal_camera_release()
+        S.route3_ground_eat_status = "devoured"
+        status(tostring(C.route3_griffin_name or "Griffin")
+            .. " feeds on the fallen")
+    end
+end
+
 function griffin_eat_interrupt_reason()
     local ordered = S.companion_order
     if ordered == "follow" or ordered == "come" or ordered == "stay" or ordered == "attack" then
@@ -40926,6 +42643,7 @@ re.on_frame(function()
     safe_run("route3_gustair_tick", route3_gustair_tick)
     safe_run("griffin_efx_reaper", griffin_efx_reaper_tick)
     safe_run("griffin_rt_mount_tick", griffin_rt_mount_tick)
+    safe_run("griffin_ground_eat_tick", griffin_ground_eat_tick)
     safe_run("griffin_rt_mount_watch_tick", griffin_rt_mount_watch_tick)
     safe_run("griffin_seat_enforcer_tick", griffin_seat_enforcer_tick)
     safe_run("griffin_seat_readout_tick", griffin_seat_readout_tick)
@@ -41107,6 +42825,139 @@ re.on_draw_ui(function()
             S.griffin and tostring(C.route3_griffin_name or "Companion") or "(no companion - press G to whistle)",
             yn(S.route3_proxy_ride_active), yn(S.airborne), tostring(S.route3_flight_status or "(none)")))
         imgui.separator()
+
+        if imgui.tree_node("🩸 GRIFFIN MEAL — eat camera / blood / bones##c_meal") then
+            imgui.text_colored("Meal camera (right stick orbits it live during a meal)", 0xFF66FF66)
+            local mc1, mc2, mc3, mc4, mc5, mc6
+            mc1, C.route3_eat_cam_side_deg = imgui.drag_float(
+                "camera angle (deg off heading; negative = head end)##c_meal_side",
+                tonumber(C.route3_eat_cam_side_deg) or -150.0, 1.0, -180.0, 180.0)
+            if mc1 then save_config() end
+            mc2, C.route3_eat_cam_dist = imgui.drag_float(
+                "camera distance##c_meal_dist",
+                tonumber(C.route3_eat_cam_dist) or 6.5, 0.1, 2.0, 25.0)
+            if mc2 then save_config() end
+            mc3, C.route3_eat_cam_height = imgui.drag_float(
+                "camera height##c_meal_height",
+                tonumber(C.route3_eat_cam_height) or 3.0, 0.1, 0.0, 15.0)
+            if mc3 then save_config() end
+            local mcs
+            mcs, C.route3_eat_cam_smooth = imgui.drag_float(
+                "camera steadiness (lower = steadier)##c_meal_smooth",
+                tonumber(C.route3_eat_cam_smooth) or 0.12, 0.01, 0.01, 1.0)
+            if mcs then save_config() end
+            local mco
+            mco, C.route3_eat_cam_orbit_speed = imgui.drag_float(
+                "right-stick orbit speed (0 = locked off)##c_meal_orbit",
+                tonumber(C.route3_eat_cam_orbit_speed) or 110.0, 5.0, 0.0, 240.0)
+            if mco then save_config() end
+            local mcb
+            mcb, C.route3_eat_cam_blend_s = imgui.drag_float(
+                "camera hand-back blend (seconds)##c_meal_blend",
+                tonumber(C.route3_eat_cam_blend_s) or 0.9, 0.05, 0.0, 3.0)
+            if mcb then save_config() end
+            mc4, C.route3_eat_cam_meal_bias = imgui.drag_float(
+                "camera anchor (0 = her body, 1 = the meal)##c_meal_bias",
+                tonumber(C.route3_eat_cam_meal_bias) or 0.92, 0.02, 0.0, 1.0)
+            if mc4 then save_config() end
+            imgui.separator()
+            mc5, C.route3_predation_eat_total_secs = imgui.drag_float(
+                "meal length (seconds)##c_meal_secs",
+                tonumber(C.route3_predation_eat_total_secs) or 15.0, 0.5, 4.0, 60.0)
+            if mc5 then save_config() end
+            mc6, C.route3_predation_eat_chomp_secs = imgui.drag_float(
+                "seconds between blood chomps##c_meal_chomp",
+                tonumber(C.route3_predation_eat_chomp_secs) or 2.4, 0.1, 0.8, 10.0)
+            if mc6 then save_config() end
+            local mc7, mc8
+            mc7, C.route3_ground_eat_secs = imgui.drag_float(
+                "ground meal length (seconds)##c_meal_gsecs",
+                tonumber(C.route3_ground_eat_secs) or 15.0, 0.5, 4.0, 60.0)
+            if mc7 then save_config() end
+            imgui.separator()
+            imgui.text_colored("PECK TIMING ( . stamps a frame during a meal)", 0xFF66FF66)
+            imgui.text("  live: " .. tostring(S.route3_meal_stamp_line or "(no stamps yet)"))
+            local pk
+            pk, C.route3_meal_peck_frames = imgui.input_text(
+                "peck frames  clip:f,f  clip:f,f##c_meal_pecks",
+                tostring(C.route3_meal_peck_frames or ""))
+            if pk then save_config() end
+            if imgui.button("use the stamps above##c_meal_usestamps") then
+                if S.route3_meal_stamp_line then
+                    C.route3_meal_peck_frames = S.route3_meal_stamp_line
+                    save_config()
+                end
+            end
+            imgui.same_line()
+            if imgui.button("clear stamps##c_meal_clearstamps") then
+                S.route3_meal_stamps = nil
+                S.route3_meal_stamp_line = nil
+            end
+            imgui.text_colored("  empty = fall back to the timer below", 0xFF9C9C9C)
+            imgui.separator()
+            mc8, C.route3_ground_eat_cooldown = imgui.drag_float(
+                "cooldown after a meal (seconds)##c_meal_cool",
+                tonumber(C.route3_ground_eat_cooldown) or 12.0, 0.5, 0.0, 60.0)
+            if mc8 then save_config() end
+            local ml0
+            ml0, C.route3_ground_eat_align = imgui.checkbox(
+                "ground meal: lay the carcass under her beak##c_meal_align",
+                C.route3_ground_eat_align ~= false)
+            if ml0 then save_config() end
+            local mrg
+            mrg, C.route3_meal_ragdoll_prey = imgui.checkbox(
+                "ragdoll the LIVE prey (suspect: blocks blood)##c_meal_rag",
+                C.route3_meal_ragdoll_prey == true)
+            if mrg then save_config() end
+            local mlg
+            mlg, C.route3_ground_eat_lie = imgui.checkbox(
+                "ground meal: also force the carcass flat (usually OFF)##c_meal_glie",
+                C.route3_ground_eat_lie == true)
+            if mlg then save_config() end
+            local ml1
+            ml1, C.route3_predation_eat_lie = imgui.checkbox(
+                "lay the prey flat under her beak##c_meal_lie",
+                C.route3_predation_eat_lie ~= false)
+            if ml1 then save_config() end
+            imgui.separator()
+            imgui.text("ground eat: " .. tostring(S.route3_ground_eat_status or "-"))
+            imgui.text("bones: " .. tostring(S.route3_bones_status or "-"))
+            imgui.text("meal heal: " .. tostring(S.route3_meal_heal or "-"))
+            if imgui.button("TEST: paint blood on the nearest body##c_meal_bloodtest") then
+                pcall(function()
+                    local t = rawget(_G, "IrisBloodTestNearest")
+                    S.route3_blood_test = type(t) == "function"
+                        and tostring(t(12.0)) or "rodeo blood service not loaded"
+                end)
+            end
+            if S.route3_blood_test then
+                imgui.text("  test: " .. tostring(S.route3_blood_test))
+            end
+            imgui.text("wolf/puma spawn: "
+                .. tostring(S.route3_native_ch223_spawn_status or "-"))
+            imgui.text("meal path: " .. tostring(S.route3_meal_path or "-"))
+            imgui.text("meal blood: " .. tostring(S.route3_meal_blood or "-"))
+            imgui.text("meal cry: " .. tostring(S.route3_meal_cry or "-"))
+            local nblood, nspec, specs = 0, 0, {}
+            pcall(function()
+                for _ in pairs(rawget(_G, "IrisBloodPkts") or {}) do
+                    nblood = nblood + 1
+                end
+                for sp in pairs(rawget(_G, "IrisBloodPktsBySpecies") or {}) do
+                    nspec = nspec + 1
+                    specs[#specs + 1] = tostring(sp)
+                end
+            end)
+            imgui.text(string.format(
+                "packets: %d bodies, %d species [%s]", nblood, nspec,
+                table.concat(specs, " ")))
+            imgui.text_colored(
+                "⚠ packets only exist for things HIT since the last script reset.",
+                0xFF88CCFF)
+            imgui.text_colored(
+                "   Hit a goblin once, then TEST on any goblin.", 0xFF88CCFF)
+            imgui.tree_pop()
+        end
 
         -- One Drake panel, one obvious current experiment.  The stool machinery lives in a
         -- separate file for crash isolation, but that implementation detail must never leak

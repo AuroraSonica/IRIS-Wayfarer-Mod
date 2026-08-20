@@ -1431,96 +1431,13 @@ end
 --   Holder.setupColliders()/addCollider(...)  Checker.set_Chara(...)
 -- ---------------------------------------------------------------------------
 
-local GRAFT_CLSM = "Character/ch/ch99_003/ch99_003_00.clsm"
-local GRAFT_CFIL = "Config/Collision/CollisionFilter/Object/ObjectCollisionDefault.cfil"
+-- ⛔ 08-20 REMOVED: the ox collision-graft resource staging (GRAFT_CLSM /
+-- GRAFT_CFIL + the GR holder table). It ran sdk.create_resource on the
+-- ox's collision mesh at EVERY LOAD for a retired experiment (22 lines).
 
-local GR = {status = "not staged"}
-pcall(function()
-    local clsm = sdk.create_resource(
-        "via.physics.CollisionSkinningMeshResource", GRAFT_CLSM)
-    if clsm then
-        GR.clsm_holder = clsm:create_holder(
-            "via.physics.CollisionSkinningMeshResourceHolder")
-        if GR.clsm_holder then GR.clsm_holder:add_ref() end
-    end
-    local cfil = sdk.create_resource(
-        "via.physics.CollisionFilterResource", GRAFT_CFIL)
-    if cfil then
-        GR.cfil_holder = cfil:create_holder(
-            "via.physics.CollisionFilterResourceHolder")
-        if GR.cfil_holder then GR.cfil_holder:add_ref() end
-    end
-    GR.status = string.format("staged clsm=%s cfil=%s",
-        tostring(GR.clsm_holder ~= nil), tostring(GR.cfil_holder ~= nil))
-end)
-
-local function graft_v2(horse_go)
-    if not valid(horse_go) then return false, "no horse" end
-    if not (GR.clsm_holder and GR.cfil_holder) then
-        return false, "resources not staged: " .. tostring(GR.status)
-    end
-    local steps = {}
-    local function step(tag, fn)
-        local ok, err = pcall(fn)
-        steps[#steps + 1] = tag .. (ok and "" or ("!" .. tostring(err)))
-        return ok
-    end
-
-    -- 1. the Info valuetype, fully populated BEFORE anything consumes it
-    local info = nil
-    step("info", function()
-        info = sdk.create_instance(
-            "via.physics.SkinningMeshColliderSet.SkinningMeshInfo")
-        if not info then error("instance nil") end
-        info = info:add_ref()
-        info:call("set_SkinningMesh", GR.clsm_holder)
-        info:call("set_Filter", GR.cfil_holder)
-    end)
-    if not info then return false, table.concat(steps, " ") end
-
-    -- 2. the Set, populated in the SAME frame it is born (ADOPT an existing
-    -- one first — grafts survive script resets, createComponent returns nil
-    -- for a component that already exists)
-    local set_component = nil
-    step("set", function()
-        set_component = get_component(
-            horse_go, "via.physics.SkinningMeshColliderSet")
-        if not set_component then
-            set_component = horse_go:call(
-                "createComponent(System.Type)",
-                sdk.typeof("via.physics.SkinningMeshColliderSet"))
-        end
-        if not set_component then error("createComponent nil") end
-        set_component:call("setSkinningMeshInfosCount", 1)
-        set_component:call(
-            "setSkinningMeshInfos(System.UInt64, via.physics.SkinningMeshColliderSet.SkinningMeshInfo)",
-            0, info)
-        set_component:call("set_Update", true)
-        set_component:call("set_Enabled", true)
-    end)
-
-    -- ⛔ HOLDER = UNGRAFTABLE BY CONSTRUCTION (v2.2 autopsy: the
-    -- createComponent call ITSELF throws — "Exception thrown in
-    -- REMethodDefinition::invoke for via.GameObject.createComponent" then
-    -- AV at the same RIP as v2. Its constructor demands context that can
-    -- never be pre-populated. Do not re-attempt.)
-    -- The climb route for a grafted horse is the REQUEST LATCH instead
-    -- (proven on the ghost): surface + set_RequestClimbTarget/startClimb.
-
-    GR.grafted_go = horse_go
-    GR.set_component = set_component
-    S.graft_rig = true
-    local report = table.concat(steps, " ")
-    -- readbacks on the surface itself
-    pcall(function()
-        report = report .. " | infosCount="
-            .. tostring(set_component:call("getSkinningMeshInfosCount"))
-        report = report .. " | enabled="
-            .. tostring(set_component:call("get_CurrentEnabled"))
-    end)
-    log("GRAFT v2.1 minimal: " .. report)
-    return true, report
-end
+-- ⛔ 08-20 REMOVED: graft_v2() -- built an OX collision rig (ch99_003) on
+-- the horse so it could be climbed. Same retired prototype as the ox
+-- ghost; the panel already called the experiment dead (67 lines).
 
 -- ---------------------------------------------------------------------------
 -- GHOST RIG (plan D): an invisible donor monster with a real authored climb
@@ -2052,156 +1969,16 @@ local function costume_stop()
     end
 end
 
-local function costume_start()
-    local player_pos = universal_pos(player_game_object())
-    if not player_pos then
-        S.status = "costume: no player position"
-        return
-    end
-    -- NEAREST registered horse (not merely the first)
-    local record, record_d = nil, 50
-    for _, candidate in ipairs(horses()) do
-        if valid(candidate.game_object) then
-            local d = distance(player_pos, universal_pos(candidate.game_object))
-            if d < record_d then record, record_d = candidate, d end
-        end
-    end
-    if not record then
-        S.status = "costume: need a live horse nearby"
-        return
-    end
-    local best, best_d = nil, 35
-    pcall(function()
-        local scene_manager = sdk.get_native_singleton("via.SceneManager")
-        local scene_type = sdk.find_type_definition("via.SceneManager")
-        local scene = sdk.call_native_func(
-            scene_manager, scene_type, "get_CurrentScene()")
-        local characters = scene and scene:call(
-            "findComponents(System.Type)", sdk.typeof("app.Character"))
-        local elements = {}
-        pcall(function() elements = characters:get_elements() end)
-        for _, character in ipairs(elements) do
-            local id = ""
-            pcall(function()
-                id = tostring(character:call("get_CharaIDString"))
-            end)
-            if id:match("^ch299003") then
-                local go = nil
-                pcall(function() go = character:call("get_GameObject") end)
-                if valid(go) then
-                    local d = distance(player_pos, universal_pos(go))
-                    if d < best_d then best, best_d = go, d end
-                end
-            end
-        end
-    end)
-    if not best then
-        S.status = "costume: no ox within 35m (spawn one)"
-        return
-    end
-    -- fit the body double: scale sits the ox inside the horse's silhouette
-    -- (0.75 left the climb-top hanging in air behind the rump — Aurora
-    -- field-fit 0.85, live slider in the panel); restored to 1.0 on stop
-    pcall(function()
-        local ox_tf = best:call("get_Transform")
-        local sc = S.ox_scale or 0.94
-        ox_tf:call("set_LocalScale", Vector3f.new(sc, sc, sc))
-    end)
-    -- the ox stays native; only its RENDERING sleeps (proven harmless)
-    pcall(function()
-        local mesh = get_component(best, "via.render.Mesh")
-        if mesh then mesh:call("set_Enabled", false) end
-    end)
-    pcall(function()
-        local hate = get_component(best, "app.HateSystem")
-        if hate then hate:call("clearAllHate") end
-    end)
-    -- mount hardening (Aurora's list 07-23): unkillable, silent, and calm.
-    -- NOT via set_IsInvincible — that flag gates climb (07-23 field find);
-    -- the damage-zero hook keeps the ox grabbable AND immortal
-    install_ox_shield_hook()
-    -- SILENCE the ox completely (07-23: container-off still mooed —
-    -- sweep EVERY Wwise* component on the body; restored on stop)
-    local muted_wwise = {}
-    pcall(function()
-        local comps = best:call("get_Components")
-        for _, comp in ipairs(comps and comps:get_elements() or {}) do
-            local type_name = ""
-            pcall(function()
-                type_name = comp:get_type_definition():get_full_name()
-            end)
-            if type_name:find("Wwise") then
-                pcall(function()
-                    if comp:call("get_Enabled") == true then
-                        comp:call("set_Enabled", false)
-                        muted_wwise[#muted_wwise + 1] = comp
-                    end
-                end)
-            end
-        end
-    end)
-    -- brain off = no wandering into rivers; re-enable via the checkbox if
-    -- the climb ever needs it (costume climb worked on the ALIVE ox — this
-    -- is the empirical test of whether consent needs the brain)
-    pcall(function()
-        local ai = get_component(best, "app.AIDecisionMaker")
-        if ai then ai:call("set_Enabled", false) end
-    end)
-    -- summoned oxen arrive think-stopped (idle spawn); the climb needs the
-    -- body AWAKE (ghost-era note: think-stop may block the latch) — AI-off
-    -- above is what keeps it calm instead
-    pcall(function()
-        local ox_character = get_component(best, "app.Character")
-        if ox_character then
-            ox_character:call("set_IsThinkStop", false)
-        end
-    end)
-    -- THE OX COMES TO THE HORSE (07-24 tame field: the pin drags the
-    -- horse to wherever the ox spawned — teleporting the WILD horse away
-    -- mid-rite, in the ox's rotation, shaking against its settling
-    -- physics). The horse's CC goes off later THIS SAME FRAME (below),
-    -- before any physics tick can press the overlapped pair.
-    pcall(function()
-        local horse_tf = record.game_object:call("get_Transform")
-        local ox_tf = best:call("get_Transform")
-        ox_tf:call("set_UniversalPosition",
-            horse_tf:call("get_UniversalPosition"))
-        ox_tf:call("set_Rotation", horse_tf:call("get_Rotation"))
-    end)
-    -- the horse becomes the costume: brain off, capsule off (both = the
-    -- ride's own proven calls on this exact creature)
-    local character = get_component(record.game_object, "app.Character")
-    pcall(function() character:call("set_IsThinkStop", true) end)
-    pcall(function()
-        character:call("setCharacterControllerEnable", false)
-    end)
-    -- 07-23 "keeps lying down": think-stop silences the BRAIN only — the
-    -- motion FSM's livelihood scheduler kept firing bank-60 lie/ruminate
-    -- clips over our commands. Park the FSM (carry-walk law: L0 clips are
-    -- fully drivable with the FSM off) so the gait machinery owns layer 0.
-    pcall(function()
-        local fsm = get_component(record.game_object, "via.motion.MotionFsm2")
-        if fsm then fsm:call("set_Enabled", false) end
-    end)
-    -- root-motion kill runs from costume_tick (definition order): flag it
-    S.need_rootmotion_kill = true
-    -- the SHELL is what everyone hits: it must be as immortal as the ox
-    -- (07-23: "horse dies in 1 hit" — we hardened the wrong body only)
-    pcall(function()
-        local hc = get_component(record.game_object, "app.HitController")
-        if hc then
-            hc:call("set_IsInvincible", true)
-            hc:call("set_IsNoDie", true)
-        end
-    end)
-    S.costume = {ox_go = best, horse_go = record.game_object,
-                 horse_character = character, last_gait = nil,
-                 muted_wwise = muted_wwise}
-    -- a fresh costume means nobody is seated on it yet
-    S.ride_pose_on = false
-    S.mount_climb_since = nil
-    S.status = "costume: horse is wearing the ox — climb the horse"
-end
+-- ⛔ 08-20 REMOVED: costume_start() -- the OX-GHOST RIG.
+-- The original prototype fused the horse onto an invisible ch99_003 ox so
+-- the player had something climbable; it needed a real ox within 35m and
+-- teleported bodies around to graft them. costume_start_oxless (07-24) has
+-- been the proven rig ever since -- the horse is its own drive body and
+-- keeps its own physics -- so this function (150 lines) is deleted.
+-- ⚠ The `ox_go` FIELD NAME survives on the costume table: in every live
+-- path it already means "the drive body" and equals horse_go. Renaming its
+-- ~100 uses is cosmetic churn on a 19k-line file mid-playtest -- a separate
+-- pass, not this one.
 
 -- ⭐ GRIFFIN PASSENGER EXPERIMENT (07-24, Aurora: "I'd like to know if
 -- this is some kind of magic solution"): the horse technique, verbatim,
@@ -3061,7 +2838,18 @@ function iris_wyrm_attack_target(costume, atk)
             local close_jaw = radial2 <= math.min(reach * reach, 100.0)
                 and math.abs(dy) <= vertical
                 and body_along >= -4.5
+            -- ⭐ 08-19 (Aurora: "surrounded... keeps trying to aim for ones
+            -- behind him that is gated -- allow auto target at any angle"):
+            -- a 180-degree spec now means a genuine FULL CIRCLE. The old
+            -- box gates (body_along >= -4.5, across <= width) still rejected
+            -- a victim square behind the tail, so the wolf pivoted at
+            -- nothing. Every wyrm attack passes aim_deg=180; the pivot +
+            -- omni converge own actually getting the mouth there.
+            local full_circle = (tonumber(atk.aim_deg) or 0.0) >= 179.5
+                and not voice
             local inside = voice and radial2 <= reach * reach
+                or (full_circle and radial2 <= reach * reach
+                    and math.abs(dy) <= vertical)
                 or (body_along >= -4.5 and along >= -6.0 and along <= reach
                     and across <= width and math.abs(dy) <= vertical
                     and (aim_ok or close_jaw))
@@ -4823,12 +4611,15 @@ end
 function iris_wyrm_draw_dismount_hint(costume)
     if C.wyrm_hud_dismount_hint == false then return end
     if not (costume and costume.wyrm_kind) then return end
-    -- r24: fade with the vanilla cluster (the HUD writer publishes its
-    -- PlayState) and vanish whenever a menu/pause/overlay owns the screen.
-    if S.wyrm_hud_cluster_hidden then return end
-    if type(iris_input_blocked) == "function" and iris_input_blocked() then
-        return
-    end
+    -- r25: follow the NATIVE panel's own visibility -- the HUD writer
+    -- already publishes ui010201's DrawSelf+ActualVisible verdict, which
+    -- flips on the idle fade AND on menus/pause (the griffin's proven
+    -- "cheaper than inventing a pause check" signal). No overlay gate:
+    -- the hint stays up while the REF panel is open so the sliders can be
+    -- tuned live.
+    if rawget(_G, "IrisRideNativeHudVisible") ~= true then return end
+    if os.clock() - (tonumber(rawget(_G, "IrisRideNativeHudVisibleT"))
+        or 0.0) > 0.6 then return end
     local font = rawget(_G, "IrisFont")
     if not (font and type(font.text) == "function") then return end
     local sw, sh = 1920.0, 1080.0
@@ -4846,9 +4637,238 @@ function iris_wyrm_draw_dismount_hint(costume)
     local y = sh - (tonumber(C.wyrm_hud_dismount_dy) or 40.0) * sc
     local glyph = (S.wyrm_hud_device == "keyboard"
         or S.wyrm_last_device == "kb") and "Q" or "L3"
-    -- griffin fake-prompt colours: stick-press grey glyph, idle-grey word
-    pcall(font.text, glyph, x, y, 0xFFC9C9C9, px)
-    pcall(font.text, "Dismount", x + (px * 1.9) * sc, y, 0xFF9C9C9C, px)
+    -- r25: the GAME's face (Alegreya, the griffin fake-prompt convention)
+    -- via IrisFont's per-call face override; griffin colours (stick-press
+    -- grey glyph, idle-grey word).
+    local face = tostring(C.wyrm_hud_dismount_face or "Alegreya.ttf")
+    pcall(font.text, glyph, x, y, 0xFFC9C9C9, px, nil, face)
+    pcall(font.text, "Dismount", x + (px * 1.9) * sc, y,
+        0xFF9C9C9C, px, nil, face)
+end
+
+-- ═══ B-MOUNT (Aurora 08-19): mounting moves off RT onto the game's own
+-- interact language -- the native button panel reads "B Mount" (IrisPromptBar,
+-- the same shared service the cookpot/sow/milk prompts ride) and the B press
+-- seats you. RT near a companion then does NOTHING (its grab is already
+-- suppressed), which retires the wrong-angle-pickup class entirely.
+function iris_mount_pad_b_mask()
+    if tonumber(S.mount_pad_b_mask) and S.mount_pad_b_mask ~= 0 then
+        return S.mount_pad_b_mask
+    end
+    -- ⛔ the field is named "Cancel", not "B" (via.hid.GamePadButton has no
+    -- literal B -- IrisFarming spent weeks advertising a button it wasn't
+    -- reading). Resolve once from the enum, never hardcode a guessed mask.
+    local mask = 0
+    pcall(function()
+        local t = sdk.find_type_definition("via.hid.GamePadButton")
+        for _, f in ipairs(t:get_fields()) do
+            pcall(function()
+                if f:get_name() == "Cancel" then mask = f:get_data() end
+            end)
+        end
+    end)
+    S.mount_pad_b_mask = tonumber(mask) or 0
+    return S.mount_pad_b_mask
+end
+
+function iris_mount_b_down()
+    -- keyboard keeps E (the historical mount key -- nothing changes for KB
+    -- users); the pad reads the game's own B. Both feed through the shared
+    -- input gate via their readers.
+    local kb = false
+    pcall(function() kb = iris_kb(0x45) == true end)
+    if kb then return true end
+    local mask = iris_mount_pad_b_mask()
+    if mask == 0 then return false end
+    return pad_button_down(mask) == true
+end
+
+function iris_mount_prompt_publish(owner, go, near_d)
+    -- Publish the native "B Mount" offer. FACING-GATED (the cookpot law:
+    -- proximity is not intent) -- a companion walking at heel must not wear
+    -- a permanent prompt, and B must not stop being Dash the whole time it
+    -- trots beside you.
+    local P = rawget(_G, "IrisPrompt")
+    if not (P and type(P.set) == "function") then return false end
+    -- ⛔ 08-19 field fix (Aurora: "the B prompt is miles away"): the prompt
+    -- bar projects with world_to_screen, which wants RENDER-space positions
+    -- (the animal-prompt precedent). universal_pos is offset by the
+    -- streaming rebase delta -- kilometres wrong after travel.
+    local pgo = player_game_object()
+    local pp, hp = nil, nil
+    pcall(function()
+        if valid(pgo) then
+            pp = pgo:call("get_Transform"):call("get_Position")
+        end
+    end)
+    pcall(function()
+        if valid(go) then
+            hp = go:call("get_Transform"):call("get_Position")
+        end
+    end)
+    if not (pp and hp) then return false end
+    local facing = false
+    pcall(function()
+        local q = pgo:call("get_Transform"):call("get_Rotation")
+        local yaw = math.atan(2.0 * (q.w * q.y + q.x * q.z),
+            1.0 - 2.0 * (q.y * q.y + q.x * q.x))
+        local dx, dz = hp.x - pp.x, hp.z - pp.z
+        local l = math.sqrt(dx * dx + dz * dz)
+        if l < 0.6 then facing = true; return end
+        facing = ((math.sin(yaw) * dx + math.cos(yaw) * dz) / l) >= 0.34
+    end)
+    if not facing then
+        pcall(function() P.clear(owner) end)
+        S.mount_offer_refused = "not facing the mount"
+        return false
+    end
+    S.mount_offer_refused = nil
+    pcall(function()
+        P.set(owner, "Mount", 24, tonumber(near_d) or 99.0,
+            Vector3f.new(hp.x, hp.y + 1.6, hp.z), go)
+    end)
+    -- while this offer stands, B must not also dash (the farming law); the
+    -- shared requestActionCore gate below reads this short lease
+    rawset(_G, "IrisMountBGateUntil", os.clock() + 0.30)
+    return true
+end
+
+function iris_mount_b_may_fire(owner, loose)
+    -- the arbiter decides (IrisPromptBar's contract: publishing a prompt
+    -- entitles you to nothing -- ask who won before acting). Strict mode
+    -- demands OUR offer be the winner; loose mode accepts any mount_ owner
+    -- (the griffin->rodeo horse handoff fires under the rodeo's offer).
+    local P = rawget(_G, "IrisPrompt")
+    if not P then return true end
+    local ok = false
+    local why = "?"
+    pcall(function()
+        if P.native_busy and P.native_busy() then
+            why = "the game is offering its own interact here"
+            return
+        end
+        local w = P.winner and P.winner() or nil
+        if w == owner then ok = true
+        elseif loose and w and tostring(w):find("^mount_") then ok = true
+        else why = "'" .. tostring(w) .. "' won the button" end
+    end)
+    if not ok then S.mount_offer_refused = why end
+    return ok
+end
+
+-- the B-press must not ALSO dash/dodge -- IrisFarming's proven action-level
+-- block (requestActionCore, matched BY NAME, player only), gated on the
+-- short lease the publishers above refresh. Movement/camera untouched.
+if not rawget(_G, "__iris_mount_b_dash_hook") then
+    pcall(function()
+        local m = sdk.find_type_definition("app.ActionManager")
+            :get_method("requestActionCore(app.ActionManager.Priority, System.String, System.UInt32)")
+        if not m then return end
+        sdk.hook(m, function(args)
+            if os.clock() > (tonumber(rawget(_G, "IrisMountBGateUntil"))
+                or 0.0) then return end
+            local block = false
+            pcall(function()
+                local cm = sdk.get_managed_singleton("app.CharacterManager")
+                local pl = cm and cm:call("get_ManualPlayer")
+                local pam = pl and pl:call("get_ActionManager")
+                local am = sdk.to_managed_object(args[2])
+                if not (am and pam
+                    and am:get_address() == pam:get_address()) then return end
+                local name = sdk.to_managed_object(args[4])
+                local s = name and tostring(name:call("ToString()")) or ""
+                if s:find("Dodge") or s:find("Dash")
+                    or s:find("StepAvoid") or s:find("Avoid") then
+                    block = true
+                end
+            end)
+            if block then return sdk.PreHookResult.SKIP_ORIGINAL end
+        end, function(r) return r end)
+        rawset(_G, "__iris_mount_b_dash_hook", true)
+    end)
+end
+
+function iris_wyrm_hp_of(ch, go)
+    -- ⛔ app.Character has NO get_HitController method (the drake probe
+    -- learnt this the hard way) -- calling it dies inside a pcall in
+    -- perfect silence. HP lives on the GameObject's app.HitController
+    -- COMPONENT. This one wrong call was BOTH r26 field failures: the
+    -- living-target probe never saw a living enemy (mid-fight snacking)
+    -- and the eat heal's controller came back nil (no HP restored).
+    local hc = nil
+    if valid(go) then
+        pcall(function() hc = get_component(go, "app.HitController") end)
+    end
+    if not hc and valid(ch) then
+        pcall(function()
+            local g = ch:call("get_GameObject")
+            if valid(g) then hc = get_component(g, "app.HitController") end
+        end)
+    end
+    local hp = nil
+    if hc then pcall(function() hp = tonumber(hc:call("get_Hp")) end) end
+    return hp, hc
+end
+
+function iris_wyrm_living_enemy_near(costume, radius)
+    -- r27: walk the WHOLE EnemyManager list, not the nearest entry --
+    -- a corpse sitting closer than the live goblin is exactly how the
+    -- nearest-first probes kept blessing a mid-fight meal. Anything
+    -- hostile that cannot be proven dead blocks eating; the maul owns
+    -- a contested field.
+    if not (costume and valid(costume.horse_go)) then return nil end
+    local wp = universal_pos(costume.horse_go)
+    if not wp then return nil end
+    local r2 = (tonumber(radius) or 14.0) ^ 2
+    local mount_addr = object_address(costume.horse_go)
+    local found = nil
+    pcall(function()
+        local em = sdk.get_managed_singleton("app.EnemyManager")
+        if not em then return end
+        for _, getter in ipairs({ "get_EnemyList", "getAllEnemies",
+            "get_ActiveEnemyList", "get_EnemyCharacterList" }) do
+            local list = nil
+            pcall(function() list = em:call(getter) end)
+            local n = 0
+            pcall(function() n = list and list:call("get_Count") or 0 end)
+            if (tonumber(n) or 0) > 0 then
+                for i = 0, n - 1 do
+                    pcall(function()
+                        if found then return end
+                        local ch = list:call("get_Item", i)
+                        if not valid(ch) then return end
+                        local go = ch:call("get_GameObject")
+                        if not valid(go)
+                            or object_address(go) == mount_addr
+                            or iris_wyrm_go_under_mount(go, mount_addr)
+                            or iris_wyrm_damage_go_is_party(go) then
+                            return
+                        end
+                        local pos = universal_pos(go)
+                        if not pos then return end
+                        local dx, dz = pos.x - wp.x, pos.z - wp.z
+                        if dx * dx + dz * dz > r2 then return end
+                        local hp = iris_wyrm_hp_of(ch, go)
+                        if hp and hp <= 0.5 then return end   -- a corpse
+                        if not hp then
+                            -- unreadable HP: only a positive IsDead
+                            -- clears it; an unknown hostile blocks the
+                            -- meal (eating mid-fight is the worse miss).
+                            local dead = false
+                            pcall(function()
+                                dead = ch:call("get_IsDead") == true
+                            end)
+                            if dead then return end
+                        end
+                        found = ch
+                    end)
+                    if found then return end
+                end
+                return
+            end
+        end
+    end)
+    return found
 end
 
 function iris_wyrm_eat_scan(costume, now)
@@ -4875,6 +4895,18 @@ function iris_wyrm_eat_scan(costume, now)
     -- read can fail, and every nil read as "living". Eating is now allowed
     -- in combat at the LOWEST priority: the RT dispatch pre-probes for a
     -- downed LIVING target and the maul always wins that contest.
+    -- r26: the LABEL honours the same rule -- a living target near means
+    -- RT reads Maul, not Eat. r27: the r26 probe read HP through the
+    -- NONEXISTENT app.Character:get_HitController (silent pcall death, so
+    -- "living" was never true) and only looked in the maul cone (nearest-
+    -- corpse-first). Now: whole EnemyManager list, component HP read,
+    -- omnidirectional radius.
+    S.wyrm_living_near = iris_wyrm_living_enemy_near(costume,
+        tonumber(C.wyrm_eat_combat_radius) or 14.0) ~= nil
+    if S.wyrm_living_near then
+        S.wyrm_eat_scan_status = "living target near - the hunt comes first"
+        return
+    end
     -- r16: measure from BOTH the mouth and the root -- the scaled wolf's
     -- mouth sits ~3m ahead of where the rider reads "next to the corpse".
     local range = math.max(1.0, tonumber(C.wyrm_eat_range) or 3.5)
@@ -4895,12 +4927,17 @@ function iris_wyrm_eat_scan(costume, now)
                 and not iris_wyrm_go_under_mount(go,
                     object_address(costume.horse_go))
                 and not iris_wyrm_damage_go_is_party(go) then
+                -- r27: real component HP read (the get_HitController call
+                -- never worked, so "dead" leaned entirely on get_IsDead --
+                -- which LIES TRUE on a downed-but-alive body. A readable
+                -- hp > 0.5 now vetoes IsDead: downed prey is a maul, never
+                -- a meal.
                 local dead = false
                 pcall(function()
-                    local hc = ch:call("get_HitController")
-                    local hp = hc and tonumber(hc:call("get_Hp"))
-                    if hp and hp <= 0.5 then dead = true end
-                    if not dead then
+                    local hp = iris_wyrm_hp_of(ch, go)
+                    if hp then
+                        dead = hp <= 0.5
+                    else
                         dead = ch:call("get_IsDead") == true
                     end
                 end)
@@ -4979,14 +5016,16 @@ function iris_wyrm_eat_start(costume, now)
             S.wyrm_eat.yaw = math.atan(cp.x - wp.x, cp.z - wp.z)
         end
     end)
-    -- r24 (Aurora): the attack-camera treatment for the meal -- the look
-    -- point follows the corpse while the boom keeps the preserved heading,
-    -- exactly the bite camera's shape (kick_cam chain picks this up).
+    -- r24 (Aurora): the attack-camera treatment for the meal. r25: SIDE-ON
+    -- (her field note: a boom behind the wolf shows nothing but wolf) --
+    -- the boom swings wyrm_eat_cam_side_deg (80) off the heading so the
+    -- meal is watched in profile, look point on the corpse.
     pcall(function()
         local axis = costume.horse_go:call("get_Transform")
             :call("get_AxisZ")
-        S.wyrm_eat.cam_yaw = math.atan(axis.x, axis.z)
-            + (tonumber(S.mountcam_orbit_yaw) or 0.0)
+        local side = math.rad(math.max(-160.0, math.min(160.0,
+            tonumber(C.wyrm_eat_cam_side_deg) or 80.0)))
+        S.wyrm_eat.cam_yaw = math.atan(axis.x, axis.z) + side
         S.wyrm_eat.aim_go = rec.go
     end)
     S.wyrm_native_status = "feeding"
@@ -5009,7 +5048,11 @@ function iris_wyrm_eat_tick(costume, now)
         return
     end
     local age = now - (tonumber(eat.t0) or now)
-    if eat.yaw and age <= 0.35 then
+    -- r27 (Aurora): no steering mid-meal. The yaw pin now holds for the
+    -- WHOLE eat (it used to release at 0.35s, after which stick input
+    -- could spin the feeding wolf on the spot); the drive loop's turn
+    -- integration also stands down while S.wyrm_eat is up.
+    if eat.yaw then
         pcall(function()
             local tf = costume.horse_go:call("get_Transform")
             local rot = tf:call("get_Rotation")
@@ -5055,28 +5098,52 @@ function iris_wyrm_eat_tick(costume, now)
             }
         end
         -- r24 (Aurora): the meal restores wyrm_eat_heal_pct (5%) of max HP.
+        -- r26: get_MaxHp was the WRONG getter -- get_OriginalMaxHp is the
+        -- canonical max. r27: the CONTROLLER fetch was also wrong --
+        -- app.Character has no get_HitController, so hc was nil and the
+        -- whole block skipped in silence. Component fetch, like every
+        -- working HP read in this file.
+        S.wyrm_eat_heal_receipt = "heal: controller not found"
         pcall(function()
-            local hc = costume.horse_character:call("get_HitController")
-            local hp = hc and tonumber(hc:call("get_Hp"))
-            local mx = hc and tonumber(hc:call("get_MaxHp"))
-            if hp and mx and mx > 0 and hp > 0 then
-                local heal = mx * (math.max(0.0,
-                    tonumber(C.wyrm_eat_heal_pct) or 5.0) / 100.0)
-                local new = math.min(mx, hp + heal)
-                if new > hp + 0.5 then
+            local hp, hc = iris_wyrm_hp_of(costume.horse_character,
+                costume.horse_go)
+            if not hc then return end
+            local mx = nil
+            local mx_getter = "?"
+            for _, m in ipairs({ "get_OriginalMaxHp", "get_MaxHitPoint",
+                "get_MaxHp", "get_HpMax" }) do
+                pcall(function() mx = tonumber(hc:call(m)) end)
+                if mx then mx_getter = m break end
+            end
+            if not (hp and mx and mx > 0 and hp > 0) then
+                S.wyrm_eat_heal_receipt = string.format(
+                    "heal: hp=%s max=%s (%s)", tostring(hp), tostring(mx),
+                    mx_getter)
+                return
+            end
+            local heal = mx * (math.max(0.0,
+                tonumber(C.wyrm_eat_heal_pct) or 5.0) / 100.0)
+            local new = math.min(mx, hp + heal)
+            if new > hp + 0.5 then
+                pcall(function()
+                    hc:call("setHp(System.Single, System.Boolean, System.Int32)",
+                        new, true, 0)
+                end)
+                local rb = tonumber(hc:call("get_Hp")) or hp
+                if rb < new - 0.5 then
                     pcall(function()
-                        hc:call("setHp(System.Single, System.Boolean, System.Int32)",
-                            new, true, 0)
+                        hc:call("setHp(System.Single)", new)
                     end)
-                    local rb = tonumber(hc:call("get_Hp")) or hp
-                    if rb < new - 0.5 then
-                        pcall(function()
-                            hc:call("setHp(System.Single)", new)
-                        end)
-                    end
-                    log(string.format("wyrm eat: healed %.0f -> %.0f",
-                        hp, tonumber(hc:call("get_Hp")) or new))
                 end
+                local final = tonumber(hc:call("get_Hp")) or new
+                S.wyrm_eat_heal_receipt = string.format(
+                    "healed %.0f -> %.0f of %.0f (%s)", hp, final, mx,
+                    mx_getter)
+                log(string.format("wyrm eat: healed %.0f -> %.0f",
+                    hp, final))
+            else
+                S.wyrm_eat_heal_receipt = string.format(
+                    "heal: already full (%.0f/%.0f)", hp, mx)
             end
         end)
         local cp = nil
@@ -5319,6 +5386,440 @@ end
 -- retain di across frames -- UAF law). Damage is re-asserted before painting
 -- because the companion clamp zeroes it mid-proc and the painter skips
 -- zero-damage packets as non-hits.
+-- ═══════════════════════════════════════════════════════════════════════
+-- ⭐⭐⭐ 08-19 r7 SHARED BLOOD SERVICE (the wolf's paint primitive, opened up
+-- to every IRIS module -- the griffin's meal is the first customer).
+--
+-- ⛔ WHY THIS HAS TO EXIST: fabricated DamageInfo packets NEVER paint (four
+-- rounds proved it, and GriffinRideProbe retired its own two native-damage
+-- routes in 08-14 after access violations -- both are latched off, so every
+-- griffin "hit" is a silent raw HP subtraction with no blood and no
+-- reaction). Only an engine-RESOLVED packet replayed into the victim's own
+-- EPV damage-trigger unit paints. So we KEEP a few resolved packets as they
+-- fly past, keyed by victim, and replay the right one on demand.
+--
+-- ⛔ UAF law: a DamageInfo must never be held across frames without add_ref,
+-- and every replacement releases the old one. Cap 3 bodies, 90s expiry.
+_G.IrisBloodPkts = rawget(_G, "IrisBloodPkts") or {}
+-- ⭐ r12: ALSO keep one template per SPECIES. Field lesson: a body the
+-- griffin snatches fresh has never been hit, so it owns no packet and could
+-- never paint -- and a script reset empties the whole cache anyway (new Lua
+-- state). Same species = same skeleton, regions and materials, so a sibling
+-- goblin's resolved packet is a valid template once its damage-side object
+-- is re-pointed at the new victim.
+_G.IrisBloodPktsBySpecies = rawget(_G, "IrisBloodPktsBySpecies") or {}
+
+function iris_blood_species_of(go)
+    local id = nil
+    pcall(function()
+        local ch = get_component(go, "app.Character")
+        id = ch and tostring(ch:call("get_CharaIDString") or "") or nil
+    end)
+    if not id or id == "" then return nil end
+    return (id:match("^(ch%d+)") or id)
+end
+
+-- ⭐⭐⭐ r22 THE REAL ROOT CAUSE: **DamageInfo OBJECTS ARE REUSED BY THE
+-- ENGINE.** add_ref keeps the object ALIVE, it does not keep its CONTENTS --
+-- the engine writes the next hit straight into the same instance. So a
+-- packet captured at dmg 650 was reading **dmg 1** by replay time (our own
+-- kill event had overwritten it), and the painter dropped it as a non-hit.
+-- Every "the packet is fine but it still refuses" round traces back here.
+-- Fix: snapshot the fields that DEFINE the hit at capture, and stamp them
+-- back on immediately before the replay. ⛔ one pcall per field (the
+-- blood_fire law) -- a throw on one name must not take the rest with it.
+local BLOOD_SNAP_FIELDS = {
+    "Damage", "SlashDamage", "FixedDamage", "DamageRate",
+    "Flag", "MainSurfaceMaterial", "DamageActType", "DamageType",
+    "HitEffType", "HitSeType", "HitEffectFlag",
+    "RegionNo", "RegionStatusNo", "ConvertedHitBackDir",
+    "IsDirectDamage", "IsSlashAttack",
+    "DamageReaction", "DamageGuard",
+}
+
+function iris_blood_snapshot(di)
+    local snap = {}
+    for _, name in ipairs(BLOOD_SNAP_FIELDS) do
+        pcall(function()
+            local v = di:get_field(name)
+            if type(v) == "number" or type(v) == "boolean" then
+                snap[name] = v
+            end
+        end)
+    end
+    return snap
+end
+
+function iris_blood_restore(di, snap)
+    if type(snap) ~= "table" then return 0 end
+    local n = 0
+    for name, v in pairs(snap) do
+        if pcall(function() di:set_field(name, v) end) then n = n + 1 end
+    end
+    return n
+end
+
+function iris_blood_pkt_store(addr, di, dmg, victim_go)
+    if not (addr and di) then return end
+    -- ⛔⛔ r20 CACHE POISONING, self-inflicted. Field receipt:
+    -- `[own pkt, 0s old, dmg 1 ... converter NEVER RAN]` -- the meal's own
+    -- chomps and kill generate TINY damage events, our hook dutifully stored
+    -- the newest one, and a dmg-1 packet replaced the real dmg-332 hit. The
+    -- painter treats a trivial packet as a non-hit. So: ignore junk, and keep
+    -- the STRONGEST packet for a body rather than the most recent.
+    local d = tonumber(dmg) or 0.0
+    if d < (tonumber(C.iris_blood_min_damage) or 10.0) then return end
+    local t = _G.IrisBloodPkts
+    local old = t[addr]
+    if old and old.di and (tonumber(old.dmg) or 0.0) > d
+        and (os.clock() - (tonumber(old.t) or 0.0)) < 120.0 then
+        return   -- what we already hold hits harder; keep it
+    end
+    if not pcall(function() di:add_ref() end) then return end
+    if old and old.di then pcall(function() old.di:release() end) end
+    t[addr] = { di = di, dmg = dmg, t = os.clock(), owner = addr,
+        snap = iris_blood_snapshot(di) }
+    -- one template per species (own ref, replaced the same careful way)
+    pcall(function()
+        local sp = victim_go and iris_blood_species_of(victim_go) or nil
+        if not sp then return end
+        local st = _G.IrisBloodPktsBySpecies
+        local prev = st[sp]
+        -- same rule for the species template: strongest wins
+        if prev and prev.di and (tonumber(prev.dmg) or 0.0) > d
+            and (os.clock() - (tonumber(prev.t) or 0.0)) < 300.0 then
+            return
+        end
+        if prev and prev.di then pcall(function() prev.di:release() end) end
+        if pcall(function() di:add_ref() end) then
+            st[sp] = { di = di, dmg = dmg, t = os.clock(), owner = addr,
+                snap = iris_blood_snapshot(di) }
+        else
+            st[sp] = nil
+        end
+    end)
+    -- expire + cap (oldest first) so retention can never grow unbounded
+    local now, n, oldest_a, oldest_t = os.clock(), 0, nil, math.huge
+    for a, rec in pairs(t) do
+        if now - (tonumber(rec.t) or now) > 90.0 then
+            if rec.di then pcall(function() rec.di:release() end) end
+            t[a] = nil
+        else
+            n = n + 1
+            if (tonumber(rec.t) or now) < oldest_t then
+                oldest_a, oldest_t = a, tonumber(rec.t) or now
+            end
+        end
+    end
+    -- r17: 3 was too tight -- the body you hit before a meal could be evicted
+    -- by two other hits before the meal started, losing the OWN packet (the
+    -- only kind proven to paint reliably).
+    if n > 8 and oldest_a and oldest_a ~= addr then
+        local rec = t[oldest_a]
+        if rec and rec.di then pcall(function() rec.di:release() end) end
+        t[oldest_a] = nil
+    end
+end
+
+-- Replay a resolved packet onto `victim_go` so the engine paints ITS blood on
+-- ITS body: joints re-pinned to the named joint, attack side re-anchored to
+-- the victim, and the converter's frozen attack positions rewritten for the
+-- duration of the call (IrisWyrmPaintFix -- the r17 anchor law).
+-- Returns ok, reason.
+-- ⭐⭐ r17 THE BORROWED-PACKET FIX. Field split: the TEST button paints
+-- (it uses the body's OWN packet) while the meal never does (it borrows a
+-- sibling's). A resolved DamageInfo carries SEVERAL references to the body it
+-- was resolved for -- re-pointing `<DamageGameObject>` alone leaves the rest
+-- naming the original, and the painter refuses a packet whose receiver does
+-- not match the unit it was handed to (receipt: "converter NEVER RAN").
+-- Rather than guess the field names, walk the type and re-point EVERY
+-- GameObject-typed field that still points at the old body. Generic, so it
+-- cannot miss a field we never knew about.
+function iris_blood_repoint(di, old_addr, victim_go)
+    local n = 0
+    pcall(function()
+        local td = di:get_type_definition()
+        if not td then return end
+        for _, f in ipairs(td:get_fields() or {}) do
+            local ft = nil
+            pcall(function() ft = f:get_type():get_full_name() end)
+            if ft == "via.GameObject" then
+                local cur = nil
+                pcall(function() cur = f:get_data(di) end)
+                local ca = nil
+                pcall(function() ca = cur and object_address(cur) or nil end)
+                if ca and old_addr and ca == old_addr then
+                    if pcall(function()
+                        di:set_field(f:get_name(), victim_go)
+                    end) then n = n + 1 end
+                end
+            end
+        end
+    end)
+    return n
+end
+
+function iris_paint_blood_on(victim_go, joint_name, aim_go)
+    if not valid(victim_go) then return false, "no victim" end
+    local addr = object_address(victim_go)
+    local pkt = _G.IrisBloodPkts and _G.IrisBloodPkts[addr] or nil
+    local src = "own"
+    if not pkt then
+        local wp = rawget(_G, "IrisWyrmPreyPkt")
+        if wp and wp.di and wp.addr == addr then pkt = wp; src = "wolf prey" end
+    end
+    if not (pkt and pkt.di) then
+        -- r12: borrow this species' template and re-point its damage side
+        local sp = iris_blood_species_of(victim_go)
+        local tmpl = sp and _G.IrisBloodPktsBySpecies
+            and _G.IrisBloodPktsBySpecies[sp] or nil
+        if tmpl and tmpl.di then
+            pkt = tmpl
+            local moved = iris_blood_repoint(tmpl.di, tmpl.owner, victim_go)
+            pcall(function()
+                tmpl.di:set_field("<DamageGameObject>k__BackingField", victim_go)
+            end)
+            tmpl.owner = object_address(victim_go)
+            src = string.format("species %s/%d refs", tostring(sp), moved)
+        end
+    end
+    if not (pkt and pkt.di) then
+        -- r14 (Aurora: "will I have to attack a goblin every time?"): last
+        -- resort -- ANY resolved packet, damage side re-pointed. A boar's
+        -- packet on a goblin is a slightly wrong-sized spray, which beats no
+        -- spray at all; and it means one hit on ANYTHING in a session arms
+        -- blood for everything.
+        local any = nil
+        pcall(function()
+            for _, rec in pairs(_G.IrisBloodPktsBySpecies or {}) do
+                if rec and rec.di then any = rec break end
+            end
+            if not any then
+                for _, rec in pairs(_G.IrisBloodPkts or {}) do
+                    if rec and rec.di then any = rec break end
+                end
+            end
+        end)
+        if any and any.di then
+            pkt = any
+            local moved = iris_blood_repoint(any.di, any.owner, victim_go)
+            pcall(function()
+                any.di:set_field("<DamageGameObject>k__BackingField", victim_go)
+            end)
+            any.owner = object_address(victim_go)
+            src = string.format("any-species/%d refs", moved)
+        end
+    end
+    if not (pkt and pkt.di) then
+        return false, "no resolved packet captured yet this session"
+    end
+    local age = os.clock() - (tonumber(pkt.t) or os.clock())
+    local unit_path = "self"
+    local unit = get_component(victim_go,
+        "app.EPVExpertCharacterDamageTriggerUnit")
+    if not unit then
+        unit_path = "child"
+    end
+    if not unit then
+        pcall(function()
+            local budget = 0
+            local function walk(tf)
+                if not tf or unit or budget > 200 then return end
+                budget = budget + 1
+                local cgo = tf:call("get_GameObject")
+                if cgo then
+                    unit = get_component(cgo,
+                        "app.EPVExpertCharacterDamageTriggerUnit")
+                    if unit then return end
+                end
+                local c = tf:call("get_Child")
+                while c and not unit do walk(c); c = c:call("get_Next") end
+            end
+            walk(victim_go:call("get_Transform"))
+        end)
+    end
+    if not unit then return false, "victim EPV unit missing" end
+    joint_name = tostring(joint_name or "Head_0")
+    -- spray direction: away from the eater, slightly up
+    pcall(function()
+        local tf = valid(aim_go) and aim_go:call("get_Transform") or nil
+        local fwd = tf and tf:call("get_AxisZ") or nil
+        if fwd then
+            local vec = Vector3f.new((tonumber(fwd.x) or 0.0) * 0.85, 0.5,
+                (tonumber(fwd.z) or 0.0) * 0.85)
+            pcall(function() pkt.di:set_field("AttackVec", vec) end)
+            pcall(function() pkt.di:set_field("HitBackVec", vec) end)
+        end
+    end)
+    -- refresh the receiver's transient damage-joint state to NOW
+    pcall(function()
+        local hc = get_component(victim_go, "app.HitController")
+        if not hc then return end
+        pcall(function() hc:call("calcDamageJoint") end)
+        local tf = victim_go:call("get_Transform")
+        local hj = tf and tf:call("getJointByName", joint_name)
+        if hj then
+            pcall(function() hc:call("set_DamageJointA(via.Joint)", hj) end)
+            pcall(function() hc:call("set_DamageJointB(via.Joint)", hj) end)
+        end
+    end)
+    pcall(function()
+        pkt.di:set_field("<AttackGameObject>k__BackingField", victim_go)
+    end)
+    pcall(function()
+        pkt.di:set_field("<AttackOwnerObject>k__BackingField", victim_go)
+    end)
+    pcall(function()
+        local tf = victim_go:call("get_Transform")
+        local hj = tf and tf:call("getJointByName", joint_name)
+        local hp2 = hj and hj:call("get_Position")
+        if hp2 then
+            rawset(_G, "IrisWyrmPaintFix", {
+                x = tonumber(hp2.x), y = tonumber(hp2.y),
+                z = tonumber(hp2.z), go = victim_go,
+                until_t = os.clock() + 0.06,
+            })
+        end
+    end)
+    -- r11: is the converter hook even INSTALLED? If it is not, "converter
+    -- NEVER RAN" is a false negative and would send us chasing the wrong
+    -- thing (⛔ never trust a diagnostic you have not proven can say yes).
+    local hooked = rawget(_G, "__iris_wyrm_paint_anchor_hook") == true
+    -- and what STATE is the victim in? The wolf paints on a prey that is
+    -- alive, think-stopped and animated -- the griffin's is RAGDOLLED, which
+    -- is the standing suspect for the painter refusing.
+    local vstate = ""
+    pcall(function()
+        local ch = get_component(victim_go, "app.Character")
+        local dead = ch and ch:call("get_IsDead") == true
+        local hc2 = get_component(victim_go, "app.HitController")
+        local hp2 = hc2 and tonumber(hc2:call("get_Hp")) or nil
+        local rag = get_component(victim_go, "app.CharacterRagdoll")
+            or get_component(victim_go, "via.dynamics.Ragdoll")
+        local ragon = nil
+        if rag then pcall(function() ragon = rag:call("get_Enabled") end) end
+        -- ⛔ r19: this used to print "ragdoll ON" from the COMPONENT's
+        -- get_Enabled, which is true on every character whether or not the
+        -- ragdoll is actually driving the body. It read like evidence and was
+        -- noise -- it sent r18 chasing a ragdoll theory. Labelled honestly.
+        -- r21: THINK STATE is the variable that actually tracked the
+        -- failures -- print it, and wake the body for the replay: a
+        -- think-stopped character never runs the update that dispatches the
+        -- effect its callback requested.
+        local stopped = ch and ch:call("get_IsThinkStop") == true
+        if stopped and (C.iris_blood_wake_victim ~= false) then
+            pcall(function() ch:call("set_IsThinkStop", false) end)
+        end
+        vstate = string.format(", hp %s%s%s%s", tostring(hp2),
+            dead and ", DEAD" or ", ALIVE",
+            stopped and ", THINK-STOPPED (woken)" or "",
+            (ragon == true) and ", ragcomp" or "")
+    end)
+    local hits0 = tonumber(S.wyrm_paint_fix_hits) or 0
+    local dmg_used = 0
+    -- r22: restore the captured hit BEFORE replaying -- the engine has very
+    -- probably overwritten this instance since we caught it
+    local restored = iris_blood_restore(pkt.di, pkt.snap)
+    local ok = pcall(function()
+        local d = tonumber(pkt.di:get_field("Damage")) or 0
+        if (d <= 0 or d < (tonumber(pkt.dmg) or 0) * 0.5)
+            and tonumber(pkt.dmg) then
+            pkt.di:set_field("Damage", pkt.dmg)
+            d = tonumber(pkt.dmg) or 0
+        end
+        dmg_used = d
+        unit:call("callbackHit(app.HitController.DamageInfo)", pkt.di)
+    end)
+    rawset(_G, "IrisWyrmPaintFix", nil)
+    -- ⭐ r9 REAL RECEIPT: "painted" only ever meant "did not throw", which
+    -- read as success for three rounds while nothing sprayed. Report what
+    -- actually happened: whether the CONVERTER ran (anchor rewrites is the
+    -- only proof the engine walked the paint path), the packet's age, and
+    -- the damage the painter saw (it skips zero-damage packets as non-hits).
+    local rewrites = (tonumber(S.wyrm_paint_fix_hits) or 0) - hits0
+    if not ok then return false, "painter threw" end
+    return true, string.format("fired [%s pkt/%s unit, %.0fs old, dmg %.0f, %d fields restored%s, hook %s, converter %s]",
+        src, unit_path, age, dmg_used, restored, vstate,
+        hooked and "on" or "MISSING",
+        rewrites > 0 and "ran" or "NEVER RAN")
+end
+rawset(_G, "IrisPaintBloodOn", iris_paint_blood_on)
+
+-- r11: ISOLATION TEST. Paint the nearest non-party body on demand, so the
+-- primitive can be judged on a plain standing enemy vs a ragdolled corpse
+-- without a meal in the way. Returns a receipt string.
+function iris_blood_test_nearest(radius)
+    local pgo = player_game_object()
+    local pp = valid(pgo) and universal_pos(pgo) or nil
+    if not pp then return "no player" end
+    local r2 = (tonumber(radius) or 12.0) ^ 2
+    local best, best_d = nil, math.huge
+    pcall(function()
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local smt = sdk.find_type_definition("via.SceneManager")
+        local scene = sdk.call_native_func(sm, smt, "get_CurrentScene()")
+        local chars = scene and scene:call(
+            "findComponents(System.Type)", sdk.typeof("app.Character"))
+        for _, ch in ipairs(chars and chars:get_elements() or {}) do
+            pcall(function()
+                local go = ch:call("get_GameObject")
+                if not valid(go) then return end
+                if iris_wyrm_damage_go_is_party(go) then return end
+                local id = tostring(ch:call("get_CharaIDString") or "")
+                if not id:match("^ch2") then return end
+                local q = universal_pos(go)
+                if not q then return end
+                local dx, dz = q.x - pp.x, q.z - pp.z
+                local d = dx * dx + dz * dz
+                if d < r2 and d < best_d then best, best_d = go, d end
+            end)
+        end
+    end)
+    if not best then return "no body within range" end
+    local ok, why = iris_paint_blood_on(best, "Head_0", pgo)
+    local name = "?"
+    pcall(function() name = tostring(best:call("get_Name")) end)
+    return string.format("%s (%.1fm): %s", name, math.sqrt(best_d),
+        tostring(why))
+end
+rawset(_G, "IrisBloodTestNearest", iris_blood_test_nearest)
+
+-- r8: replay a body's OWN captured pain cry (recorded by IrisWildCats when
+-- that body last took a real hit). Returns ok, reason.
+function iris_play_hurt_cry(victim_go)
+    if not valid(victim_go) then return false, "no victim" end
+    local store = rawget(_G, "IrisWyrmPreyHurtVocal")
+    local rec = type(store) == "table"
+        and store[object_address(victim_go)] or nil
+    local capi = rawget(_G, "__iris_wild_cats_api")
+    if not (capi and type(capi.play_trigger_on) == "function") then
+        return false, "wild cats audio api missing"
+    end
+    if rec and tonumber(rec.trigger_id) then
+        local ok, err = capi.play_trigger_on(victim_go, rec.trigger_id)
+        if ok then return true, "cried" end
+        rec = nil
+        S.iris_cry_note = tostring(err or "post failed")
+    end
+    -- r10: nothing recorded for THIS body (it was grabbed before anything
+    -- hurt it). Borrow: try every cry we have heard -- play_trigger_on only
+    -- posts a trigger that exists on the TARGET's own lists, so a wolf's
+    -- yelp simply refuses to play on a goblin. The species filter is free.
+    local tried = 0
+    if type(store) == "table" then
+        for _, other in pairs(store) do
+            if tonumber(other.trigger_id) then
+                tried = tried + 1
+                local ok2 = capi.play_trigger_on(victim_go, other.trigger_id)
+                if ok2 then return true, "cried (borrowed)" end
+            end
+            if tried > 8 then break end
+        end
+    end
+    return false, string.format("no cry for this body (%d borrowed tried)", tried)
+end
+rawset(_G, "IrisPlayHurtCry", iris_play_hurt_cry)
+
 function iris_wyrm_install_incoming_fx()
     rawset(_G, "__iris_wyrm_incoming_fx_pre", function(args)
         local storage = thread.get_hook_storage()
@@ -5327,6 +5828,41 @@ function iris_wyrm_install_incoming_fx()
         storage.iris_wyrm_prey_di = nil
         storage.iris_wyrm_prey_dmg = nil
         storage.iris_wyrm_prey_addr = nil
+        storage.iris_blood_di = nil
+        storage.iris_blood_dmg = nil
+        storage.iris_blood_addr = nil
+        -- ⭐ r7 SHARED BLOOD CAPTURE (runs with or without a wyrm costume --
+        -- the griffin's meal needs a resolved packet for ITS victim too).
+        -- Throttled hard: this is combat-hot code, so at most one capture
+        -- every 0.15s, party bodies excluded, retention capped at 3.
+        pcall(function()
+            local now0 = os.clock()
+            local di0 = sdk.to_managed_object(args[3])
+            if not di0 then return end
+            local d0 = nil
+            pcall(function() d0 = tonumber(di0:get_field("Damage")) end)
+            if not (d0 and d0 > 0.0) then return end
+            local hc0 = sdk.to_managed_object(args[2])
+            local rgo = hc0 and hc0:call("get_GameObject") or nil
+            if not valid(rgo) then return end
+            if iris_wyrm_damage_go_is_party(rgo) then return end
+            -- r10: the VOCAL watch opens on EVERY hit (it is a cheap table
+            -- write) -- it used to sit behind the packet-capture throttle,
+            -- so a body hit inside the 0.15s shadow never had its pain cry
+            -- recorded. Window widened 0.4 -> 0.8s: some species cry late.
+            local watch = rawget(_G, "IrisWyrmPreyVocalWatch")
+            if not (watch and (tonumber(watch.until_t) or 0.0) > now0) then
+                rawset(_G, "IrisWyrmPreyVocalWatch", {
+                    addr = object_address(rgo), until_t = now0 + 0.8,
+                })
+            end
+            if now0 < (tonumber(S.iris_blood_cap_at) or 0.0) then return end
+            S.iris_blood_cap_at = now0 + 0.15
+            storage.iris_blood_di = di0
+            storage.iris_blood_dmg = d0
+            storage.iris_blood_addr = object_address(rgo)
+            storage.iris_blood_go = rgo
+        end)
         local costume = S.costume
         if not (costume and costume.wyrm_kind and valid(costume.horse_go)) then
             return
@@ -5386,6 +5922,20 @@ function iris_wyrm_install_incoming_fx()
     end)
     rawset(_G, "__iris_wyrm_incoming_fx_post", function()
         local storage = thread.get_hook_storage()
+        -- r7: retain the shared blood packet (add_ref inside the store)
+        do
+            local bdi = storage.iris_blood_di
+            local baddr = storage.iris_blood_addr
+            local bdmg = storage.iris_blood_dmg
+            storage.iris_blood_di = nil
+            storage.iris_blood_addr = nil
+            storage.iris_blood_dmg = nil
+            local bgo = storage.iris_blood_go
+            storage.iris_blood_go = nil
+            if bdi and baddr then
+                pcall(function() iris_blood_pkt_store(baddr, bdi, bdmg, bgo) end)
+            end
+        end
         -- r9: retain the prey's resolved packet for chomp replay. add_ref is
         -- the managed-retention pattern (DismemberLab:504); the previous
         -- packet is released on replacement so only one ref is ever held.
@@ -5511,6 +6061,61 @@ function iris_wyrm_native_hit_capture_flush()
         end)
     end
 end
+
+-- r26 (Aurora: RT to mount at a slightly wrong angle fires the native
+-- PICK-UP against the armed wyrm's frozen FSM and the player takes a
+-- knockback): while the player stands beside a wyrm-RITE companion (the
+-- armed costume, or the live wyrm-grown bridge companion), the native grab
+-- entry point app.Human.requestTryCatch is SKIPPED entirely. RT then does
+-- nothing but mount. Ordinary (non-rite) wolves/cats keep their normal
+-- pickup -- they are never the bridge companion.
+function iris_wyrm_install_grab_block()
+    rawset(_G, "__iris_wyrm_grab_block_check", function()
+        local go = nil
+        local costume = S.costume
+        if costume and costume.wyrm_kind and valid(costume.horse_go) then
+            go = costume.horse_go
+        else
+            pcall(function()
+                local b = rawget(_G, "IrisGriffinBridge")
+                local ch = b and b.griffin and b.griffin()
+                local g = ch and ch:call("get_GameObject")
+                local id = g and tostring(ch:call("get_CharaIDString")) or ""
+                if valid(g)
+                    and (id:find("^ch223") or id:find("^ch260")) then
+                    go = g
+                end
+            end)
+        end
+        if not valid(go) then return false end
+        local pp = universal_pos(player_game_object())
+        local wp = universal_pos(go)
+        return pp ~= nil and wp ~= nil and distance(pp, wp) <= 3.2
+    end)
+    if rawget(_G, "__iris_wyrm_grab_block_hook") then return true end
+    local td = sdk.find_type_definition("app.Human")
+    local m = td and td:get_method(
+        "requestTryCatch(app.Human.TryCatchType, System.Boolean, System.Boolean, System.Boolean)")
+    if not m then
+        m = td and td:get_method("requestTryCatch")
+    end
+    if not m then return false end
+    sdk.hook(m, function(args)
+        local check = rawget(_G, "__iris_wyrm_grab_block_check")
+        local blocked = false
+        if check then
+            local ok, r = pcall(check)
+            blocked = ok and r == true
+        end
+        if blocked then
+            S.wyrm_grab_blocked = (tonumber(S.wyrm_grab_blocked) or 0) + 1
+            return sdk.PreHookResult.SKIP_ORIGINAL
+        end
+    end, function(retval) return retval end)
+    rawset(_G, "__iris_wyrm_grab_block_hook", true)
+    return true
+end
+pcall(iris_wyrm_install_grab_block)
 
 -- r17: rewrite the EPV converter's attack-side positions to the victim's
 -- live head while OUR replay is in flight (flag-gated; natural hits pass
@@ -5842,6 +6447,16 @@ function iris_wyrm_pin_maul_start(lease, now)
         target_addr = object_address(lease.target),
         until_t = lease.until_t,
     })
+    -- r25: MUTE the mount's native vocals for the maul window -- the wolf's
+    -- push-down clip carries a baked whimper (the panther's doesn't). The
+    -- WildCats trigger hook suppresses native posts under this flag; our
+    -- growl passes via manual_wolf_post_depth. TTL covers any leaked flag.
+    pcall(function()
+        rawset(_G, "IrisWyrmMuteMountVocals", {
+            addr = object_address(costume.horse_go),
+            until_t = now + 5.2,
+        })
+    end)
     -- r24: the growl posts HERE (r18's field-proven site -- the r19 move to
     -- the RT press went silent: its downed-target pre-probe missed). The
     -- repeat beat in the tick carries it from here to the maul's end.
@@ -6092,6 +6707,7 @@ function iris_wyrm_native_bite_finish(reason)
     iris_wyrm_combat_trace_flush(lease, reason)
     S.wyrm_native_lease = nil
     rawset(_G, "IrisWyrmNativeAttackLease", nil)
+    rawset(_G, "IrisWyrmMuteMountVocals", nil)   -- r25: whimper mute off
     if S.wyrm_attack == lease then S.wyrm_attack = nil end
     S.wyrm_atk_until = nil
     S.wyrm_atk_hold = nil
@@ -6346,6 +6962,8 @@ function iris_wyrm_native_bite_start(costume, now, spec)
         -- in and the jaw overshoots). The combo links already turn 180°; the
         -- OPENER was still capped at 105° and could never come back around.
         aim_deg = 180.0, aim_secs = 0.14, hard_aim = true,
+        -- 08-19: bites get the maul's any-direction mouth-onto-prey drive
+        omni_converge = true,
         combo_kind = "bite", combo_index = 1,
         combo_transition_at = 1.02, combo_end_at = 1.15,
         impact_at = 0.62,
@@ -6432,6 +7050,7 @@ function iris_wyrm_native_bite_start(costume, now, spec)
         force_contact = spec.force_contact == true,
         damage_kind = spec.damage_kind,
         direct_maul = spec.direct_maul == true,
+        omni_converge = spec.omni_converge == true,
         howl_blast = spec.howl_blast == true,
         howl_blast_at = tonumber(spec.howl_blast_at) or 0.72,
         howl_sound_at = tonumber(spec.howl_sound_at),
@@ -7555,28 +8174,18 @@ function iris_wyrm_attack_tick()
                 costume.native_controller_live and 1 or -1)
             return
         elseif pressed.maul then
-            -- r17: RT priority -- a DOWNED LIVING target always wins (the
-            -- maul); the meal fires only when no such target is in reach,
-            -- combat or not.
-            local maul_target = nil
-            pcall(function()
-                local t = iris_wyrm_attack_target(costume, {
-                    slot = "maul", range = 7.5, width = 6.0,
-                    aim_deg = 180.0, vertical = 12.0,
-                })
-                if valid(t) then
-                    local hp = nil
-                    pcall(function()
-                        local hc = t:call("get_HitController")
-                        hp = hc and tonumber(hc:call("get_Hp"))
-                    end)
-                    local down = iris_wyrm_native_target_down_state(t)
-                    if down == true and hp and hp > 0.5 then
-                        maul_target = t
-                    end
-                end
-            end)
-            if not maul_target and S.wyrm_eat_ready and S.wyrm_eat_corpse then
+            -- r26 (Aurora's field report: mid-fight, the wolf ignored the
+            -- enemy and ate a bystander corpse): ANY LIVING target in the
+            -- maul cone blocks the meal -- r17's down==true requirement was
+            -- the hole (the down flag reads unknown mid-fall). The maul
+            -- path itself decides downed-vs-held.
+            -- r27: fresh whole-list check at press time (the r26 cone probe
+            -- used the phantom get_HitController and never fired), OR'd with
+            -- the scan's cached verdict from <=0.8s ago.
+            local living_target = S.wyrm_living_near
+                or iris_wyrm_living_enemy_near(costume,
+                    tonumber(C.wyrm_eat_combat_radius) or 14.0) ~= nil
+            if not living_target and S.wyrm_eat_ready and S.wyrm_eat_corpse then
                 if iris_wyrm_eat_start(costume, now) then return end
             end
             iris_wyrm_native_bite_start(costume, now, {
@@ -10159,7 +10768,7 @@ local function costume_tick()
                         local az5 = ox_tf:call("get_AxisZ")
                         hy = math.atan(az5.x, az5.z)
                     end
-                    if turn ~= 0 then
+                    if turn ~= 0 and not S.wyrm_eat then
                         local dash5 = math.max(0.1, tonumber(C.speed_dash) or 9.5)
                         local sfrac5 = math.max(0.0, math.min(1.0,
                             (tonumber(costume.cur_speed) or 0.0) / dash5))
@@ -10564,7 +11173,10 @@ local function costume_tick()
                     -- positive along, so post-pounce (prey under the belly,
                     -- run 12: along=-0.94) it stood still and RT withheld.
                     local maul_dx, maul_dz = 0.0, 0.0
-                    if lease and lease.direct_maul
+                    -- 08-19: the bite chain shares the channel (omni_converge)
+                    -- so a victim BEHIND the tail is reachable, not just the
+                    -- maul's downed prey.
+                    if lease and (lease.direct_maul or lease.omni_converge)
                         and not lease.full_native_controller
                         and (lease.phase ~= "maul"
                             or now_d <= (tonumber(lease.maul_converge_until)
@@ -12676,7 +13288,10 @@ local function mountcam_wall_pull(lx, ly, lz, cx, cy, cz)
 end
 
 local function mountcam_apply()
-    if C.mountcam_enabled == false then
+    -- 08-19: a live GUEST camera request (below) must survive this toggle --
+    -- it is another mount system's scene, not the wolf ride camera
+    if C.mountcam_enabled == false
+        and rawget(_G, "IrisGuestCam") == nil then
         S.mountcam_state, S.mountcam_look = nil, nil
         S.mountcam_kick_release = nil
         S.mountcam_occl, S.mountcam_pull = 0, 1.0   -- r77: clear WITH the state
@@ -12694,6 +13309,111 @@ local function mountcam_apply()
             menu_open = gui and gui:call("isPausedGUI") == true
         end)
         if menu_open then return end
+    end
+    -- ⭐ 08-19 GUEST CAMERA: another IRIS mount system (the griffin's meal
+    -- scene) may borrow this proven lateUpdate camera writer for a short
+    -- take. Publish _G.IrisGuestCam = {cam={x,y,z}, look={x,y,z}, until_t}
+    -- every frame in RENDER space; stop publishing (or let until_t lapse)
+    -- and the native camera resumes on its own. Deliberately ahead of the
+    -- ride branch: a guest scene is an explicit, short-lived request.
+    do
+        local guest = rawget(_G, "IrisGuestCam")
+        if type(guest) == "table" then
+            if os.clock() > (tonumber(guest.until_t) or 0.0) then
+                rawset(_G, "IrisGuestCam", nil)
+            elseif type(guest.cam) == "table"
+                and type(guest.look) == "table" then
+                local ex = tonumber(guest.cam.x) or 0.0
+                local ey = tonumber(guest.cam.y) or 0.0
+                local ez = tonumber(guest.cam.z) or 0.0
+                -- ⭐ r13 BLEND-OUT (Aurora: "there's a jarring change in
+                -- camera" when a scene ends). A guest may publish
+                -- blend_out=true with a longer until_t: we then ease from our
+                -- shot toward whatever the NATIVE controller computed this
+                -- frame (readable here because our hook runs after it, before
+                -- we overwrite), so control returns without a cut.
+                local bt = 0.0
+                if guest.blend_out and tonumber(guest.blend_t0) then
+                    local dur = math.max(0.15,
+                        (tonumber(guest.until_t) or 0.0)
+                            - (tonumber(guest.blend_t0) or 0.0))
+                    bt = math.max(0.0, math.min(1.0,
+                        (os.clock() - (tonumber(guest.blend_t0) or 0.0)) / dur))
+                    -- ease out so it leaves gently and arrives exactly
+                    bt = bt * bt * (3.0 - 2.0 * bt)
+                end
+                if bt > 0.0 then
+                    pcall(function()
+                        local cam0 = sdk.get_primary_camera()
+                        local xf0 = cam0 and cam0:call("get_GameObject")
+                            :call("get_Transform")
+                        local np = xf0 and xf0:call("get_Position")
+                        if np then
+                            ex = ex + ((tonumber(np.x) or ex) - ex) * bt
+                            ey = ey + ((tonumber(np.y) or ey) - ey) * bt
+                            ez = ez + ((tonumber(np.z) or ez) - ez) * bt
+                            -- and let the aim drift toward the native's own
+                            -- forward so the final frame matches its heading
+                            local az0 = xf0:call("get_AxisZ")
+                            if az0 then
+                                local lx = ex - (tonumber(az0.x) or 0.0) * 8.0
+                                local ly = ey - (tonumber(az0.y) or 0.0) * 8.0
+                                local lz = ez - (tonumber(az0.z) or 0.0) * 8.0
+                                guest.look = {
+                                    x = (tonumber(guest.look.x) or lx)
+                                        + (lx - (tonumber(guest.look.x) or lx)) * bt,
+                                    y = (tonumber(guest.look.y) or ly)
+                                        + (ly - (tonumber(guest.look.y) or ly)) * bt,
+                                    z = (tonumber(guest.look.z) or lz)
+                                        + (lz - (tonumber(guest.look.z) or lz)) * bt,
+                                }
+                            end
+                        end
+                    end)
+                end
+                local dx = (tonumber(guest.look.x) or 0.0) - ex
+                local dy = (tonumber(guest.look.y) or 0.0) - ey
+                local dz = (tonumber(guest.look.z) or 0.0) - ez
+                local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if l > 1e-6 then
+                    -- same sky-up basis as the ride camera below
+                    local cfx, cfy, cfz = -dx / l, -dy / l, -dz / l
+                    local rx, ry, rz = cfz, 0.0, -cfx
+                    local rl = math.sqrt(rx * rx + ry * ry + rz * rz)
+                    if rl > 1e-6 then
+                        rx, ry, rz = rx / rl, ry / rl, rz / rl
+                        local ux = cfy * rz - cfz * ry
+                        local uy = cfz * rx - cfx * rz
+                        local uz = cfx * ry - cfy * rx
+                        local q = mountcam_m3_to_quat(
+                            {{rx, ux, cfx}, {ry, uy, cfy}, {rz, uz, cfz}})
+                        if q then
+                            pcall(function()
+                                local cam = sdk.get_primary_camera()
+                                local xf = cam and cam:call("get_GameObject")
+                                    :call("get_Transform")
+                                if not xf then return end
+                                local p = xf:call("get_Position")
+                                p.x, p.y, p.z = ex, ey, ez
+                                xf:call("set_Position", p)
+                                local qq = xf:call("get_Rotation")
+                                qq.x, qq.y, qq.z, qq.w = q.x, q.y, q.z, q.w
+                                xf:call("set_Rotation", qq)
+                            end)
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- guest handled above; with the ride camera toggled off there is
+    -- nothing further to do
+    if C.mountcam_enabled == false then
+        S.mountcam_state, S.mountcam_look = nil, nil
+        S.mountcam_kick_release = nil
+        S.mountcam_occl, S.mountcam_pull = 0, 1.0
+        return
     end
     local ride_live = S.ride_pose_on and S.costume
         and valid(S.costume.horse_go)
@@ -14453,16 +15173,10 @@ local function horse_ride_hud_tick()
         if type(blessing_button) == "table" then
             blessing_button.device = RIDE_HUD_INPUT_DEVICE
         end
-        -- r24: publish device + cluster visibility for the fake dismount
-        -- line -- it must fade exactly when the vanilla cluster does.
-        -- READING PlayState is safe (only SETTING it is the mount CTD).
+        -- r24: publish the device for the fake dismount line's glyph.
+        -- (r25: cluster visibility now rides _G.IrisRideNativeHudVisible,
+        -- published above -- the PlayState probe never caught the fade.)
         S.wyrm_hud_device = RIDE_HUD_INPUT_DEVICE
-        pcall(function()
-            local obj = HUD_GETOBJ:call(root, RIDE_HUD_LABELS[1][1])
-            local ps = obj and tostring(obj:call("get_PlayState")) or ""
-            S.wyrm_hud_cluster_hidden =
-                ps:find("DISABLE", 1, true) ~= nil
-        end)
         for _, row in ipairs(RIDE_HUD_LABELS) do
             -- ⛔⛔⛔ NEVER set_Message("") -- THE MOUNT CTD (2026-08-09, found by Aurora's
             -- own observation: "it works fine on the griffin and we use it for the
@@ -16558,12 +17272,191 @@ re.on_frame(function()
             S.status = "summon: timed out waiting for the pair"
         elseif os.clock() - (S.summon_try or 0) > 2.0 then
             S.summon_try = os.clock()
-            costume_start()
+            -- ⭐ 08-20 (Aurora: "delete the ox-related stuff, it was an early
+            -- glitchy prototype of fusing an invisible ox to the horse so it
+            -- could be climbed"). The summon watcher was the LAST live user
+            -- of that path -- it waited for a real ox within 35m and grafted
+            -- the horse onto it. Oxless has been the proven rig since 07-24:
+            -- the horse IS its own drive body and keeps its own physics.
+            local best9 = nil
+            pcall(function()
+                local pp9 = universal_pos(player_game_object())
+                local bd9 = 35.0
+                for _, rec9 in ipairs(horses() or {}) do
+                    if valid(rec9.game_object) then
+                        local hp9 = universal_pos(rec9.game_object)
+                        local d9 = (pp9 and hp9) and distance(pp9, hp9) or 99.0
+                        if d9 < bd9 then best9, bd9 = rec9, d9 end
+                    end
+                end
+            end)
+            if best9 then costume_start_oxless(best9) end
             if S.costume then
                 S.summon_watch = nil
                 S.status = "summon: MOUNT READY — climb on"
             end
         end
+    end
+    -- ⭐⭐ 08-20 THE REAL REASON B NEVER APPEARED (Aurora: reset scripts, stood
+    -- at Chad, no prompt). The mount-capture tick below is gated on
+    -- `S.costume` -- the dressed rodeo state -- and a SCRIPT RESET destroys
+    -- it. Until something re-summons there is no costume, so nothing
+    -- publishes and B does nothing: the mount was only ever offerable on a
+    -- horse we already held state for.
+    -- So: offer the mount for a nearby horse we OWN even with no costume,
+    -- and build the costume on the press -- ready_tamed_mount is exactly
+    -- that constructor, and it is what the stable's own bridge calls.
+    if not S.ride_pose_on and not (S.costume and valid(S.costume.horse_go)) then
+        pcall(function()
+            -- ⛔⛔ 08-20 r4 (Aurora: "now I'm struggling to summon the wolf and
+            -- puma"). B IS ALSO "CANCEL". This offer reads pad-B every frame,
+            -- so while an IRIS screen is open -- the STABLE, where you summon
+            -- a companion -- a B press meant for the menu could seat her on a
+            -- horse standing nearby. Every IRIS screen stands this down, the
+            -- same flags IrisPromptBar refuses to publish under.
+            if rawget(_G, "IrisStableUIOpen") == true
+                or rawget(_G, "IrisFurnishUIOpen") == true
+                or rawget(_G, "IrisFurnishFootprint") == true
+                or rawget(_G, "IrisFurnishPlacing") == true then
+                S.mount_offer_status = "stood down (an IRIS screen is open)"
+                S.mount_press_latch = true   -- eat this edge; never fire on close
+                return
+            end
+            if type(iris_input_blocked) == "function" and iris_input_blocked() then
+                S.mount_offer_status = "stood down (menu/overlay)"
+                S.mount_press_latch = true
+                return
+            end
+            local ppos = universal_pos(player_game_object())
+            if not ppos then return end
+            -- ⛔ THROTTLE THE SWEEP. findComponents(app.Character) every frame
+            -- on a CPU-bound game is exactly the kind of cost that shows up as
+            -- "everything feels sticky" -- 4 Hz is plenty for a proximity
+            -- prompt, and the CACHED result still answers the press instantly.
+            local now9 = os.clock()
+            local due = now9 >= (tonumber(S.mount_scan_at) or 0.0)
+            if due then S.mount_scan_at = now9 + 0.25 end
+            if not due then
+                local cached = S.mount_scan_best
+                if cached and valid(cached.game_object) then
+                    local native_b0 = C.mount_button_native_b ~= false
+                    if native_b0 then
+                        iris_mount_prompt_publish("mount_rodeo",
+                            cached.game_object, tonumber(S.mount_scan_bestd) or 3.0)
+                    end
+                    local p0 = native_b0 and iris_mount_b_down() or grab_pressed()
+                    if p0 and not S.mount_press_latch
+                        and os.clock() >= (S.mount_cooldown_until or 0)
+                        and (not native_b0
+                            or iris_mount_b_may_fire("mount_rodeo")) then
+                        if ready_tamed_mount(cached) then seat_mount() end
+                    end
+                    S.mount_press_latch = p0
+                end
+                return
+            end
+            -- ⛔ 08-20 r2: do NOT trust `horses()`. That registry is only
+            -- written when IrisWildHorses CONVERTS a doe into a horse, so a
+            -- script reset leaves an already-standing horse unregistered and
+            -- invisible (Aurora's panel read "Tamed: 0" for exactly that
+            -- reason). Sweep the scene instead and ask the SAVED pet roster
+            -- who owns it -- that survives resets, the registry does not.
+            local best, bestd = nil, 4.5
+            S.mount_scan_seen, S.mount_scan_last = 0, nil
+            local seen = {}
+            for _, rec in ipairs(horses() or {}) do
+                if valid(rec.game_object) then
+                    seen[object_address(rec.game_object)] = rec
+                end
+            end
+            pcall(function()
+                local sm = sdk.get_native_singleton("via.SceneManager")
+                local smt = sdk.find_type_definition("via.SceneManager")
+                local scene = sdk.call_native_func(sm, smt, "get_CurrentScene()")
+                local chars = scene and scene:call(
+                    "findComponents(System.Type)", sdk.typeof("app.Character"))
+                local api = rawget(_G, "IrisTaming")
+                for _, ch in ipairs(chars and chars:get_elements() or {}) do
+                    pcall(function()
+                        local id = tostring(ch:call("get_CharaIDString") or "")
+                        -- the horse rides the doe chassis (ch299011); wolves
+                        -- and cats have their own wyrm-mount path
+                        if not id:match("^ch299011") then return end
+                        local hgo = ch:call("get_GameObject")
+                        if not valid(hgo) then return end
+                        local hp = universal_pos(hgo)
+                        local d = hp and distance(ppos, hp) or 99.0
+                        if d >= bestd then return end
+                        local ga = hgo:get_address()
+                        S.mount_scan_seen = (tonumber(S.mount_scan_seen) or 0) + 1
+                        -- ⛔ 08-20 r3 OWNERSHIP IS NOT SESSION STATE.
+                        -- is_pet_body/has_pet both walk S.tamed, which holds
+                        -- only THIS session's tames (IrisTaming says so in its
+                        -- own comment) -- so a horse tamed before the reload
+                        -- always read "not mine" and the offer never appeared.
+                        -- Accept any of the durable signals instead:
+                        local why = "unowned"
+                        local mine = false
+                        if seen[ga] and seen[ga].tamed == true then
+                            mine, why = true, "registry tamed"
+                        end
+                        if not mine and api and api.is_pet_body and ga then
+                            pcall(function()
+                                if api.is_pet_body(ga) then
+                                    mine, why = true, "taming roster"
+                                end
+                            end)
+                        end
+                        if not mine then
+                            -- the active stable companion (survives resets --
+                            -- the bridge re-acquires its live body)
+                            pcall(function()
+                                local B = rawget(_G, "IrisGriffinBridge")
+                                if B and B.griffin then
+                                    local _, cgo = B.griffin()
+                                    if cgo and cgo:get_address() == ga then
+                                        mine, why = true, "stable companion"
+                                    end
+                                end
+                            end)
+                        end
+                        if not mine and seen[ga] then
+                            -- registered kind=="horse" = a body THIS MOD
+                            -- converted from a doe. Wild ones are still
+                            -- offered: mounting one starts the break, which
+                            -- is what the panel has always advertised.
+                            mine, why = true, "registered horse"
+                        end
+                        S.mount_scan_last = string.format("%.1fm %s", d, why)
+                        if not mine then return end
+                        best = seen[ga] or { kind = "horse", game_object = hgo }
+                        bestd = d
+                    end)
+                end
+            end)
+            if not best then
+                S.mount_scan_best, S.mount_scan_bestd = nil, nil
+                S.mount_offer_status = string.format(
+                    "no mountable horse in 4.5m (saw %d ch299011; last: %s)",
+                    tonumber(S.mount_scan_seen) or 0,
+                    tostring(S.mount_scan_last or "none in range"))
+                return
+            end
+            S.mount_scan_best, S.mount_scan_bestd = best, bestd
+            local native_b = C.mount_button_native_b ~= false
+            if native_b then
+                iris_mount_prompt_publish("mount_rodeo", best.game_object, bestd)
+            end
+            local pressed = native_b and iris_mount_b_down() or grab_pressed()
+            S.mount_offer_status = string.format(
+                "%.1fm (no costume yet) pressed=%s", bestd, tostring(pressed))
+            if pressed and not S.mount_press_latch
+                and os.clock() >= (S.mount_cooldown_until or 0)
+                and (not native_b or iris_mount_b_may_fire("mount_rodeo")) then
+                if ready_tamed_mount(best) then seat_mount() end
+            end
+            S.mount_press_latch = pressed
+        end)
     end
     dismount_hold_tick()
     -- MOUNT CAPTURE tick (above the rodeo gate — mount UX, not rodeo
@@ -16571,24 +17464,54 @@ re.on_frame(function()
     -- E/RT while seated = dismount
     if S.costume and valid(S.costume.horse_go) then
         if not S.ride_pose_on then
-            -- OXLESS press-to-mount: no climbable body exists, a plain
-            -- E/RT beside the horse mounts; the suppression window keeps
-            -- the native grab from deadlifting the horse meanwhile
-            if S.costume.oxless then
+            -- ⭐ 08-19 B-MOUNT (Aurora: "use our native B prompt tech...
+            -- and stop RT from being mount"): the native panel offers
+            -- "B Mount" (facing-gated) and B seats you; RT near the mount
+            -- does nothing at all. KB keeps E. Legacy RT behind the toggle.
+            -- ⛔ 08-20 FIX: this whole block used to sit inside
+            -- `if S.costume.oxless` -- the press-to-mount route for horses
+            -- with NO climbable chassis. A horse that HAS its ox chassis
+            -- therefore got no prompt and no press, so B did nothing at all
+            -- (Aurora: "I can't actually press B to mount it, no prompt").
+            -- seat_mount is the universal entry -- IrisHorseMount.mount()
+            -- (the public bridge the stable calls) does exactly this for
+            -- every horse -- so the offer belongs to any costume that is
+            -- not being ridden yet. Only the grab-suppression window stays
+            -- oxless-only: that exists to stop the native grab deadlifting
+            -- a horse with nothing to climb.
+            do
                 local ppos = universal_pos(player_game_object())
                 local hpos = universal_pos(S.costume.horse_go)
                 local near_d = (ppos and hpos)
                     and distance(ppos, hpos) or 99.0
-                local pressed = grab_pressed()
+                local native_b = C.mount_button_native_b ~= false
+                local pressed
+                if native_b then
+                    if near_d < 4.5 then
+                        iris_mount_prompt_publish("mount_rodeo",
+                            S.costume.horse_go, near_d)
+                    end
+                    pressed = iris_mount_b_down()
+                else
+                    pressed = grab_pressed()
+                end
                 if near_d < 4.5 then
-                    S.suppress_grab_until = os.clock() + 0.3
+                    if S.costume.oxless then
+                        S.suppress_grab_until = os.clock() + 0.3
+                    end
                     if pressed and not S.mount_press_latch
                         and os.clock()
-                            >= (S.mount_cooldown_until or 0) then
+                            >= (S.mount_cooldown_until or 0)
+                        and (not native_b
+                            or iris_mount_b_may_fire("mount_rodeo")) then
                         seat_mount()
                     end
                 end
                 S.mount_press_latch = pressed
+                S.mount_offer_status = string.format(
+                    "%.1fm oxless=%s pressed=%s",
+                    near_d, tostring(S.costume.oxless == true),
+                    tostring(pressed == true))
             end
             -- 07-23 field find (diag line): get_IsClimbing = walls/ladders
             -- and reads FALSE during a monster-cling; the proven probe is
@@ -16893,6 +17816,14 @@ re.on_draw_ui(function()
     end
 
     imgui.text("Stage: " .. tostring(S.stage))
+    -- ⛔ 08-20: this line is deliberately OUTSIDE every tree node. The mount
+    -- offer failing silently cost three rounds, and the receipt for it was
+    -- itself buried in a collapsed section.
+    imgui.text("Mount offer: " .. tostring(S.mount_offer_status or "-"))
+    if S.mount_offer_refused then
+        imgui.text("  refused: " .. tostring(S.mount_offer_refused))
+    end
+    imgui.text("  (seat/pose/camera sliders appear once you are RIDING)")
     if imgui.tree_node("Blessing cooldown HUD alignment") then
         imgui.text("  Gamepad draws a circle; keyboard draws a square.")
         imgui.text("  Offsets are 1080p pixels and scale with resolution.")
@@ -17799,6 +18730,16 @@ re.on_draw_ui(function()
                 "RT eats corpses out of combat##wyrm_eat_enabled",
                 C.wyrm_eat_enabled ~= false)
             if wec then C.wyrm_eat_enabled = wev; save_config() end
+            imgui.text("  mount offer: "
+                .. tostring(S.mount_offer_status or "(no costume near)"))
+            if S.mount_offer_refused then
+                imgui.text("  offer refused: "
+                    .. tostring(S.mount_offer_refused))
+            end
+            local mbc, mbv = imgui.checkbox(
+                "Mount with native B prompt (off = legacy E/RT)##mount_b",
+                C.mount_button_native_b ~= false)
+            if mbc then C.mount_button_native_b = mbv; save_config() end
             -- r24: dismount hint placement (Aurora asked for the sliders)
             local dhx, dhxv = imgui.slider_float(
                 "dismount hint X offset##wyrmdhx",
@@ -17816,6 +18757,10 @@ re.on_draw_ui(function()
             imgui.text("  always take RT priority; the kill becomes fading remains.")
             if S.wyrm_eat_scan_status then
                 imgui.text("  eat scan: " .. tostring(S.wyrm_eat_scan_status))
+            end
+            if S.wyrm_eat_heal_receipt then
+                imgui.text("  eat heal: "
+                    .. tostring(S.wyrm_eat_heal_receipt))
             end
             if S.wyrm_last_press then
                 imgui.text("  last combat press: "
@@ -17997,9 +18942,8 @@ re.on_draw_ui(function()
                 S.status = "oxless: no live horse nearby"
             end
         end
-        if imgui.button("LEGACY costume rig (ox ghost)##oldrig") then
-            costume_start()
-        end
+        -- 08-20: the LEGACY ox-ghost rig button is GONE. Nothing calls
+        -- costume_start() any more; the ox prototype is retired.
         -- 07-24: griffin experiment REVERTED (Aurora) — button removed so
         -- the griffin path can't be armed. The costume_start_griffin_
         -- experiment / pose_only functions remain as dead code pending a
@@ -18130,52 +19074,7 @@ re.on_draw_ui(function()
         -- ClimbedRegionChecker / WrestleCtrl) via createComponent CTD'd
         -- the game. Do not re-attempt; the hold is transform-drive now.
         imgui.text("(climb-graft experiment retired: CTD; hold = transform-drive)")
-        imgui.text("Graft v2 resources: " .. tostring(GR.status))
-        if imgui.button("GRAFT v2: build climb rig on nearest horse (SAVE FIRST)") then
-            local record = horses()[1]
-            if not record then
-                S.status = "graft v2: no live horse"
-            else
-                local ok, report = graft_v2(record.game_object)
-                S.status = "graft v2: " .. tostring(report)
-            end
-        end
-        if imgui.button("Check graft status (post-frame readback)") then
-            if not (GR.set_component and valid(GR.set_component)) then
-                S.status = "graft check: no live Set component"
-            else
-                local report = {}
-                pcall(function()
-                    GR.set_component:call("set_Enabled", true)
-                    GR.set_component:call("set_Update", true)
-                end)
-                pcall(function()
-                    report[#report + 1] = "count="
-                        .. tostring(GR.set_component:call(
-                            "getSkinningMeshInfosCount"))
-                    report[#report + 1] = "enabled="
-                        .. tostring(GR.set_component:call("get_Enabled"))
-                    report[#report + 1] = "current="
-                        .. tostring(GR.set_component:call("get_CurrentEnabled"))
-                    report[#report + 1] = "update="
-                        .. tostring(GR.set_component:call("get_Update"))
-                end)
-                pcall(function()
-                    local aabb = GR.set_component:call("get_BoundingAabb")
-                    local mn = aabb and aabb:call("getMin")
-                    local mx = aabb and aabb:call("getMax")
-                    if mn and mx then
-                        report[#report + 1] = string.format(
-                            "aabb=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)",
-                            mn.x, mn.y, mn.z, mx.x, mx.y, mx.z)
-                    else
-                        report[#report + 1] = "aabb=nil"
-                    end
-                end)
-                S.status = "graft check: " .. table.concat(report, " | ")
-                log(S.status)
-            end
-        end
+        imgui.text("(ox climb-graft rig REMOVED 08-20 - the prototype is retired)")
         -- Graft-v2 prep: pure REFLECTION dump of the climb component types
         -- (fields + zero-arg setters). No instantiation — safe anywhere.
         if imgui.button("Dump climb component TYPE DEFS (safe)") then

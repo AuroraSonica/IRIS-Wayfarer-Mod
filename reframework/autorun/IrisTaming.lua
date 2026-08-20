@@ -8,8 +8,13 @@
 -- warp-follow (native nav research pending), tells are notify-lines (in-world poses later).
 local MOD = "IrisTaming"
 local HC = {
-    mesh = "character/ch/iris_housecat/iris_housecat.mesh",
-    mdf = "riftspeak/housecat/iris_housecat_v07.mdf2",
+    -- STRAY CAT (08-19): the same asset names live inside the v0.8 house-cat
+    -- PAK, so a loose file at those paths may be shadowed by the pak copy.
+    -- These names appear in NO pak, which removes that ambiguity entirely --
+    -- and, being fresh paths, they also dodge the engine's per-path resource
+    -- cache, so switching to them does not need a game restart.
+    mesh_stray = "character/ch/iris_straycat/iris_straycat.mesh",
+    mdf_stray = "riftspeak/straycat/iris_straycat.mdf2",
     -- W3 cat clip catalogue (v8 retarget), shipped in the v0.9+ pak ONLY --
     -- older paks do not carry these paths, hence the separate arm latch.
     -- ⛔ The 17-take CE-synthesized container crashed the engine parser
@@ -24,10 +29,194 @@ local HC = {
     -- enable/disable, no loose-file io weirdness. v0.9.4 serves the POLISH
     -- catalogue at the canonical full path; diagnostics keep the two proven
     -- foreign sources.
-    bank_sources = {
-        { label = "NATIVE rabbit ch99_200_com (vanilla)", path = "animation/ch/ch99/200/motlist/ch99_200_com.motlist" },
-        { label = "PROVEN horse locomotion (CE, v2.1 pak)", path = "character/ch/ch99_011/horse_locomotion.motlist" },
-        { label = "W3 cat AXIS-FIX 17-take (v0.9.6)", path = "character/ch/iris_housecat/iris_housecat_full.motlist" },
+    -- ⭐ ONE BANK (Aurora 08-20: "exclude all the old stuff"). The W3 catalogue
+    -- and the two diagnostic banks are GONE -- the cat has a purpose-built
+    -- 21-clip Stray bank and nothing else ships for it.
+    bank_path = "character/ch/iris_straycat/iris_straycat.motlist",
+    -- ⭐ THE CLIP ROSTER. ⛔ THIS TABLE IS THE ONLY LEGAL SOURCE OF A CLIP ID.
+    -- Ids are 1-based and were read back out of the motlist by frame count,
+    -- never guessed. A wrong id on this think-stopped FSM is a CTD class, so
+    -- the tester may only ever fire HC.clips[i].id.
+    clips = {
+        { id = 1, cat = "core", name = "idle" },
+        { id = 2, cat = "core", name = "idle: shake body" },
+        { id = 3, cat = "core", name = "grooming 1" },
+        { id = 4, cat = "core", name = "grooming 2" },
+        { id = 5, cat = "core", name = "grooming 3 (sit, clean face)" },
+        { id = 6, cat = "core", name = "walk" },
+        { id = 7, cat = "core", name = "run" },
+        { id = 8, cat = "core", name = "eat: start" },
+        { id = 9, cat = "core", name = "eat: loop" },
+        { id = 10, cat = "core", name = "eat: end" },
+        { id = 11, cat = "core", name = "drink: start" },
+        { id = 12, cat = "core", name = "drink: loop" },
+        { id = 13, cat = "core", name = "drink: end" },
+        { id = 14, cat = "core", name = "sleep: start" },
+        { id = 15, cat = "core", name = "sleep: loop" },
+        { id = 16, cat = "core", name = "sleep: end" },
+        { id = 17, cat = "core", name = "biscuits: start" },
+        { id = 18, cat = "core", name = "biscuits: loop" },
+        { id = 19, cat = "core", name = "biscuits: end" },
+        { id = 20, cat = "core", name = "rub against player L" },
+        { id = 21, cat = "core", name = "rub against player R" },
+        { id = 22, cat = "Action", name = "GoToSleep02" },
+        { id = 23, cat = "Action", name = "Grooming02 Idle" },
+        { id = 24, cat = "Action", name = "GroomingCat LOCATOR" },
+        { id = 25, cat = "Action", name = "JumpInCardboard" },
+        { id = 26, cat = "Action", name = "JumpOutCardboard" },
+        { id = 27, cat = "Action", name = "PUSHBUTTON" },
+        { id = 28, cat = "Action", name = "PlayingWithCat01" },
+        { id = 29, cat = "Action", name = "PlayingWithCat02" },
+        { id = 30, cat = "Action", name = "PlayingWithCat LOCATOR" },
+        { id = 31, cat = "Action", name = "PlayingWithTail01" },
+        { id = 32, cat = "Action", name = "PlayingWithTail02" },
+        { id = 33, cat = "Action", name = "PlayingWithTail02 Idle" },
+        { id = 34, cat = "Action", name = "PlayingWithTail LOCATOR" },
+        { id = 35, cat = "Action", name = "SCRATCHING" },
+        { id = 36, cat = "Action", name = "STANDPUSH" },
+        { id = 37, cat = "Action", name = "ScratchSofa IN" },
+        { id = 38, cat = "Action", name = "ScratchSofa LOOP" },
+        { id = 39, cat = "Action", name = "ScratchSofa OUT" },
+        { id = 40, cat = "Action", name = "ScratchWall IN" },
+        { id = 41, cat = "Action", name = "ScratchWall LOOP" },
+        { id = 42, cat = "Action", name = "ScratchWall OUT" },
+        { id = 43, cat = "Action", name = "SleepToStand 02" },
+        { id = 44, cat = "Action", name = "StandPushOldRadio" },
+        { id = 45, cat = "Action", name = "StandPushRemotControl" },
+        { id = 46, cat = "Action", name = "TAKE" },
+        { id = 47, cat = "Action", name = "VendingMachine" },
+        { id = 48, cat = "Action", name = "WakeUp" },
+        { id = 49, cat = "Action", name = "PushLeftFarToLeft R" },
+        { id = 50, cat = "Action", name = "PushLeftFarToRight L" },
+        { id = 51, cat = "Action", name = "PushLeftToLeft R" },
+        { id = 52, cat = "Action", name = "PushLeftToRight L" },
+        { id = 53, cat = "Action", name = "PushMiddleFarToLeft R" },
+        { id = 54, cat = "Action", name = "PushMiddleFarToRight L" },
+        { id = 55, cat = "Action", name = "PushMiddleToLeft R" },
+        { id = 56, cat = "Action", name = "PushMiddleToRight L" },
+        { id = 57, cat = "Action", name = "PushRightFarToLeft R" },
+        { id = 58, cat = "Action", name = "PushRightFarToRight L" },
+        { id = 59, cat = "Action", name = "PushRightToLeft R" },
+        { id = 60, cat = "Action", name = "PushRightToRight L" },
+        { id = 61, cat = "Action", name = "PlayingWithCat02 Idle" },
+        { id = 62, cat = "Action", name = "PlayingWithCatBis 01" },
+        { id = 63, cat = "Action", name = "PlayingWithCatBis 02" },
+        { id = 64, cat = "Idle", name = "InCardboard Idle" },
+        { id = 65, cat = "Idle", name = "LICKINGBALLS" },
+        { id = 66, cat = "Idle", name = "Lying Idle" },
+        { id = 67, cat = "Idle", name = "PerchWallBack Forward Idle" },
+        { id = 68, cat = "Idle", name = "PerchWallBack Idle" },
+        { id = 69, cat = "Idle", name = "PerchWall Forward Idle" },
+        { id = 70, cat = "Idle", name = "PerchWall Idle" },
+        { id = 71, cat = "Idle", name = "Perch Forward Idle" },
+        { id = 72, cat = "Idle", name = "Perch Idle" },
+        { id = 73, cat = "Idle", name = "SitBalledStrechingToStand Idle" },
+        { id = 74, cat = "Idle", name = "SitBalledWatchAround Idle" },
+        { id = 75, cat = "Idle", name = "SitBalled Idle" },
+        { id = 76, cat = "Idle", name = "SitInBucket03 Idle" },
+        { id = 77, cat = "Idle", name = "SitInBucket Turn L" },
+        { id = 78, cat = "Idle", name = "SitInBucket Turn R" },
+        { id = 79, cat = "Idle", name = "SitToStand Idle" },
+        { id = 80, cat = "Idle", name = "SitWatchingAround Idle" },
+        { id = 81, cat = "Idle", name = "SitWatchingAround LeftFreeB12" },
+        { id = 82, cat = "Idle", name = "Sit Idle" },
+        { id = 83, cat = "Idle", name = "Sit Idle02" },
+        { id = 84, cat = "Idle", name = "Sleeping Idle" },
+        { id = 85, cat = "Idle", name = "Sleeping Idle02" },
+        { id = 86, cat = "Idle", name = "StandHuntingFly Idle" },
+        { id = 87, cat = "Idle", name = "StandHurtBottomL Idle" },
+        { id = 88, cat = "Idle", name = "StandOnOilBarrel Idle" },
+        { id = 89, cat = "Idle", name = "StandScratchingNeck Idle" },
+        { id = 90, cat = "Idle", name = "StandToSit Idle" },
+        { id = 91, cat = "Idle", name = "Stand Idle" },
+        { id = 92, cat = "Idle", name = "Tail02 Idle" },
+        { id = 93, cat = "Idle", name = "Tail03 Idle" },
+        { id = 94, cat = "Idle", name = "Tail05 Idle" },
+        { id = 95, cat = "Idle", name = "ScratchingNeck Idle" },
+        { id = 96, cat = "OTHER", name = "Dying" },
+        { id = 97, cat = "OTHER", name = "InjuredToNormal" },
+        { id = 98, cat = "OTHER", name = "JumpScared" },
+        { id = 99, cat = "OTHER", name = "JumpScared NoSound" },
+        { id = 100, cat = "OTHER", name = "LookAtDown" },
+        { id = 101, cat = "OTHER", name = "LookAtLeft" },
+        { id = 102, cat = "OTHER", name = "LookAtRight" },
+        { id = 103, cat = "OTHER", name = "LookAtUp" },
+        { id = 104, cat = "OTHER", name = "TROTNORMALTOSTANDIDLE" },
+        { id = 105, cat = "Run", name = "RUN NEUTRAK NORMAL LOOP FL" },
+        { id = 106, cat = "Uturn", name = "HangingTurnToTrot180L" },
+        { id = 107, cat = "Uturn", name = "HangingTurnToTrot180R" },
+        { id = 108, cat = "Uturn", name = "HangingTurnToTrot90L" },
+        { id = 109, cat = "Uturn", name = "HangingTurnToTrot90R" },
+        { id = 110, cat = "Uturn", name = "StandTurnToTrot180L" },
+        { id = 111, cat = "Uturn", name = "StandTurnToTrot180R" },
+        { id = 112, cat = "Uturn", name = "UTurn PerchWallBack ToPerchWall Left" },
+        { id = 113, cat = "Uturn", name = "UTurn PerchWallBack ToPerchWall Right" },
+        { id = 114, cat = "Uturn", name = "UTurn PerchWall ToPerchWallBack Left" },
+        { id = 115, cat = "Uturn", name = "UTurn PerchWall ToPerchWallBack Right" },
+        { id = 116, cat = "Uturn", name = "UTurn Perch ToPerch Left" },
+        { id = 117, cat = "Uturn", name = "UTurn Perch ToPerch Right" },
+        { id = 118, cat = "Uturn", name = "Uturn Perch ToTrot Left" },
+        { id = 119, cat = "Uturn", name = "Uturn Perch ToTrot Right" },
+        { id = 120, cat = "Walk", name = "FallWithBackPackTime" },
+        { id = 121, cat = "Walk", name = "LyingWithBackPackFirstTime Idle" },
+        { id = 122, cat = "Walk", name = "StandUpWithBackPackTime" },
+        { id = 123, cat = "Walk", name = "StandWithBackPackFirstTime02" },
+        { id = 124, cat = "Walk", name = "TROT NEUTRAL NORMAL LOOP R" },
+        { id = 125, cat = "Walk", name = "TROT NEUTRAL SLOW LOOP 03" },
+        { id = 126, cat = "Walk", name = "Trot CrouchBottom LOOP R" },
+        { id = 127, cat = "Walk", name = "Trot CrouchPosing LOOP R" },
+        { id = 128, cat = "Walk", name = "Trot CrouchTop LOOP R" },
+        { id = 129, cat = "Walk", name = "Trot Crouch Normal LOOP R" },
+        { id = 130, cat = "Walk", name = "Trot HurtBottomL Slow Loop L" },
+        { id = 131, cat = "Walk", name = "WALK HurtBottomL SLOW LOOP L" },
+        { id = 132, cat = "Walk", name = "WALK NEUTRAL SLOW LOOP L" },
+        { id = 133, cat = "Walk", name = "WALK NEUTRAL SPEEDSLOW LOOP L" },
+        { id = 134, cat = "Walk", name = "WalkBackPackFirstTime02" },
+        { id = 135, cat = "Walk", name = "WalkSmelling LOOP R" },
+        { id = 136, cat = "Walk", name = "WalkToStand Passing L" },
+        { id = 137, cat = "Walk", name = "WalkToStand Passing R" },
+        { id = 138, cat = "Walk", name = "WalkToStand Pushing L" },
+        { id = 139, cat = "Walk", name = "WalkToStand Pushing R" },
+        { id = 140, cat = "Walk", name = "WalkingInOilBarrel Loop" },
+        { id = 141, cat = "posing", name = "LookDROID" },
+        { id = 142, cat = "posing", name = "PosingEDGE01" },
+        { id = 143, cat = "Jump", name = "JUMP L050 H000" },
+        { id = 144, cat = "Jump", name = "JUMP L100 H000" },
+        { id = 145, cat = "Jump", name = "Jump Run L100 H000" },
+        { id = 146, cat = "Jump", name = "JUMP L100 H000 TOSTAND" },
+        { id = 147, cat = "Jump", name = "JUMP L050 H050" },
+        { id = 148, cat = "Jump", name = "JUMP L050 H100" },
+        { id = 149, cat = "Jump", name = "JUMP L050 H150" },
+        { id = 150, cat = "Jump", name = "JUMP L050 H-050" },
+        { id = 151, cat = "Jump", name = "JUMP L050 H-100" },
+        { id = 152, cat = "Jump", name = "JUMP L050 H-150" },
+    },
+    -- categories for the tester filter -- 152 clips in one flat
+    -- dropdown is unusable, so the panel filters by this.
+    clip_cats = { "all", "core", "Action", "Idle", "OTHER", "Run", "Uturn", "Walk", "posing", "Jump" },
+    -- ⭐⭐ THE IDLE DECK (Aurora 08-20: "shuffling a deck, go through all the
+    -- cards, then reshuffle"). ⛔ LITERAL IDS, never derived from cat=="Idle":
+    -- 12 of the 32 Idle clips are PROP-BOUND and would look absurd in a field --
+    -- 64 sits in a cardboard box, 67-72 are perched on walls/ledges, 76-78 sit
+    -- in a bucket, 88 stands on an oil barrel, 87 is an injured pose.
+    -- p = posture, because a sit clip starting from a standing pose snaps.
+    IDLE_DECK = {
+        { id = 1,  p = "stand" }, { id = 2,  p = "stand" }, { id = 3,  p = "stand" },
+        { id = 4,  p = "stand" }, { id = 86, p = "stand" }, { id = 89, p = "stand" },
+        { id = 91, p = "stand" }, { id = 92, p = "stand" }, { id = 93, p = "stand" },
+        { id = 94, p = "stand" }, { id = 95, p = "stand" },
+        { id = 5,  p = "sit" },   { id = 65, p = "sit" },   { id = 74, p = "sit" },
+        { id = 75, p = "sit" },   { id = 80, p = "sit" },   { id = 81, p = "sit" },
+        { id = 82, p = "sit" },   { id = 83, p = "sit" },
+        { id = 66, p = "lie" },   { id = 84, p = "lie" },   { id = 85, p = "lie" },
+    },
+    -- the only two bridges Stray ships. ⛔ There is NO stand<->lying clip, so
+    -- lying is only reachable through sitting; sit<->lie the 8-frame blend covers.
+    IDLE_T = { stand_sit = 90, sit_stand = 79 },
+    -- ⭐ RARITY, not uniform random: finding a calico should mean something.
+    COAT_WEIGHTS = {
+        { "default", 30 }, { "graytabby", 25 }, { "tuxedo", 20 },
+        { "blackcat", 15 }, { "tortoiseshell", 6 }, { "calico", 4 },
     },
     bank_id = 904,
     -- W3 GAIT PROFILE (08-18, the axis-fixed catalogue field-proven): species_clips()
@@ -36,18 +225,25 @@ local HC = {
     -- bank 904 is actually attached (S.housecat_bank_key), so an unregistered bank
     -- can never be asked for clips it does not have.
     -- Contract ids (1-based, field-confirmed): 1 idle 2 walk 3 run 8-11 idles 12-14 eat.
-    species = {
+    -- STRAY bank clip ids (1-based, read back out of the motlist):
+    --  1 idle  2 shakebody  3/4/5 grooming  6 walk  7 run
+    --  8/9/10 eat s/l/e  11/12/13 drink s/l/e  14/15/16 sleep s/l/e
+    --  17/18/19 biscuits s/l/e  20/21 rub L/R   (21 clips; order verified
+    --  against the motlist by frame count, never guessed)
+    species_stray = {
         ground = true,
-        idle = 1, idle_bank = 904, idle_cycle = "1,1,1,8,9",
-        -- CONTINUOUS GAIT (08-18 r2): travel speed comes from a distance spring,
-        -- PlaySpeed = travel / clip natural speed (cadence married to motion --
-        -- no glide by construction). walk_nat/run_nat are the clips' own m/s at
-        -- 1.0 playback (Aurora's calibration sliders); walk_max = gait switch.
-        walk = 2, walk_bank = 904, walk_nat = 0.55,
-        run = 3, run_bank = 904, run_nat = 3.2,
+        idle = 1, idle_bank = 904, idle_cycle = "1,1,1,3,5",
+        walk = 6, walk_bank = 904, walk_nat = 0.55,
+        run = 7, run_bank = 904, run_nat = 3.2,
         walk_max = 2.0, max_speed = 4.5,
-        eat_bank = 904, eat_start = 12, eat_loop = 13,
-        offer_reach = 24.0, offer_speed = 1.5, offer_timeout = 35.0,
+        eat_bank = 904, eat_start = 8, eat_loop = 9, eat_end = 10,
+        drink_start = 11, drink_loop = 12, drink_end = 13,
+        sleep_start = 14, sleep_loop = 15, sleep_end = 16,
+        biscuits_start = 17, biscuits_loop = 18, biscuits_end = 19,
+        -- ⛔ no meow: Stray's CAT_MEOW lives in Animation/Additif and is an
+        -- ADDITIVE DELTA, not a standalone pose -- it imports with every bone
+        -- collapsed on the origin. Using it needs composing onto a base idle.
+        rub_l = 20, rub_r = 21,
         hud_rows = {
             { label = "Return",  pad = "R3",      key = "J" },
             { label = "Ping",    pad = "Y",       key = "V" },
@@ -56,6 +252,12 @@ local HC = {
             { label = "Run",     pad = "L stick", key = "WASD" },
         },
     },
+    -- Served to the cat whenever its bank is NOT attached. Deliberately holds
+    -- NO clip ids and NO *_bank fields: every consumer guards on those
+    -- (`if hcs9 and hcs9.idle_bank then ...`), so the driver simply plays
+    -- nothing. ⚠ Do NOT add an idle_bank here "to be safe" -- several call
+    -- sites fall back to `or 0`, and bank 0 is the RABBIT's native bank.
+    species_quiet = { ground = true, quiet = true },
     prefab = "AppSystem/ch/ch299/Prefab/ch299200_A_00.pfb",
     warm_secs = 2.0,
     carry_front_joints = {
@@ -148,7 +350,6 @@ local C = {
     housecat_carry_wrist_relax = 0.25,
     housecat_bank_armed = false,   -- session-only crash latch: the W3 motlist exists only in the v0.9+ PAK
     housecat_bank_autoload = true, -- arm automatically when the LOOSE axis-fix motlist is on disk (file check = the safety)
-    housecat_bank_source = 3,  -- index into HC.bank_sources; 3 = AXIS-FIX full catalogue (the ±90° armature/root pair normalized)
     housecat_natural_scale = 1.2,  -- ground scale dial; Size IV multiplies ON TOP via the one genetics calculator
     housecat_walk_nat = 0.55,      -- the W3 walk clip's own m/s at 1.0 playback (cadence calibration)
     housecat_run_nat = 3.2,        -- the W3 run clip's own m/s at 1.0 playback
@@ -157,7 +358,6 @@ local C = {
     housecat_height_offset = 0.0,  -- extra ride height above the probed floor (rough-terrain dial)
     housecat_tail_lift = 0.0,      -- radians, per-frame joint pre-rotation: + lifts / - drops (find the look live)
     housecat_tail_relax = 0.0,     -- 0 = animated tail, 1 = held at rest pose
-    housecat_test_clip = 2,
     oxtame_enabled = true,        -- THE PROPER GRIFFIN TAMING (Aurora's canon scene): kill an ox as the OFFERING
     oxtame_griffin_range = 800.0, -- only a wild griffin genuinely in the area can answer the ox offering
     oxtame_guaranteed_approach = true, -- after scenting the kill, FC-off terrain-following flight owns the approach instead of trusting a patrol waypoint
@@ -765,6 +965,21 @@ local C = {
     hunt_deliver_range = 6.0,     -- the offering registers within this of the WOLF (horizontal)
     marker_wolf = true,           -- gold marker over the courted wolf
     marker_quarry = true,         -- green marker over the hunt's quarry
+    -- ⭐ 08-20 THE WALK-AWAY LEASH IS TWO NUMBERS, NOT ONE. hunt_leash only widens the TRIAL's own
+    -- range gate; the universal abandon further up the tick was a hardcoded 40m with no stage
+    -- exemption at all, so chasing the quarry killed the rite mid-errand (Aurora, field 08-20:
+    -- "it ran away and when I chased it the taming said rite abandoned").
+    abandon_dist = 40.0,          -- ordinary walk-away: leave the creature this far behind for 1s = the rite ends
+    hunt_abandon_dist = 2000.0,   -- ...but THE HUNT is an errand. Chase the quarry as far as you like.
+    -- ⛔ 08-20 NPCs MAY NOT INTERRUPT THE COURTSHIP (Aurora: "only player hits should actually
+    -- register... a stray blow from an NPC shouldn't interrupt"). The soft shield already keeps the
+    -- HP safe; this suppresses the hit REACTION (the stagger that knocks it out of the ritual pose)
+    -- for every attacker except the player, whose strike must still flip the combat tame.
+    npc_hit_shield = true,
+    kneel_start = 1103,           -- bank 60 crouch/kneel triad, motion-taped by Aurora 08-08 and
+    kneel_loop_clip = 1104,       -- shared with IrisFarming's cooking chore: 1103 start (~1s) ->
+    kneel_end = 1105,             -- 1104 LOOP (~12s) -> 1105 END (~3s). ⛔ The rite used to chain
+    kneel_end_secs = 2.9,         -- 1103 -> 1105, i.e. sink straight into the STAND-UP clip.
 }
 
 local S = {
@@ -888,6 +1103,19 @@ end
 local function set_immunity(ch, on)
     -- the ritual shield: while approached/yielded/tamed the creature CANNOT be hurt (pawn-proof).
     -- NOT applied during the combat "context" phase -- the weakening fight must still work.
+    -- ⛔⛔⛔ 08-20 THE QUARRY CAN NEVER BE SHIELDED, BY ANYONE. THIS IS A CHOKE POINT, NOT A SWEEP
+    -- EXEMPTION. Three separate sweeps were given an S.is_quarry() pass on 08-14 and the stag came
+    -- back invincible anyway, because a shield does not have to be a SWEEP: the tamed-companion
+    -- upkeep re-asserts set_immunity(true) on every body in S.tamed EVERY FRAME, and this file's
+    -- own r95 note spells out why that always wins -- "it is re-asserted EVERY FRAME, which is why
+    -- the r85 mortality enforcer could not win: the two writes fought each tick... A tick-war, not
+    -- a state." A 2Hz un-shield cannot beat a per-frame shield, and the next sweep somebody adds
+    -- will forget the exemption too. So the refusal lives at the ONE door every shield goes
+    -- through. Un-shielding (on == false) is always allowed -- this only ever refuses to protect.
+    if on == true and S.is_quarry and S.is_quarry(ch) then
+        S.quarry_shield_blocked = (tonumber(S.quarry_shield_blocked) or 0) + 1
+        return
+    end
     local hc = hit_controller(ch)
     if not hc then return end
     for _, sig in ipairs({ "set_IsDamageZero", "set_IsIgnoreDamageHit", "set_DamageCollisionOff" }) do
@@ -1845,9 +2073,29 @@ local function iris_igh()
     return v
 end
 
-local function spawn_prey(pos)
-    -- conjure the hunt's quarry through EnemySpawner's machinery (depend, never edit):
-    -- require its spawnRequest module, add one instance, pump it per frame until born
+-- ⭐ 08-20 ONE SPAWN DOOR (Aurora: "even if we create our own IrisSpawner.lua
+-- that handles ALL spawning"). IrisSpawner owns the GenerateManager recipe and
+-- resolves prefabs through the game's own enemy catalog, so EnemySpawner is no
+-- longer a prerequisite for these bodies -- it is only IrisSpawner's internal
+-- fallback. ⛔ rawget at CALL time: a script reset rebuilds _G.
+-- ⚠ NOT migrated here on purpose: the ox-tame BAIT and the HOUSE CAT. Both
+-- hold the third-party spawner OBJECT for teardown (bait) or install a custom
+-- prefab into it (cat), so they need their own pass with their own testing.
+-- ⛔ GLOBAL, not local: this chunk rides Lua's 200-local ceiling and one
+-- more local here is a hard compile error (the file's own standing law).
+function iris_spawn_body(code, pos, rot, idle, why)
+    local ISP = rawget(_G, "IrisSpawner")
+    if ISP then
+        local h, err = ISP.spawn(code, pos, rot, { idle = idle == true, label = code })
+        if h then
+            pcall(function() log.info("[IrisTaming] " .. tostring(why or "spawn")
+                .. " via IrisSpawner: " .. tostring(code)) end)
+            return true, h
+        end
+        pcall(function() log.info("[IrisTaming] IrisSpawner refused " .. tostring(code)
+            .. ": " .. tostring(err) .. " - trying EnemySpawner") end)
+    end
+    -- fallback: the third-party route, required at USE time
     local ok = false
     pcall(function()
         if not S.spawner then
@@ -1855,6 +2103,22 @@ local function spawn_prey(pos)
             S.spawner = SR:new()
         end
         if not S.spawner then return end
+        S.spawner:requestAddInstances(code, pos, rot, {
+            spawnIdle = idle == true,
+            ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
+            postProcScale = false,
+        }, 1)
+        S.spawn_pump_until = os.clock() + 8.0
+        ok = true
+    end)
+    return ok, nil
+end
+
+local function spawn_prey(pos)
+    -- conjure the hunt's quarry through EnemySpawner's machinery (depend, never edit):
+    -- require its spawnRequest module, add one instance, pump it per frame until born
+    local ok = false
+    pcall(function()
         local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
         q.x = 0; q.y = 0; q.z = 0; q.w = 1
         local cfg = {
@@ -1868,7 +2132,9 @@ local function spawn_prey(pos)
         -- (ch299010) now, a band the horses module never touches (its DOE_PREFIX is ch299011),
         -- so the skip is worse than pointless: skip_next_horse sets a STICKY flag that would eat
         -- the next legitimate wild-horse conversion in the world, once per hunt.
-        S.spawner:requestAddInstances(tostring(C.hunt_spawn_cid or "ch299010_A_00"), pos, q, cfg, 1)
+        local okq = iris_spawn_body(tostring(C.hunt_spawn_cid or "ch299010_A_00"),
+            pos, q, false, "quarry")
+        if not okq then return end
         S.spawn_pump_until = os.clock() + 15.0   -- pump only while a birth is pending
         S.doe_spawn_pt = { x = pos.x, y = pos.y, z = pos.z }   -- the conjured doe's birthplace
         S.doe_verify_until = os.clock() + 6.0                  -- then count the bodies
@@ -2052,6 +2318,28 @@ local function ground_probe(x, y, z)
         -- 40m of reach could not find the floor under an airborne body -- the exact case the
         -- landing/touchdown callers need. The long cast matches the other fallback rungs.
         if b and b.ground_below then hit = b.ground_below(x, y, z, 8.0, 400.0) end
+    end)
+    return hit
+end
+
+-- ⭐⭐⭐ 08-20 TERRAIN-FOLLOW IS A DIFFERENT QUESTION FROM FIND-THE-FLOOR, AND IT NEEDS ITS OWN
+-- REACH. `ground_probe` casts 8m UP / 400m DOWN, which is right for exactly one job: an AIRBORNE
+-- body asking "where would I land". Used as a per-frame terrain follower under a WALKING body it
+-- is a loaded gun, because the `up` argument is not "how far can I see" - it is
+-- "how high can something be and still be mistaken for the ground" ([[dd2-ground-ray-canopy-law]]).
+-- In a gorge, under an overhang, or beneath a tree crown, 8m of upward reach hands you the rock
+-- face above as "the floor".
+-- ⇒ this variant asks the narrow question: what is the ground immediately under this footfall.
+-- ⚠ VERIFIED, NOT ASSUMED (route3_cast_ground_below, GriffinRideProbe): the eligibility clamp is
+-- `py <= y + 1.0` measured from the **y ARGUMENT**, not from y+up. So the caller controls the
+-- ceiling with the y it passes, and `up` only decides how far above that the ray starts. Callers
+-- that need to see ground ABOVE their datum must pass a raised y, not a bigger `up`.
+S.terrain_y = function(x, y, z)
+    if C.oxtame_ground_probe == false then return nil end
+    local hit = nil
+    pcall(function()
+        local b = _G.IrisGriffinBridge
+        if b and b.ground_below then hit = b.ground_below(x, y, z, 1.5, 40.0) end
     end)
     return hit
 end
@@ -2670,6 +2958,22 @@ local function release_creature(ch)
     pcall(function() ch:call("setCharacterControllerEnable", true) end)   -- never leave a no-clip body behind
     pcall(function() set_ground_glue(char_go(ch), true) end)              -- nor a terrain-snapless one
     S.ghost_ch = nil; S.ghost_lease = nil   -- the crossing's ghost lease is settled here
+    S.trial_ghost_at = nil                  -- (vestigial: the whole-trial ghost was reverted 08-20)
+    -- 08-20: the two _G leases die with the rite. Both self-expire (the peace lease in 0.5s, the
+    -- quarry address the moment S.hunt_our clears), so this is hygiene rather than load-bearing -
+    -- but a published address for a body we no longer own is exactly the stale-handle shape the
+    -- wrapper use-after-free law warns about, and it costs one line to not have it.
+    _G.IrisTamingPeaceLease = nil
+    _G.IrisTamingQuarryGoAddr = nil
+    -- ⛔ 08-20 ONLY UNDO WHAT YOU DID - and the rite's brine shield is something we did. It
+    -- persists on the character, so a courtship that FAILS would otherwise walk away leaving an
+    -- immortal wild puma in the world forever. A tame that SUCCEEDS is fine either way: the
+    -- companion upkeep re-applies it on its own 2s cadence a frame later.
+    S.brine_at = nil
+    pcall(function()
+        local b9 = _G.IrisGriffinBridge
+        if b9 and b9.brine_shield then b9.brine_shield(ch, false) end
+    end)
     despawn_doe()   -- abandoning the tame abandons any conjured quarry
 end
 
@@ -2805,6 +3109,30 @@ local function is_huntable(go, nm)
             if rec and rec.kind then tamed = true end
         end
     end)
+    -- ⛔⛔ 08-20 THAT REGISTRY ONLY KNOWS RE-SKINNED VARIANTS. It is written by IrisWildCats and
+    -- IrisWildHorses for bodies they converted -- an ORDINARY tamed goat, chicken or doe has no
+    -- entry, and all three sit in hunt_prey_band. So the hunt would happily mark Aurora's own pet
+    -- as the quarry and send her to kill it - and the tamed-companion upkeep re-shields every body
+    -- in S.tamed every frame, so that pet is also literally unkillable. Ask OUR OWN rosters too.
+    -- ⚠ ADDRESS-CLASS LAW: we hold a GAMEOBJECT here. is_pet_body walks S.tamed (keyed by
+    -- CHARACTER) resolving each to its GO before comparing, so it is the right door; the bridge
+    -- returns the Character FIRST and the GameObject SECOND, so the companion check takes [2].
+    if not tamed then
+        pcall(function()
+            local ga = go:get_address()
+            if ga and _G.IrisTaming and _G.IrisTaming.is_pet_body
+                and _G.IrisTaming.is_pet_body(ga) then tamed = true end
+        end)
+    end
+    if not tamed then
+        pcall(function()
+            local B = _G.IrisGriffinBridge
+            if B and B.griffin then
+                local _, cgo = B.griffin()   -- ⛔ 2nd return = the GAMEOBJECT (address-class law)
+                if cgo and go and cgo:get_address() == go:get_address() then tamed = true end
+            end
+        end)
+    end
     return not tamed
 end
 
@@ -3574,6 +3902,144 @@ local function install_guard_hook()
 end
 install_guard_hook()
 
+-- ⭐⭐⭐ 08-20 THE NPC-HIT SHIELD (Aurora: "if you try and tame during a big scuffle they can still
+-- hit and interrupt the tame... only player hits should actually register as damage/hate so that
+-- the player can decide to combat tame, but NPCs hitting it with a stray blow won't interrupt").
+--
+-- The peaceful shield is set_immunity_SOFT on purpose: IsDamageZero only, so the hit pipeline runs
+-- to completion and damageProc fires - that hook is the ONLY precise "the player struck it" signal
+-- and the whole combat-tame design hangs off it. But running the pipeline means the REACTION runs
+-- too: a pawn's stray swing staggers the creature, which knocks it out of the painted ritual clip
+-- and shoves it off its pinned spot. HP was never the problem; the flinch was.
+-- ⇒ SKIP calcDamageReaction - the reaction half - for every attacker EXCEPT the player, and only
+-- while a peaceful courtship lease is live. damageProc is deliberately left alone, so the player's
+-- strike still registers and still flips the combat tame.
+--
+-- ⛔⛔⛔ WHY A SECOND HOOK AND NOT AN EDIT TO install_guard_hook: sdk.hook installs PERSIST across
+-- script reloads and the _G flag makes re-install a no-op, so editing that closure's BODY is a
+-- silent no-op forever - the live closure is the one from the first load of the session. A new
+-- versioned flag is the only way a behaviour change can actually take effect. (Both closures will
+-- fire once combat_tame flips; that is safe because iris_guard_clamp SETS the damage field to a
+-- computed max rather than subtracting, so running it twice is identical to running it once.)
+-- ⛔ AND THE CLOSURE READS ONLY _G. A hook closure keeps the OLD chunk's upvalues after a reload,
+-- so `S` and `C` inside it would be a dead snapshot. The lease is a _G timestamp, re-stamped every
+-- tick by protect_tame_target and self-expiring in 0.5s - it obeys the lease law, so nothing can
+-- leave a creature permanently reaction-proof, not a range gate and not a crashed tick.
+-- ⛔ FAIL CLOSED: an attacker we cannot read is NOT the player, so it gets skipped. An unreadable
+-- state is not a permit, and the cost of being wrong here is one absorbed hit, not a broken rite.
+-- ⛔ A FIELD ON S, NOT A CHUNK-LOCAL. This file is AT the 200-local ceiling (luac refuses the very
+-- next one), and these two installers were the ones that tipped it over on 08-20. Same rule
+-- S.is_quarry already follows.
+S.install_npc_hit_shield = function()
+    if _G.IrisTamingNpcHitShieldV1 then return true end
+    local ok = pcall(function()
+        local td = sdk.find_type_definition("app.HitController")
+        local m = td and td:get_method("calcDamageReaction(app.HitController.DamageInfo)")
+        if not m then return end
+        sdk.hook(m, function(args)
+            -- fast bail FIRST: this fires constantly all over the game
+            local watch = _G.IrisTamingWatchGoAddr
+            if not watch then return end
+            if os.clock() > (tonumber(_G.IrisTamingPeaceLease) or 0.0) then return end
+            local di = nil
+            pcall(function() di = sdk.to_managed_object(args[3]) end)
+            if not di then return end
+            local daddr = nil
+            pcall(function()
+                local dgo = di:get_field("<DamageGameObject>k__BackingField")
+                daddr = dgo and dgo:get_address()
+            end)
+            if not daddr or daddr ~= watch then return end   -- not the courted creature
+            -- attacker resolution: the SAME three-field cascade the strike hook uses (a ranged or
+            -- spell hit resolves the owner through AttackHitController, not AttackOwnerObject)
+            local ago = nil
+            pcall(function() ago = di:get_field("<AttackOwnerObject>k__BackingField") end)
+            if not ago then
+                pcall(function()
+                    local ahc = di:get_field("<AttackHitController>k__BackingField")
+                    local ach = ahc and ahc:get_field("<CachedCharacter>k__BackingField")
+                    ago = ach and ach:call("get_GameObject")
+                end)
+            end
+            if not ago then pcall(function() ago = di:get_field("<AttackGameObject>k__BackingField") end) end
+            -- ⚠ char_go/get_player are PURE lookups (they re-query the singleton every call), so
+            -- the stale-upvalue hazard does not apply to them - only to captured STATE. The strike
+            -- hook's own closure resolves the player exactly this way; same door, same currency.
+            local mine = false
+            pcall(function()
+                local pgo9 = char_go(get_player())
+                if ago and pgo9 and ago:get_address() == pgo9:get_address() then mine = true end
+            end)
+            if mine then return end   -- YOUR blow lands in full: that is how a combat tame starts
+            _G.IrisTamingNpcHitsEaten = (tonumber(_G.IrisTamingNpcHitsEaten) or 0) + 1
+            return sdk.PreHookResult.SKIP_ORIGINAL
+        end, function(r) return r end)
+        _G.IrisTamingNpcHitShieldV1 = true
+    end)
+    return ok and _G.IrisTamingNpcHitShieldV1 == true
+end
+S.install_npc_hit_shield()
+
+-- ⭐⭐ THE QUARRY PROBE (08-20). Pure observation, never SKIP. The hunt's stag has now been
+-- unkillable twice, and the two possible worlds look identical from the Lua side:
+--   A) the hit REACHES the body and is zeroed  -> this logs a line every swing, HP never moves.
+--   B) the hit never reaches the body at all   -> this stays SILENT while she swings point-blank,
+--      which means the fault is collision/hurtbox, not immunity, and the flag enforcement in the
+--      quarry keeper is treating the wrong disease.
+-- One field run tells them apart, which is worth far more than a third blind guess.
+-- ⛔ A SEPARATE INSTALL, not a branch added to install_strike_hook: that closure is already live
+-- from the first load of the session and sdk.hook installs can never be replaced, so editing its
+-- body would change nothing and I would spend a field run "testing" the old code.
+S.install_quarry_probe = function()
+    if _G.IrisTamingQuarryProbeV1 then return true end
+    local ok = pcall(function()
+        local td = sdk.find_type_definition("app.HitController")
+        local m = td and td:get_method("damageProc(app.HitController.DamageInfo)")
+        if not m then return end
+        sdk.hook(m, function(args)
+            local q = _G.IrisTamingQuarryGoAddr
+            if not q then return end
+            if os.clock() < (tonumber(_G.IrisTamingQuarryLogAt) or 0.0) then return end
+            local di = nil
+            pcall(function() di = sdk.to_managed_object(args[3]) end)
+            if not di then return end
+            local daddr = nil
+            pcall(function()
+                local dgo = di:get_field("<DamageGameObject>k__BackingField")
+                daddr = dgo and dgo:get_address()
+            end)
+            if not daddr or daddr ~= q then return end
+            _G.IrisTamingQuarryLogAt = os.clock() + 0.5   -- throttle: a combo is many hits
+            local anm, hpnow = "?", "?"
+            pcall(function()
+                local ago = di:get_field("<AttackOwnerObject>k__BackingField")
+                if not ago then
+                    local ahc = di:get_field("<AttackHitController>k__BackingField")
+                    local ach = ahc and ahc:get_field("<CachedCharacter>k__BackingField")
+                    ago = ach and ach:call("get_GameObject")
+                end
+                if ago then anm = tostring(ago:call("get_Name")) end
+            end)
+            pcall(function()
+                local rhc = sdk.to_managed_object(args[2])
+                local v = rhc and rhc:call("get_Hp")
+                if v then hpnow = string.format("%.0f", tonumber(v) or 0) end
+            end)
+            local dmg = "?"
+            pcall(function()
+                local dv = tonumber(di:get_field("Damage"))
+                if dv then dmg = string.format("%.0f", dv) end
+            end)
+            pcall(function()
+                log.info("[IrisTaming] QUARRY HIT by " .. anm .. " dmg=" .. dmg .. " hp(before)=" .. hpnow)
+            end)
+        end, function(r) return r end)
+        _G.IrisTamingQuarryProbeV1 = true
+    end)
+    return ok and _G.IrisTamingQuarryProbeV1 == true
+end
+S.install_quarry_probe()
+
 -- PRECISE "I hit the wolf" signal: hook the wolf's damage entry, flag when the ATTACKER is the
 -- player and the RECEIVER is the courted wolf. Proven pattern (NicksDevtools/DamageTracer.lua,
 -- UDD2P/DamageProcPatches.lua). OBSERVATION ONLY -- never SKIP_ORIGINAL. Needs SOFT immunity (below)
@@ -3675,6 +4141,13 @@ local function protect_tame_target(player, pgo, ch, go, d, hc, hp)
         -- + AI off). Safe: at the flip it is a parked/pacified body, not mid-native-action.
         set_immunity(ch, false)
         set_think_stop(ch, false); set_nav_stop(ch, false); set_ai(ch, true)
+        -- ⛔⛔ 08-20 AND GIVE IT ITS MOTION FSM BACK. The trials now park MotionFsm2 OFF for the
+        -- whole peaceful rite (the safe-puppet fix for the vibration). The combat branch returns
+        -- BEFORE the trial block, so nothing down there would ever turn it back on - and a body
+        -- with its brain awake but no motion FSM cannot animate a single attack. release_creature
+        -- is the normal restore path but it does not run on this transition: a combat tame is not
+        -- an exit, it is a different rite. Restore what we turned off, where we stop owning it.
+        pcall(function() set_player_fsm(char_go(ch), true) end)
         pcall(function() ch:call("resetActionAndAI") end)
         _G.IrisTamingTargetAddr = nil
         -- ⛔ AND DROP THE SHIELD LEASE THIS INSTANT. The trial publishes a 2.0s lease, so without
@@ -3694,18 +4167,51 @@ local function protect_tame_target(player, pgo, ch, go, d, hc, hp)
     if hp and hc and hp < (tonumber(C.floor_hp) or 1.0) then write_hp(hc, tonumber(C.floor_hp) or 1.0) end
     -- REVIVE BACKSTOP: if the damage-clamp ever misses and it flatlines, haul it back (the clamp is
     -- the real guard; this catches a one-frame overkill the clamp didn't see).
-    if S.combat_tame and hc and is_dead(ch) then
+    -- ⛔⛔⛔ 08-20 AND IT RUNS FOR THE PEACEFUL RITE TOO NOW. It was gated on S.combat_tame, so
+    -- during a courtship - the one phase where the creature is a puppet being placed by OUR maths -
+    -- there was no death backstop at all. Aurora watched a puma get walked into the air by the
+    -- circle's placement bug and fall to its death, and collected the kill XP.
+    -- ⇒ The HP floor above only answers DAMAGE. DD2 kills outright in two ways it cannot see: a
+    -- fall-out-of-world, and brine, which is not damage at all. Neither is survivable by a body
+    -- whose HP we are politely topping up.
+    -- ⛔ THROTTLED: reviveFromFallDead is a native request, and hammering one at frame rate on a
+    -- body that refuses to revive is the ~100/sec hard-crash class.
+    if (S.combat_tame or S.trial or S.armed) and hc and is_dead(ch)
+        and os.clock() >= (tonumber(S.revive_at) or 0.0) then
+        S.revive_at = os.clock() + 0.5
         write_hp(hc, tonumber(C.floor_hp) or 1.0)
         pcall(function() ch:call("reviveFromFallDead(System.Boolean)", false) end)
+    end
+    -- ⭐ THE BRINE SHIELD. The courted creature is being driven across terrain it did not choose,
+    -- next to water it would never have walked into on its own - so it gets the same protection
+    -- every tamed companion already gets ([[iris-companion-brine-shield]]: PER-BODY, never global).
+    -- 2s cadence copied from the companion upkeep; the brine system is a live writer and streaming
+    -- rebuilds re-enable it, so a set-once would quietly lapse.
+    -- ⛔ release_creature clears it: a rite that FAILS must leave a mortal wild animal behind, not
+    -- an immortal one. (A rite that succeeds is fine - companion upkeep re-applies it.)
+    if os.clock() >= (tonumber(S.brine_at) or 0.0) then
+        S.brine_at = os.clock() + 2.0
+        pcall(function()
+            local b9 = _G.IrisGriffinBridge
+            if b9 and b9.brine_shield then b9.brine_shield(ch, true) end
+        end)
     end
     if S.combat_tame then
         -- COMBAT tame: the wolf fights, allies help weaken it, but the floor keeps it alive
         set_immunity(ch, false)
         set_think_stop(ch, false)    -- stay awake to fight (don't re-freeze it)
+        -- level-set belt for the FSM restore above: a combat tame entered by any route (a reload
+        -- mid-fight, a back-out and re-strike) must never be left holding the peaceful puppet state
+        pcall(function() set_player_fsm(char_go(ch), true) end)
         pacify_pack(pgo, ch)         -- only THIS wolf is fair game; its pack still holds and watches
     else
         -- PEACEFUL shield: HP untouchable + every ally held off it, BUT collisions stay live so
         -- the moment YOU strike it, the hook fires and it flips to a combat tame.
+        -- ⭐ 08-20 THE PEACE LEASE. This is the ONLY place it is stamped, and deliberately only in
+        -- the peaceful branch: the instant a player strike flips S.combat_tame the branch above
+        -- takes over, this stops being re-stamped, and 0.5s later the NPC-hit shield opens on its
+        -- own. Allies pile in exactly as the design wants, with no explicit teardown to forget.
+        if C.npc_hit_shield ~= false then _G.IrisTamingPeaceLease = os.clock() + 0.5 end
         set_immunity_soft(ch, true)
         full_pacify(ch)
         shield_party_off(ch)
@@ -3908,10 +4414,38 @@ end
 -- clock that scores it. If they ever disagree you roar while the trial refuses to advance, or
 -- the trial advances with no roar. The pad half is raw pad_down, NOT pad_ok: pad_ok's camera
 -- cone would drop the howl mid-beat and fail the rite (the same trap the critter CALL avoided).
+-- ⛔⛔ 08-20 THIS READER NEVER GOT THE ANTI-STUTTER GRACE, AND THAT IS THE SIT SPAM. TB.held was
+-- given a 0.35s grace on 08-14 for EXACTLY this symptom ("the palm looks like it re-triggers over
+-- and over") - a one-frame drop in the button read makes the performance block take the hand-down
+-- branch, which NILS S.pclip and hands the body back, and the next frame re-seizes and replays the
+-- clip from frame 0. TB.howl_down was written separately three weeks later and inherited none of
+-- it: it is a bare per-frame mask test, and get_MergedDevice can hand back nil for a frame, which
+-- the pcall turns into `false`. Aurora, field 08-20: "if you hold B (or H) the animation doesn't
+-- play properly, it's like it's playing repeatedly or from the middle and spamming."
+-- ⇒ same 0.35s window, but ⚠ NOT the same TEST. TB.held's grace re-reads TB.pad_down() as its
+-- proof the button is still down, because THERE the thing that blipped was pad_ok's camera cone,
+-- not the device. Here the device read itself is the blip, so demanding pad_down be true would
+-- make the grace unreachable - it is false by definition on the frame we are trying to forgive.
+-- This one therefore COASTS off the last-true timestamp, unconditionally. The cost is that a
+-- genuine release is honoured 0.35s late; the beat it feeds tolerates 3.0s of slack before it
+-- fails, so that is invisible, and it is the only shape that can actually absorb a dropped read.
+-- ⚠ AND THE TWO MENU GUARDS TB.held already carries. Without them the stable screen's own B press
+-- and a paused GUI both read as "still howling" (MENUS OWN THE PAD). They sit ABOVE the coast on
+-- purpose: opening a menu must end the hold that frame, not 0.35s later.
 TB.howl_down = function()
+    if _G.IrisStableUIOpen == true then S.howl_hand_at = nil; return false end
+    if type(iris_input_blocked) == "function" and iris_input_blocked() then
+        S.howl_hand_at = nil; return false
+    end
     local kb = false
     pcall(function() kb = iris_kb(math.floor(tonumber(C.howl_key) or 0x48)) == true end)
-    return kb or TB.pad_down()
+    local held = kb or TB.pad_down()
+    if held then
+        S.howl_hand_at = os.clock()
+    elseif S.trial and (os.clock() - (tonumber(S.howl_hand_at) or 0.0)) < 0.35 then
+        held = true
+    end
+    return held
 end
 -- ⭐⭐⭐ THE MISSING ARGUMENT THAT KEPT THE NATIVE B PROMPT OFF EVERY TAME (08-13).
 -- `_G.IrisPrompt.set(owner, text, prio, dist, POS, go)` -- every tame call site passed **nil** for
@@ -4565,6 +5099,16 @@ local function save_state()
 end
 load_state()
 C.housecat_mesh_armed = false
+-- AUTO-ARM the mesh too (08-20). It ships in the SAME pak as the motion bank,
+-- so the reason the bank auto-arms applies verbatim -- and leaving this manual
+-- meant a fresh session could not spawn the cat at all until Aurora pressed a
+-- button. create_resource still nils harmlessly if the pak is absent, and the
+-- autoload toggle in the panel is the off-switch.
+pcall(function()
+    if C.housecat_mesh_autoload ~= false then
+        C.housecat_mesh_armed = true
+    end
+end)
 -- Same create_resource crash class as the mesh latch: the W3 motlist path is
 -- only servable once the v0.9+ pak is mounted, so never restore this from disk.
 C.housecat_bank_armed = false
@@ -4582,17 +5126,18 @@ pcall(function()
     end
     -- saved source indices from the old 7-entry list point past the trimmed
     -- 3-entry list -- snap those back to the pak default
-    if (math.floor(tonumber(C.housecat_bank_source) or 3)) > 3 then
-        C.housecat_bank_source = 3
-    end
 end)
 -- gait dials live in C (persisted, sliders in the House cat tree); the follow
 -- driver reads them through the species profile -- keep the two in step
 function HC.sync_gait()
-    HC.species.walk_nat = tonumber(C.housecat_walk_nat) or 0.55
-    HC.species.run_nat = tonumber(C.housecat_run_nat) or 3.2
-    HC.species.walk_max = tonumber(C.housecat_walk_max) or 2.0
-    HC.species.max_speed = tonumber(C.housecat_max_speed) or 4.5
+    -- ⛔⛔ THIS WROTE TO THE DEAD W3 PROFILE (fixed 08-20). The cat has run on
+    -- species_stray ever since the Stray bank landed, so every gait slider --
+    -- walk, run, walk-to-run, max chase -- was silently doing NOTHING. Write
+    -- to the profile species_clips actually serves.
+    HC.species_stray.walk_nat = tonumber(C.housecat_walk_nat) or 0.55
+    HC.species_stray.run_nat = tonumber(C.housecat_run_nat) or 3.2
+    HC.species_stray.walk_max = tonumber(C.housecat_walk_max) or 2.0
+    HC.species_stray.max_speed = tonumber(C.housecat_max_speed) or 4.5
 end
 HC.sync_gait()
 -- kick the live gait so a new dial applies immediately, not on the next mode change
@@ -5523,12 +6068,46 @@ local function species_clips(go)
     -- the body match beats the band match. Gated on the FULL catalogue actually
     -- being attached this session -- an unregistered bank (or the 3-take bisect,
     -- which lacks ids 8..14) is never asked for clips it does not have.
-    if go and S.housecat_go_addr and S.housecat_bank_key
-        and S.housecat_gait_at and os.clock() >= S.housecat_gait_at
-        and tostring(S.housecat_bank_path or ""):find("full", 1, true) then
-        local a = nil
+    -- ⛔⛔⛔ THE HOUSE CAT IS ITS OWN KIND AND NEVER PLAYS A RABBIT MOTION.
+    -- (Aurora 08-20: "it reverts back to the rabbit".) This branch used to be
+    -- a gate that, on ANY lapse, fell through to SPECIES_CLIPS[band] -- and
+    -- band ch299200 is the VANILLA RABBIT clip table, so one stale condition
+    -- silently fed rabbit clip ids to the cat. Now: identify the body FIRST,
+    -- and for that body ALWAYS return, never reaching the band lookup.
+    if go and S.housecat_ch then
+        -- Identity by CHARACTER, with both addresses read FRESH. The cached
+        -- S.housecat_go_addr going stale was the measured failure, so it is
+        -- demoted to a hint and refreshed here rather than used as the gate.
+        local a, b = nil, nil
         pcall(function() a = go:get_address() end)
-        if a == S.housecat_go_addr then return HC.species end
+        pcall(function()
+            local cgo = char_go(S.housecat_ch)
+            if cgo then b = cgo:get_address() end
+        end)
+        local is_cat = (a ~= nil and (a == b or a == S.housecat_go_addr))
+        if is_cat then
+            if a and b and a == b then S.housecat_go_addr = a end   -- refresh the hint
+            local ready = (S.housecat_bank_key ~= nil and S.housecat_gait_at
+                           and os.clock() >= S.housecat_gait_at)
+            -- ⭐ CLIP TESTER LATCH. The follow driver re-drives the idle cycle
+            -- every tick -- that is exactly why a hand-played clip "reverts
+            -- after a few seconds". While the tester holds the body we serve
+            -- the QUIET profile so the driver plays nothing and the clip under
+            -- test stands. ⛔ Checked INSIDE the is_cat branch on purpose:
+            -- species_clips runs every tick for EVERY creature and must stay
+            -- one comparison cheap for everything that is not the cat.
+            if S.housecat_test then return HC.species_quiet end
+            local bank_path = tostring(S.housecat_bank_path or "")
+            local tbl = nil
+            if ready and bank_path:find("straycat", 1, true) then
+                tbl = HC.species_stray
+            end
+            -- ⛔ FAIL CLOSED: with no bank attached we return a QUIET profile
+            -- (no clip ids, no *_bank fields) so the driver plays NOTHING.
+            -- Never the rabbit's table, and never our ids against a bank that
+            -- is not there -- a wrong id on a think-stopped FSM is a CTD class.
+            return tbl or HC.species_quiet
+        end
     end
     local band = tostring(go and go_name(go) or ""):match("ch%d+") or ""
     local t = SPECIES_CLIPS[band]
@@ -13715,24 +14294,128 @@ end
 -- HOUSE CAT: the rabbit chassis is spawned here and enters S.tamed immediately.
 -- IrisTaming is therefore the sole owner of its movement, solidity and pickup;
 -- the retired IrisPets/PetDogProbe-style controller never drives this body.
+-- Which asset set: the W3 cat at the pak-shared paths, or the Stray cat at
+-- its own pak-free paths.  Returns the key too so a switch can invalidate the
+-- cached resources below (they are per-path and would otherwise stick).
+-- ⭐⭐ COATS (Aurora 08-20: "have each cat spawn randomise the material").
+-- The material binds PER BODY via a MeshMaterialResourceHolder, not per
+-- character id -- so one holder per coat gives several cats DIFFERENT looks in
+-- the world at the same time. "default" is the stock ginger and needs no extra
+-- pak file. Names must match the mdf2s built by rs_build_coat_materials.py.
+HC.COATS = { "default", "blackcat", "calico", "graytabby", "tortoiseshell", "tuxedo" }
+
+function HC.coat_mdf_path(coat)
+    if coat == nil or coat == "default" then return HC.mdf_stray end
+    for _, c in ipairs(HC.COATS) do
+        if c == coat then
+            return "riftspeak/straycat/iris_straycat_" .. coat .. ".mdf2"
+        end
+    end
+    return HC.mdf_stray            -- unknown coat: fail soft to the stock look
+end
+
+function HC.pick_coat()
+    local total = 0
+    for _, w in ipairs(HC.COAT_WEIGHTS) do total = total + w[2] end
+    if total <= 0 then return "default" end
+    local roll = math.random(total)
+    for _, w in ipairs(HC.COAT_WEIGHTS) do
+        roll = roll - w[2]
+        if roll <= 0 then return w[1] end
+    end
+    return "default"
+end
+
+-- Load and hold one coat's material. Cached for the whole session: releasing a
+-- holder while a live body still references it is the use-after-free crash
+-- class, and mdf2s are kilobytes, so holding all six is cheap and safe.
+function HC.pin_coat(coat)
+    coat = coat or "default"
+    if coat == "default" then return HC.pin_mesh() end
+    S.housecat_coats = S.housecat_coats or {}
+    local e = S.housecat_coats[coat]
+    if e then return e.holder ~= nil end
+    local path = HC.coat_mdf_path(coat)
+    local res = sdk.create_resource("via.render.MeshMaterialResource", path)
+    if not res then
+        -- coat missing from the pak: remember the miss so we stop retrying,
+        -- and let apply_mesh fall back to the stock material.
+        S.housecat_coats[coat] = { dead = true }
+        log.info("[IrisTaming] coat " .. coat .. " unavailable -- " .. path)
+        return false
+    end
+    res:add_ref()
+    local holder = nil
+    pcall(function()
+        holder = res:create_holder("via.render.MeshMaterialResourceHolder")
+        if holder then holder:add_ref() end
+    end)
+    if not holder then
+        S.housecat_coats[coat] = { dead = true }
+        return false
+    end
+    S.housecat_coats[coat] = { res = res, holder = holder, warm_at = os.clock() }
+    return true
+end
+
+-- The holder to dress a body in, or nil to mean "use the stock material".
+-- ⛔ Returns nil while the coat is still warming: applying an unwarmed material
+-- is the async-resource failure that renders a white/invisible cat.
+function HC.coat_holder(coat)
+    if coat == nil or coat == "default" then return nil end
+    S.housecat_coats = S.housecat_coats or {}
+    local e = S.housecat_coats[coat]
+    if not e then
+        HC.pin_coat(coat)
+        e = S.housecat_coats[coat]
+    end
+    if not e or e.dead or not e.holder then return nil end
+    if os.clock() < (tonumber(e.warm_at) or 0.0) + HC.warm_secs then return nil end
+    return e.holder
+end
+
+function HC.asset_paths()
+    -- ⭐ ONE ASSET SET. The old W3 mesh/mdf are not in the shipped pak any
+    -- more, so there is nothing to choose between.
+    return HC.mesh_stray, HC.mdf_stray, "stray"
+end
+
 function HC.pin_mesh()
     if C.housecat_mesh_armed ~= true then
         S.housecat_status = "disarmed"
         return false
     end
+    local mesh_path, mdf_path, key = HC.asset_paths()
+    if S.housecat_asset_key ~= key then
+        -- asset set changed: drop the cached handles so the new paths load
+        for _, slot in ipairs({ "housecat_res", "housecat_mdf_res",
+                                "housecat_mdf_holder", "housecat_holder" }) do
+            if S[slot] then pcall(function() S[slot]:release() end) end
+            S[slot] = nil
+        end
+        -- ⛔ UAF LAW: drop every coat ref and collect BEFORE the new set loads.
+        for _, e in pairs(S.housecat_coats or {}) do
+            if e.holder then pcall(function() e.holder:release() end) end
+            if e.res then pcall(function() e.res:release() end) end
+        end
+        S.housecat_coats = nil
+        collectgarbage("collect")
+        S.housecat_asset_key = key
+        S.housecat_warm_at = nil
+    end
     if S.housecat_res and S.housecat_mdf_res and S.housecat_mdf_holder then return true end
     if not S.housecat_res then
-        local res = sdk.create_resource("via.render.MeshResource", HC.mesh)
+        local res = sdk.create_resource("via.render.MeshResource", mesh_path)
         if not res then
-            S.housecat_status = "mesh unavailable -- mount the v0.7-or-newer house-cat PAK first"
+            S.housecat_status = "mesh unavailable (" .. key .. ") -- " .. mesh_path
             return false
         end
         res:add_ref()
         S.housecat_res = res
     end
-    local mdf = sdk.create_resource("via.render.MeshMaterialResource", HC.mdf)
+    local mdf = sdk.create_resource("via.render.MeshMaterialResource", mdf_path)
     if not mdf then
-        S.housecat_status = "material unavailable -- install the v0.7-or-newer house-cat PAK"
+        S.housecat_status = "material unavailable (" .. key .. ") -- " .. mdf_path
         return false
     end
     mdf:add_ref()
@@ -13771,8 +14454,7 @@ function HC.load_motlist()
         S.housecat_bank_status = "bank disarmed"
         return false
     end
-    local src = HC.bank_sources[math.floor(tonumber(C.housecat_bank_source) or 1)] or HC.bank_sources[1]
-    local path = src.path
+    local path = HC.bank_path
     if S.housecat_bank_holder and S.housecat_bank_path == path then return true end
     -- source switched: drop old refs BEFORE loading the new one (UAF law)
     S.housecat_bank_holder, S.housecat_bank_res = nil, nil
@@ -13875,12 +14557,19 @@ function HC.apply_mesh(ch)
     pcall(function() mesh:call("set_Enabled", false) end)
     local ok, err = pcall(function() mesh:call("setMesh", holder) end)
     if not ok then ok, err = pcall(function() mesh:call("set_Mesh", holder) end) end
+    -- ⭐ PER-BODY COAT. Falls back to the stock material when the coat is
+    -- missing from the pak or still warming. ⛔ Never rewrite rec.coat on a
+    -- fallback -- a coat absent from one pak build must not permanently
+    -- re-identify the cat.
+    local rec = S.tamed and S.tamed[ch]
+    local coat = rec and rec.coat or nil
+    local mat_holder = HC.coat_holder(coat) or S.housecat_mdf_holder
     local material_ok, material_err = pcall(function()
-        mesh:call("set_Material", S.housecat_mdf_holder)
+        mesh:call("set_Material", mat_holder)
     end)
     if not material_ok then
         material_ok, material_err = pcall(function()
-            mesh:call("setMaterial", S.housecat_mdf_holder)
+            mesh:call("setMaterial", mat_holder)
         end)
     end
     pcall(function() mesh:call("set_Enabled", true) end)
@@ -13899,6 +14588,20 @@ end
 
 function HC.forget_body()
     local ch = S.housecat_ch
+    -- ⛔ Drop the clip tester BEFORE the body goes: layer speed is a property of
+    -- the live layer, so a frozen clip left at speed 0 would otherwise be
+    -- inherited by whatever occupies this body next.
+    if S.housecat_test then pcall(HC.test_stop) end
+    S.housecat_test = nil
+    -- ⛔ Restore think/nav/ai TOGETHER. Releasing only one leaves the body
+    -- either frozen or brainless (the existing release precedent in this file).
+    if ch then
+        pcall(function() set_think_stop(ch, false) end)
+        pcall(function() set_nav_stop(ch, false) end)
+        pcall(function() set_ai(ch, true) end)
+    end
+    S.housecat_own_at = nil
+    S.housecat_own_seen = nil
     if ch then
         pcall(function()
             if S.tamed_addrs then S.tamed_addrs[tostring(ch:get_address())] = nil end
@@ -13932,12 +14635,20 @@ function HC.adopt(ch)
 
     -- This is the same local companion roster used by every tamed rabbit, rat,
     -- chicken and bird. Do not also register it with another pet controller.
+    -- ⭐ COAT ON THE RECORD, not on session state: the tamed record is the
+    -- thing that persists with the save, so putting the coat here is what makes
+    -- an individual cat keep her markings across a reload -- and makes the coat
+    -- inheritable by the same route the IV genes already use.
     S.tamed[ch] = {
         name = "House Cat",
         follow = true,
         gender = "female",
         housecat = true,
+        coat = HC.pick_coat(),
     }
+    pcall(function()
+        log.info("[IrisTaming] house cat coat = " .. tostring(S.tamed[ch].coat))
+    end)
     S.tamed_addrs = S.tamed_addrs or {}
     pcall(function() S.tamed_addrs[tostring(ch:get_address())] = true end)
     S.housecat_ch = ch
@@ -13994,6 +14705,17 @@ function HC.install_prefab(spawner)
 end
 
 function HC.spawn()
+    -- Start the coat's material loading NOW so its ~2s async warm overlaps the
+    -- spawn instead of forcing a fallback to the stock look on first dress.
+    pcall(function()
+        for _, r in pairs(S.tamed or {}) do
+            if r.housecat and r.coat then HC.pin_coat(r.coat) end
+        end
+    end)
+    -- ⛔ A replaced body must not inherit the clip tester: the latch would keep
+    -- the follow driver suspended on a cat Aurora expects to behave normally.
+    if S.housecat_test then pcall(HC.test_stop) end
+    S.housecat_test = nil
     local ready, why = HC.mesh_ready()
     if not ready then
         if S.housecat_res and S.housecat_mdf_holder then
@@ -14220,6 +14942,233 @@ end
 -- Tail joint -- lift is a per-frame local pre-rotation (carry_paw_tick's proven
 -- pattern), relax blends toward the rest pose. Both are live sliders; the
 -- proper clip-space fix waits for the v09 mesh/anim track.
+-- ⭐ OWN THE BODY. The vanilla rabbit brain is what plays rabbit motions and
+-- what wanders/despawns the creature (Aurora: "after ~30 seconds it seems to
+-- disappear in total"). Applying the stop once at adopt is not enough -- the
+-- symptom is that it comes back after a few seconds -- so this is asserted as
+-- an INVARIANT on a throttle for as long as the cat is ours.
+function HC.assert_own()
+    local ch = S.housecat_ch
+    if not ch then return end
+    local now = os.clock()
+    if now < (tonumber(S.housecat_own_at) or 0.0) then return end
+    S.housecat_own_at = now + 0.5
+    local go = nil
+    pcall(function() go = char_go(ch) end)
+    if not go then
+        -- despawn probe: distinguishes "wandered off then culled" from
+        -- "vanished on the spot", which pick different next levers.
+        if S.housecat_own_seen then
+            pcall(function()
+                log.info(string.format(
+                    "[IrisTaming] housecat BODY GONE (last seen %.1fs ago at %.1f,%.1f,%.1f)",
+                    now - (S.housecat_own_seen_at or now),
+                    S.housecat_own_seen.x, S.housecat_own_seen.y, S.housecat_own_seen.z))
+            end)
+            S.housecat_own_seen = nil
+        end
+        return
+    end
+    pcall(function()
+        local p = go:call("get_Transform"):call("get_Position")
+        if p then S.housecat_own_seen = { x = p.x, y = p.y, z = p.z } end
+        S.housecat_own_seen_at = now
+    end)
+    pcall(function() set_think_stop(ch, true) end)
+    pcall(function() set_nav_stop(ch, true) end)
+    pcall(function() set_ai(ch, false) end)
+end
+
+-- ⭐ CLIP TESTER (Aurora 08-20: "a more intuitive animation test system").
+-- Layer speed is a LIVE property of the motion layer -- it survives the latch
+-- being cleared and even a script reset -- so every path that can leave a
+-- frozen clip has to put it back. Centralised here so none is missed.
+function HC.layer0()
+    local layer = nil
+    pcall(function() layer = S.housecat_ch:call("get_Motion"):call("getLayer", 0) end)
+    return layer
+end
+
+function HC.test_speed(v)
+    local layer = S.housecat_ch and HC.layer0()
+    if layer then pcall(function() layer:call("set_Speed", v) end) end
+end
+
+-- Fire a roster clip. ⛔ The index is the ONLY id source -- HC.clips[i].id is
+-- read back from the motlist; a hand-typed id on this think-stopped FSM is the
+-- documented CTD class.
+-- The clip ids the tester currently shows. ⛔ Returns REAL ids from HC.clips --
+-- the filtered list is only a VIEW; ids must never be re-derived from a
+-- position in it, or a filtered index would fire the wrong clip on a
+-- think-stopped FSM.
+function HC.visible_clips()
+    local want = S.housecat_clip_cat or "all"
+    local out = {}
+    for i = 1, #HC.clips do
+        if want == "all" or HC.clips[i].cat == want then
+            out[#out + 1] = i
+        end
+    end
+    return out
+end
+
+function HC.test_play(idx)
+    local n = #HC.clips
+    if n == 0 then return end
+    idx = ((math.floor(idx) - 1) % n) + 1
+    S.housecat_clip_idx = idx
+    if not S.housecat_ch then return end
+    if not HC.register_bank() then return end
+    S.housecat_test = true
+    HC.test_speed(1.0)               -- a previous freeze must not stick
+    play_motion(S.housecat_ch, HC.bank_id, HC.clips[idx].id)
+    S.status = "cat clip " .. HC.clips[idx].id .. " " .. HC.clips[idx].name
+end
+
+function HC.test_stop()
+    S.housecat_test = nil
+    HC.test_speed(1.0)
+end
+
+-- ⛔ RUNS IN THE TICK, NOT THE PANEL. Driving the loop from the ImGui block
+-- would stop the moment Aurora collapsed the tree node or closed the menu.
+function HC.test_tick()
+    if not (S.housecat_test and S.housecat_ch) then return end
+    if not (S.housecat_loop or S.housecat_freeze) then return end
+    local layer = HC.layer0()
+    if not layer then return end
+    pcall(function()
+        local fr = tonumber(layer:call("get_Frame")) or 0.0
+        local ef = tonumber(layer:call("get_EndFrame")) or 0.0
+        -- ⛔ EndFrame reads 0 for a beat right after changeMotion; without this
+        -- guard the wrap fires every tick and the clip never advances.
+        if ef <= 0.0 then return end
+        if fr < ef - 1.0 then return end
+        if S.housecat_loop then
+            -- ⭐ Rewind the LAYER, do not re-fire changeMotion: re-firing runs
+            -- the 8-frame blend again on every wrap and visibly hitches.
+            layer:call("set_Frame", 0.0)
+        elseif S.housecat_freeze then
+            layer:call("set_Speed", 0.0)
+        end
+    end)
+end
+
+-- ⭐ AUTO-REGISTER THE BANK (Aurora 08-20: "so it doesn't ever move like a
+-- rabbit"). The bank already auto-ARMS at boot, but nothing ever CALLED
+-- register_bank after a spawn -- so a fresh cat sat on the fail-closed quiet
+-- profile until the panel button was pressed by hand. This closes that, and
+-- self-heals across respawn, save load and hot-reload.
+function HC.bank_tick()
+    local ch = S.housecat_ch
+    if not ch then
+        S.housecat_bank_warm_at = nil
+        S.housecat_bank_body = nil
+        return
+    end
+    if C.housecat_bank_armed ~= true then return end
+    local now = os.clock()
+
+    -- ⛔ BODY IDENTITY. register_bank's key is built from the MOTION address,
+    -- so a body swapped without going through HC.delete() (engine cull, save
+    -- load) leaves a stale key -- and "skip while key is set" would then never
+    -- register the new body: a permanently silent cat. Invalidate on change.
+    local addr = nil
+    pcall(function() addr = ch:get_address() end)
+    local id = tostring(addr or ch)
+    if S.housecat_bank_body ~= id then
+        S.housecat_bank_body = id
+        S.housecat_bank_key = nil
+        S.housecat_bank_retry = nil
+        S.housecat_bank_warm_at = nil
+    end
+    if S.housecat_bank_key ~= nil then return end
+
+    -- ⛔ Resource load is ASYNC. Attaching a motlist that has not warmed is the
+    -- same failure the mesh's 2.0s timer exists for -- never fire on the frame
+    -- the body appears.
+    if not S.housecat_bank_warm_at then
+        S.housecat_bank_warm_at = now + 2.0
+        return
+    end
+    if now < S.housecat_bank_warm_at then return end
+    if now < (tonumber(S.housecat_bank_tick_at) or 0.0) then return end
+
+    -- ⛔ BACKOFF, not a 1s hammer. With the pak genuinely absent this would
+    -- otherwise re-enter create_resource every second forever and flood the
+    -- log; 2s doubling to a 30s ceiling keeps that case sane. Staying quiet
+    -- IS the correct end state there -- never fall back to bank 0 (the rabbit).
+    local wait = tonumber(S.housecat_bank_retry) or 2.0
+    S.housecat_bank_tick_at = now + wait
+    if HC.register_bank() then
+        S.housecat_bank_retry = nil
+        log.info("[IrisTaming] housecat bank AUTO-registered on spawn")
+    else
+        S.housecat_bank_retry = math.min(wait * 2.0, 30.0)
+    end
+end
+
+-- ⭐ SHUFFLE BAG. Every card plays once before any repeats, then reshuffle.
+function HC.idle_shuffle(rec)
+    local n = #HC.IDLE_DECK
+    local bag = {}
+    for i = 1, n do bag[i] = i end
+    for i = n, 2, -1 do                       -- Fisher-Yates
+        local j = math.random(i)
+        bag[i], bag[j] = bag[j], bag[i]
+    end
+    -- ⛔ Stop the last card of the old deck opening the new one -- otherwise the
+    -- one thing a shuffle bag exists to prevent (an immediate repeat) still
+    -- happens, once per deck. A SWAP, not a redraw loop: redrawing would spin
+    -- forever if the deck ever held a single card.
+    if n > 1 and HC.IDLE_DECK[bag[n]].id == tonumber(rec.hc_idle_id) then
+        bag[n], bag[1] = bag[1], bag[n]
+    end
+    rec.hc_idle_bag = bag
+end
+
+function HC.idle_commit(rec, ch, bank, now, id, posture)
+    rec.hc_idle_id = id
+    if posture then rec.hc_posture = posture end
+    rec.hc_idle_started = now
+    rec.hc_idle_frame = nil
+    rec.hc_idle_frame_prev = nil
+    play_motion(ch, bank, id)
+end
+
+-- Draw and play the next card. Plays a BRIDGE clip first when the posture
+-- changes, holding the drawn card until the bridge finishes.
+function HC.idle_advance(rec, ch, bank, now)
+    local pend = tonumber(rec.hc_idle_pend)
+    if pend then                              -- the bridge just finished
+        rec.hc_idle_pend = nil
+        return HC.idle_commit(rec, ch, bank, now, pend)
+    end
+    local bag = rec.hc_idle_bag
+    if type(bag) ~= "table" or #bag == 0 then
+        HC.idle_shuffle(rec)
+        bag = rec.hc_idle_bag
+    end
+    local card = HC.IDLE_DECK[table.remove(bag)]
+    if not card then return end
+    local from = tostring(rec.hc_posture or "stand")
+    local bridge = nil
+    if from == "stand" and card.p ~= "stand" then
+        bridge = HC.IDLE_T.stand_sit
+    elseif from ~= "stand" and card.p == "stand" then
+        bridge = HC.IDLE_T.sit_stand
+    end
+    pcall(function()
+        log.info(string.format("[IrisTaming] idle deck: %d (%s)%s bag=%d",
+            card.id, card.p, bridge and " via bridge" or "", #bag))
+    end)
+    if bridge then
+        rec.hc_idle_pend = card.id
+        return HC.idle_commit(rec, ch, bank, now, bridge, card.p)
+    end
+    return HC.idle_commit(rec, ch, bank, now, card.id, card.p)
+end
+
 function HC.tail_tick()
     local ch = S.housecat_ch
     local rec = ch and S.tamed[ch]
@@ -14235,6 +15184,27 @@ function HC.tail_tick()
         local cur = joint:call("get_LocalRotation")
         if not cur then return end
         local x, y, z, w = cur.x, cur.y, cur.z, cur.w
+        -- ⛔ COMPOUNDING GUARD round 3 (photo-mode spin): exact/near matching
+        -- failed because tail PHYSICS keeps nudging the joint slightly off our
+        -- last write every frame while paused -- "not ours" -> lift stacks.
+        -- Idempotent form instead: cache the last ENGINE-authored pose and
+        -- always lift from that cache, never from the current pose. If the
+        -- current pose is recognisably our own write (within half the lift
+        -- angle of it), rebuild from the cached base; else it is a fresh
+        -- animation pose and becomes the new base.
+        if lift ~= 0.0 then
+            local lw, base = rec.hc_tail_written, rec.hc_tail_base
+            local ours = false
+            if lw and base then
+                local d = math.abs(x * lw[1] + y * lw[2] + z * lw[3] + w * lw[4])
+                ours = d > math.cos(math.abs(lift) * 0.25)
+            end
+            if ours then
+                x, y, z, w = base[1], base[2], base[3], base[4]
+            else
+                rec.hc_tail_base = { x, y, z, w }
+            end
+        end
         if relax > 0.0 then
             local base = joint:call("get_BaseLocalRotation")
             if base then
@@ -14252,7 +15222,9 @@ function HC.tail_tick()
         end
         local n = math.sqrt(x * x + y * y + z * z + w * w)
         if n > 0.00001 then
-            joint:call("set_LocalRotation", Quaternion.new(x / n, y / n, z / n, w / n))
+            x, y, z, w = x / n, y / n, z / n, w / n
+            rec.hc_tail_written = { x, y, z, w }
+            joint:call("set_LocalRotation", Quaternion.new(x, y, z, w))
         end
     end)
 end
@@ -14260,6 +15232,9 @@ end
 _G.IrisTaming.spawn_housecat = HC.spawn
 _G.IrisTaming.delete_housecat = HC.delete
 re.on_application_entry("LateUpdateBehavior", function()
+    pcall(HC.assert_own)
+    pcall(HC.bank_tick)
+    pcall(HC.test_tick)
     pcall(HC.carry_scale_tick)
     pcall(HC.cure_material_tick)
 end)
@@ -14903,6 +15878,8 @@ re.on_frame(function()
         if not _G.IrisTamingGuardHookInstalled then install_guard_hook() end     -- retry until the damage-clamp hook lands
         if not _G.IrisTamingTryCatchHookInstalled then install_trycatch_hook() end -- retry until the grab-detect hook lands
         if not _G.IrisTamingHateDoorInstalled then install_hate_door_hook() end   -- retry until the acquisition door lands
+        if not _G.IrisTamingNpcHitShieldV1 then S.install_npc_hit_shield() end      -- retry until the NPC-hit (reaction) shield lands
+        if not _G.IrisTamingQuarryProbeV1 then S.install_quarry_probe() end         -- retry until the quarry damage probe lands
         if IPPS then IPPS("player_base") end
         local now = os.clock()
         local dt = math.max(0.001, math.min(0.1, now - (S.last_tick or now)))
@@ -14969,7 +15946,15 @@ re.on_frame(function()
 
         -- player think-stop watchdog: the stance re-leases it every frame; ANY exit (fail,
         -- tame, key release, script error) lets the lease lapse and control restores itself
-        if S.pstop_tick and now - (tonumber(S.pstop_tick) or 0.0) > 0.4 then
+        -- ⛔ 08-20 EXCEPT WHILE THE KNEEL-RISE OWNS THE BODY. The rise is the one hold in this file
+        -- that deliberately does NOT re-lease per frame: it is a 3s one-shot that must play out
+        -- untouched, so both branches of the performance block stand down for its duration and
+        -- nothing renews S.pstop_tick. This watchdog would then fire 0.4s in and hand the FSM back
+        -- mid-clip - the exact pop-upright the triad was built to remove. The rise carries its own
+        -- unconditional expiry (the kneel-rise watchdog), which nils S.pstop_tick itself on the way
+        -- out, so deferring here trades one watchdog for another rather than dropping cover.
+        if S.pstop_tick and now - (tonumber(S.pstop_tick) or 0.0) > 0.4
+            and (tonumber(S.kneel_rise_until) or 0.0) <= now then
             set_think_stop(player, false)
             set_player_fsm(pgo, true)
             set_player_speed(player, 1.0)
@@ -15498,9 +16483,7 @@ re.on_frame(function()
                 local rp0 = pgo and pgo:call("get_Transform"):call("get_Position")
                 if not rp0 then return end
                 rp0.y = rp0.y + 1.5
-                S.spawner:requestAddInstances(cid0, rp0, q0,
-                    { spawnIdle = false, ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false }, postProcScale = false }, 1)
-                S.spawn_pump_until = os.clock() + 8.0
+                if not iris_spawn_body(cid0, rp0, q0, false, "caw echo donor") then return end
                 S.cdonor = { band = band0, seen = seen0, id = want0.id, until_t = now + 8.0 }
                 pcall(function() log.info("[IrisTaming] caw echo spawn requested (" .. cid0 .. ")") end)
             end)
@@ -17887,17 +18870,63 @@ re.on_frame(function()
                     -- layer bank is unreadable, degrade to a slow re-pin (never a flicker).
                     local hcs9 = species_clips(go)
                     if hcs9 and hcs9.idle_bank and now >= (tonumber(rec.hc_idle_at) or 0.0) then
-                        local bank0 = nil
+                        local bank9 = tonumber(hcs9.idle_bank)
+                        local bank0, fr9, ef9 = nil, nil, nil
                         pcall(function()
                             local mo9 = ch:call("get_Motion")
                             local l09 = mo9 and mo9:call("getLayer", 0)
-                            bank0 = l09 and tonumber(l09:call("get_MotionBankID"))
+                            if l09 then
+                                bank0 = tonumber(l09:call("get_MotionBankID"))
+                                fr9 = tonumber(l09:call("get_Frame"))
+                                ef9 = tonumber(l09:call("get_EndFrame"))
+                            end
                         end)
-                        if bank0 == tonumber(hcs9.idle_bank) then
+                        if bank0 == bank9 then
                             rec.hc_idle_at = now + 0.75
+                            -- ⭐ THE DECK ADVANCES ONLY HERE. ⛔ In the mismatch
+                            -- arm below those frame numbers belong to the RABBIT's
+                            -- clip, and advancing on them would deal cards at random.
+                            local started = tonumber(rec.hc_idle_started) or 0.0
+                            local prev = tonumber(rec.hc_idle_frame_prev)
+                            local done = false
+                            -- ⛔ endframe reads 0 for a beat after changeMotion, and
+                            -- the 1.0s floor also covers a stale read; without both
+                            -- this fires instantly and every tick.
+                            if fr9 and ef9 and ef9 > 0.0 and now >= started + 1.0 then
+                                -- parked at the end...
+                                if fr9 >= ef9 - 2.0 then done = true end
+                                -- ...or WRAPPED. Most of these idles LOOP, so the
+                                -- frame returns to 0 instead of parking -- the
+                                -- end-of-clip test alone would never fire on them.
+                                if prev and fr9 < prev - 0.5 then done = true end
+                            end
+                            if fr9 then
+                                rec.hc_idle_frame_prev = fr9
+                                rec.hc_idle_frame = fr9
+                            end
+                            if done or not rec.hc_idle_id then
+                                HC.idle_advance(rec, ch, bank9, now)
+                            end
                         else
                             rec.hc_idle_at = now + ((bank0 == nil) and 4.0 or 0.75)
-                            play_motion(ch, tonumber(hcs9.idle_bank), tonumber(hcs9.idle) or 1)
+                            local id9 = tonumber(rec.hc_idle_id)
+                            if not id9 then
+                                HC.idle_advance(rec, ch, bank9, now)
+                            else
+                                -- ⛔ REPLAY THE CURRENT CARD, never a fresh draw:
+                                -- the rabbit brain repaints layer 0 constantly, so
+                                -- drawing here would change idle every 0.75s.
+                                play_motion(ch, bank9, id9)
+                                -- ...and put the playhead back, or each repaint
+                                -- restarts the clip and it never reaches its end.
+                                local at = tonumber(rec.hc_idle_frame)
+                                if at and at > 1.0 then
+                                    pcall(function()
+                                        ch:call("get_Motion"):call("getLayer", 0)
+                                          :call("set_Frame", at)
+                                    end)
+                                end
+                            end
                         end
                     end
                     -- ⛔ AND GHOST IT. This branch wins over the follow branch below whenever
@@ -18262,12 +19291,23 @@ re.on_frame(function()
         -- ⭐ 08-12 slice A -- UNIVERSAL ABANDON (Aurora: "every taming instance... outside a
         -- certain distance ends it"): any live courtship ends cleanly at 40m held 1s (the
         -- one-frame law). Familiarity keeps; every body-restore rides release_creature.
+        -- ⛔⛔ 08-20 THE HUNT IS AN ERRAND, AND THIS GATE DID NOT KNOW IT. hunt_leash (150m) only
+        -- ever widened the TRIAL's own range gate further down the tick; THIS is the sweep that
+        -- actually tears the rite down, and it was a hardcoded 40m with no stage exemption at all.
+        -- So the ritual sends you to kill a stag, the stag legs it, you chase it - and 40m out the
+        -- courtship you have spent four minutes on evaporates (Aurora, field 08-20: "it ran away
+        -- and when I chased it the taming said rite abandoned"). The creature is SITTING and
+        -- WAITING by design during the hunt; there is nothing to abandon.
         if S.target and (S.armed or S.trial or S.combat_tame or S.mode == "context") then
             local far9 = false
+            local lim9 = tonumber(C.abandon_dist) or 40.0
+            if S.trial and (S.trial.stage == "hunt" or S.trial.stage == "hunt_feed") then
+                lim9 = tonumber(C.hunt_abandon_dist) or 2000.0
+            end
             pcall(function()
                 local tgo9 = char_go(S.target)
                 local d9 = tgo9 and dist(upos(tgo9), pp) or nil
-                far9 = (d9 ~= nil) and d9 > 40.0
+                far9 = (d9 ~= nil) and d9 > lim9
             end)
             if far9 then
                 S.abandon_t = S.abandon_t or os.clock()
@@ -18281,8 +19321,12 @@ re.on_frame(function()
                     S.yield_down = nil; S.iris_carry = nil; S.feed_drop = nil; S.camp_rite = nil
                     S.target = nil; S.mode = "idle"; S.pressure = 0.0
                     S.abandon_t = nil
+                    -- the new leases die with the rite, exactly like the watch addresses above:
+                    -- the peace lease self-expires in 0.5s anyway, but leaving a quarry address
+                    -- published would keep the keeper below poking a body nobody owns any more
+                    _G.IrisTamingPeaceLease = nil; _G.IrisTamingQuarryGoAddr = nil
                     set_prompt("THE RITE IS ABANDONED", "You have left it behind. (Its trust is mostly kept.)", 6.0, 0xFFFFD080)
-                    pcall(function() log.info("[IrisTaming] universal abandon: courtship left behind (>40m held 1s)") end)
+                    pcall(function() log.info(string.format("[IrisTaming] universal abandon: courtship left behind (>%.0fm held 1s)", lim9)) end)
                 end
             else
                 S.abandon_t = nil
@@ -18303,6 +19347,104 @@ re.on_frame(function()
                 if g9 then set_ground_glue(g9, true) end
             end)
             S.ghost_ch = nil; S.ghost_lease = nil
+        end
+
+        -- ⭐⭐ THE KNEEL-RISE WATCHDOG (08-20). Same law, same reason as the ghost above: the rise
+        -- is a lease on the PLAYER's body (think-stopped, MotionFsm2 off, 60:1105 playing out over
+        -- ~3s), and its END must live somewhere nothing can skip. Everything that could end the
+        -- rite mid-rise - the range gate, trial_fail, a walk-away, a zone change - lives inside
+        -- conditional blocks, and any one of them stranding this lease is a player frozen on one
+        -- knee with no controls. So the expiry is unconditional and owns nothing else.
+        if S.kneel_rise_until and os.clock() >= S.kneel_rise_until then
+            S.kneel_rise_until = nil; S.kneel_rise_want = nil; S.kneel_loop = nil
+            S.pclip = nil; S.pclip_fix = nil; S.pclip_fix_at = nil
+            pcall(function()
+                local pl9 = get_player()
+                if pl9 then
+                    set_think_stop(pl9, false)
+                    set_player_fsm(char_go(pl9), true)
+                end
+            end)
+            S.pstop_tick = nil
+        elseif S.kneel_rise_want and not S.trial then
+            -- armed, then the rite ended before the arm site (which lives inside the range gate)
+            -- could consume it. Drop it here, or the next courtship opens by standing up out of a
+            -- kneel it never performed.
+            S.kneel_rise_want = nil
+        end
+
+        -- ⭐⭐⭐ THE QUARRY KEEPER (08-20, Aurora: "the Stag spawned but was invincible, so I can't
+        -- kill it and give it to the puma. That is the important one.").
+        -- This used to live inside the hunt stage, i.e. behind the trial's range gate - while every
+        -- sweep that could shield it (protect_tame_target -> pacify_pack / truce_bubble /
+        -- shield_party_off) runs UNCONDITIONALLY, at every range. So the moment you chased the
+        -- quarry out of gate range the shields were writing and nothing was un-writing. It also ran
+        -- at 2Hz against writers that run at 4Hz and per-frame, which this file's own r95 note
+        -- calls exactly right: "a tick-war, not a state".
+        -- ⇒ It moves here, beside the other unconditional watchdogs, and set_immunity() itself now
+        -- refuses to shield a quarry at all (see its header) - so this is the belt and that is the
+        -- braces. Both, because the flags are only ONE of the two ways a body can be unkillable.
+        -- ⭐ AND IT REPORTS. If a flag is found already set, something we have not identified is
+        -- re-setting it and the log names the frame; if the quarry probe in the damage hook stays
+        -- silent while she swings at it point-blank, the hit never reaches the body at all and the
+        -- fault is collision, not immunity. One field run separates those two.
+        -- ⚠ KEYED THE SAME WAY S.is_quarry IS, not on S.hunt_our alone. The hunt slot ADOPTS live
+        -- prey when the meet spotted some (T.pending_prey), and an adopted quarry was never ours to
+        -- begin with - so it has no S.hunt_our entry and would have been left out of the one block
+        -- that keeps a quarry killable. A guard that only covers the bodies we conjured is not a
+        -- guard on "the quarry"; it is a guard on "most quarries".
+        if (S.hunt_our or (S.trial and S.trial.hunt_ch))
+            and os.clock() >= (tonumber(S.quarry_keep_at) or 0.0) then
+            S.quarry_keep_at = os.clock() + 0.2
+            pcall(function()
+                local q9 = S.hunt_our or (S.trial and S.trial.hunt_ch)
+                local qgo9 = q9 and char_go(q9)
+                if not qgo9 then
+                    _G.IrisTamingQuarryGoAddr = nil
+                    return
+                end
+                _G.IrisTamingQuarryGoAddr = qgo9:get_address()   -- the damage-hook probe reads this
+                if S.pack then S.pack[q9] = nil end
+                -- READ BEFORE WRITE: the getters are assumed by symmetry with the setters, so each
+                -- is its own pcall and a missing one must never abort the enforcement below it.
+                local hc9 = hit_controller(q9)
+                if hc9 then
+                    local was9 = {}
+                    for _, g9 in ipairs({ "get_IsDamageZero", "get_IsIgnoreDamageHit", "get_DamageCollisionOff" }) do
+                        pcall(function() if hc9:call(g9) == true then was9[#was9 + 1] = g9 end end)
+                    end
+                    if #was9 > 0 and os.clock() >= (tonumber(S.quarry_log_at) or 0.0) then
+                        S.quarry_log_at = os.clock() + 1.0
+                        pcall(function() log.info("[IrisTaming] QUARRY WAS SHIELDED -> clearing: " .. table.concat(was9, " ")) end)
+                    end
+                end
+                set_immunity(q9, false)   -- on==false is always permitted through the choke point
+                -- ⛔⛔⛔ 08-20 REVERTED, SAME DAY, FROM THE FIELD. This block used to ALSO re-assert
+                -- set_ai + set_nav_stop + setCharacterControllerEnable + set_ground_glue on the
+                -- quarry at 5Hz, as "belt and braces". It was a disaster and it was pure
+                -- speculation - nothing in this file ever ghosts or parks the quarry, so there was
+                -- never anything to undo. Aurora, field 08-20: "the stag teleports around all over
+                -- the place and I still can't kill it."
+                -- ⇒ READ set_ground_glue's ACTUAL BODY BEFORE CALLING IT. Its name says ground
+                -- snap; its filter also matches `physics.Colliders` and `RequestSetCollider` - the
+                -- HURTBOX. So a 5Hz "restore" was re-enabling a running animal's character
+                -- controller and rebuilding its collider set five times a second: the body re-seats
+                -- (the teleport) and its hurtbox spends its life half-built (the sword passing
+                -- through). I built the thing that caused the symptom I was chasing.
+                -- ⇒ LAW: an idempotent-looking `set_Enabled(true)` on physics components is NOT
+                -- idempotent on a moving body. Only ever restore state you actually changed, and
+                -- only on the edge - never on a timer.
+                -- What remains is the ONE thing this keeper was for: the damage flags (above) and
+                -- the aim lever (below), neither of which touches physics.
+                if not is_dead(q9) then
+                    pcall(function()
+                        local lo9 = comp(qgo9, "app.LockOnTarget")
+                        if lo9 and lo9:call("get_Enabled") == false then lo9:call("set_Enabled", true) end
+                    end)
+                end
+            end)
+        elseif not (S.hunt_our or (S.trial and S.trial.hunt_ch)) and _G.IrisTamingQuarryGoAddr then
+            _G.IrisTamingQuarryGoAddr = nil
         end
 
         -- ⭐⭐⭐ 08-13 THE ARM DECAYS, AND THE RITE CAN BE CANCELLED OUTRIGHT.
@@ -19061,6 +20203,42 @@ re.on_frame(function()
                 if dm then pcall(function() dm:call("set_Enabled", false) end) end   -- peaceful: brain off
             end
             set_think_stop(ch, true)
+            -- ⭐⭐⭐ 08-20 THINK-STOP IS NOT A MOTION STOP. THIS ONE LINE IS THE VIBRATION.
+            -- Aurora, field 08-20: "when you start the tame, the puma runs on the spot or starts
+            -- vibrating on the spot, it seems as if they're trying to fight their hold in place."
+            -- That is EXACTLY what was happening. Think-stop parks the BRAIN; via.motion.MotionFsm2
+            -- keeps re-driving whatever node the creature was already in - a chase RUN, if it was
+            -- running at you when the rite opened - onto layer 0 every frame. So wolf_clip(0)'s
+            -- idle was overwritten within a frame of being painted (the meet's own comment guessed
+            -- this and reached for the wrong lever), and the run clip's root motion pushed the body
+            -- while the stage's absolute set_upos yanked it back: two writers, one transform, 120
+            -- times a second = the judder. Only rush/stare/howl ever turned the FSM off; meet,
+            -- circle, hunt, hunt_feed, feast, rush_tell, back_off and laststeps were all missed.
+            -- ⇒ MotionFsm2 OFF here, once, for the WHOLE trial - the "safe puppet" row of the FSM
+            -- truth table, and the state those three stages were already proving works. It must go
+            -- off BEFORE any stage paints, hence its place beside the think-stop rather than in the
+            -- stages. release_creature() is the sole restore path and already puts it back on
+            -- every exit (fail, abandon, cancel, seal), so this adds no new teardown.
+            -- ⛔ ONLY resident clips may be painted in this state (bank 0 idle/threat/walk/run,
+            -- bank 60 sit/liedown/eat) - a non-resident clip on a think-stopped body is the AV.
+            pcall(function() set_player_fsm(go, false) end)
+            -- ⛔⛔⛔ 08-20 REVERTED, SAME DAY, FROM THE FIELD. A whole-trial ghost lived here for
+            -- about an hour and it killed a puma. Aurora: "it walked near a very small puddle of
+            -- walkable water, disappeared for a second, and fell to its death... the way it's being
+            -- controlled it's zooming and teleporting all over the place, this isn't normal."
+            -- ⇒ TWO mistakes, and the second is the one worth remembering.
+            -- 1. set_ground_glue's filter is WIDER THAN ITS NAME: it also disables
+            --    `physics.Colliders` and `RequestSetCollider`. So this did not merely stop the
+            --    creature shoving her - it ran the ENTIRE rite with the body's colliders off.
+            -- 2. ⭐ GroundFixer WAS LOAD-BEARING, and I did not know it. It re-snapped the body onto
+            --    real terrain every frame, which was silently CORRECTING the circle's placement
+            --    maths. Removing it did not create the ratchet below - it EXPOSED one that had been
+            --    there all along. A safety net you cannot see is still a safety net: before you
+            --    remove a stabiliser, find out what it was stabilising.
+            -- ⇒ The ghost belongs where it was born and nowhere else: `laststeps`, gated on
+            -- d <= 6.0, where the creature really is nose-to-nose with the player and really is
+            -- pinned hard enough that losing the ground snap costs nothing. That block is
+            -- untouched and still runs. Nothing is ghosted here.
             pcall(function() _G.IrisTamingTargetAddr = ch:get_address() end)   -- main mod skips its action requests
             _G.IrisTamingRitualUntil = now + 1.0
             set_nav_stop(ch, true)   -- we drive its every step in the trials
@@ -19159,9 +20337,19 @@ re.on_frame(function()
                 -- ⚠ S.trial, NOT T -- T is not bound in this scope (08-06: the first cat_sit
                 -- branch read a nil T here and the Bellow howled at a sitting cat anyway)
                 if S.trial and S.trial.cat_sit then
-                    -- THE KNEEL (Aurora's clips): 60:1103 sink-to-the-ground chains into the
-                    -- 60:1105 kneel loop -- the chain trigger lives in the pin block below
-                    perf_clip = S.kneel_loop and 1105 or 1103
+                    -- ⛔⛔⛔ 08-20 THE KNEEL WAS CHAINING START -> **END**. 60:1103/1104/1105 is a
+                    -- TRIAD, not a pair: 1103 sink (~1s/60f), 1104 HOLD LOOP (~12s/360f), 1105
+                    -- STAND UP (~3s/180f). Aurora motion-taped it herself on 08-08 at a campfire
+                    -- and IrisFarming plays all three in order for the cooking chore. This site
+                    -- only ever knew two of them and picked the wrong second one, so the Arisen
+                    -- sank to the floor and immediately began STANDING UP - then the end-frame pin
+                    -- below (which excluded 1105 from its loop list) clamped that stand-up two
+                    -- frames from its end and re-drove it. Sink, half-rise, sink, half-rise.
+                    -- Aurora: "it's like it's playing repeatedly or from the middle and spamming.
+                    -- The whole process should be the get down, stay down, then get up."
+                    -- ⇒ she was describing the triad. 1103 -> 1104 -> (on completion) 1105.
+                    perf_clip = S.kneel_loop and (tonumber(C.kneel_loop_clip) or 1104)
+                        or (tonumber(C.kneel_start) or 1103)
                     perf_bank = 60
                     perf_start = 0.0
                 else
@@ -19179,7 +20367,21 @@ re.on_frame(function()
             -- ⛔ rush_tell / rush are NO LONGER excluded here (08-14): holding them is the fix for
             -- the sidestep. The snarl beat still owns the body on its own terms - T.flinch_until
             -- plus S.phold suppress this block for the startle, exactly as before.
+            -- ⭐⭐ 08-20 THE RISE OWNS THE BODY WHILE IT RUNS. 60:1105 is a 3-second one-shot; if
+            -- either branch below is allowed to run during it, one repaints the sink over the top
+            -- and the other hands the body straight back, and both give you the pop-upright the
+            -- triad exists to replace. So while the lease is live we take NEITHER branch: the
+            -- think-stop and the FSM-off simply stay as the kneel left them, untouched, and the
+            -- unconditional watchdog is what ends it. ⛔ Deliberately not a local - this function
+            -- is at the 200-register ceiling, so the predicate is inlined at both doors.
+            if S.kneel_rise_want and not S.kneel_rise_until then
+                S.kneel_rise_want = nil
+                S.kneel_rise_until = now + (tonumber(C.kneel_end_secs) or 2.9)
+                S.pclip = nil; S.pclip_fix = nil; S.pclip_fix_at = nil
+                play_player_motion(player, tonumber(C.kneel_end) or 1105, 60, 0.0)
+            end
             if perform_held and not wants_move and not pat_hold
+                and (tonumber(S.kneel_rise_until) or 0.0) <= now
                 and not (stage_now == "laststeps" and S.lie_cue)   -- the stroke owns the body: no camera-servo (player beyblade)
                 and (not S.trial or now >= (tonumber(S.trial.flinch_until) or 0.0)) then
                 -- STUDIO MODE: the performance owns the body while you stand (think-stopped) -- WASD hands it back
@@ -19238,7 +20440,12 @@ re.on_frame(function()
                     -- FSM fancies. The brace idle (0:0 comNM_idle_loop) and the stare's catch
                     -- stance (0:3001 com_catch_stance_loop) cycle on their own - pinning them on
                     -- the final frame would turn a breathing Arisen into a statue.
+                    -- ⭐ 08-20: the kneel HOLD (60:1104) joins this list. It is a genuine loop, and
+                    -- clamping a loop two frames from its end is not a pose pin, it is a stutter -
+                    -- the same reason the brace idle and the catch stance are already excluded.
+                    -- 1103 (sink) and 1105 (rise) are one-shots and DO still want the pin.
                     local pose_loops = brace_stage or stage_now == "stare"
+                        or (S.pclip == (tonumber(C.kneel_loop_clip) or 1104))
                     if not pose_loops then
                     pcall(function()
                         local layer = player:call("get_Motion"):call("getLayer", 0)
@@ -19248,8 +20455,8 @@ re.on_frame(function()
                         end
                     end)
                     end
-                    -- the kneel chain: the 1103 sink has reached its floor -> 1105 loop takes over
-                    if S.pclip == 1103 and S.trial and S.trial.cat_sit then
+                    -- the kneel chain: the 1103 sink has reached its floor -> the 1104 HOLD takes over
+                    if S.pclip == (tonumber(C.kneel_start) or 1103) and S.trial and S.trial.cat_sit then
                         pcall(function()
                             local layer = player:call("get_Motion"):call("getLayer", 0)
                             local ef = layer and layer:call("get_EndFrame")
@@ -19350,7 +20557,24 @@ re.on_frame(function()
                     hq.x = 0; hq.y = math.sin(hyaw / 2.0); hq.z = 0; hq.w = math.cos(hyaw / 2.0)
                     pgo:call("get_Transform"):call("set_Rotation", hq)
                 end)
-            else
+            elseif S.kneel_loop and S.trial and S.trial.cat_sit and not wants_move
+                and not S.kneel_rise_until and not S.kneel_rise_want then
+                -- ⭐ 08-20 LETTING GO MID-KNEEL ALSO STANDS YOU UP, and this branch must therefore
+                -- NOT fall through to the restore below it. Handing the FSM back here and playing
+                -- the rise on the next tick would fire 60:1105 into a LIVE MotionFsm2, where a
+                -- painted clip is never visible - the pop-upright, with an extra frame of hitch in
+                -- front of it. So arming the rise CLAIMS the frame: the body stays exactly as the
+                -- kneel left it (think-stopped, FSM off), the arm site at the top of the next tick
+                -- plays the clip into that state, and the unconditional watchdog does the restore
+                -- once the 3 seconds are up. S.kneel_loop is only ever set after the sink has
+                -- actually reached the floor, so this can never fire on a body that never knelt.
+                -- ⛔ BUT NOT ON wants_move. "Any movement key hands the body back RIGHT NOW" is a
+                -- standing rule in this block, and a 3-second stand-up she cannot interrupt would
+                -- quietly break it. Pressing W means she wants control, not choreography - she gets
+                -- the plain restore below instead, exactly as before this change.
+                S.kneel_loop = nil
+                S.kneel_rise_want = true
+            elseif (tonumber(S.kneel_rise_until) or 0.0) <= now then
                 -- a phold (the startle clip) owns the body on its own terms and re-asserts
                 -- think-stop itself every frame - but leaving OUR lease stamped let the 0.4s
                 -- watchdog fire a needless one-frame FSM restore in the middle of the snarl
@@ -19519,17 +20743,34 @@ re.on_frame(function()
                     local step = math.min((tonumber(speed) or 2.0) * dt, dd)
                     local nx = T.vw.x + dx / dd * step
                     local nz = T.vw.z + dz / dd * step
-                    local hit = (_G.IrisGriffinBridge and _G.IrisGriffinBridge.ground_below) and ground_probe(nx, T.vw.y, nz) or nil
+                    -- ⛔⛔ 08-20 SAME FEEDBACK SHAPE AS THE CIRCLE, SAME CURE IN SPIRIT. The walker
+                    -- probes from its own last output and writes the answer back, so any upward lie
+                    -- the ray tells compounds. There is no player datum to anchor to here (these
+                    -- targets range well beyond the ring), so the walker gets RATE limits instead.
+                    -- ⚠ AND THE LIMITS MUST SCALE WITH THE STEP, NOT BE CONSTANTS. The old 0.25m
+                    -- was a per-FRAME allowance: at 120fps that is 30 m/s of climb available to a
+                    -- creature walking at 2 m/s. Any fixed per-frame budget is a ratchet whose
+                    -- speed is your framerate. Tie it to the distance actually travelled and the
+                    -- worst case becomes a slope angle, which is what we meant all along:
+                    -- 1.5*step up = a steep but walkable rise, 4.0*step down = a drop it can take.
+                    -- ⚠ nil now REFUSES rather than failing open. No-hit is the water/void
+                    -- signature, and "keep your current height and walk on" over water is how a
+                    -- body ends up out over a gorge. A stalled walk at a ledge is the acceptable
+                    -- cost; the stage stall-watchers already move the rite on.
+                    local hit = (_G.IrisGriffinBridge and _G.IrisGriffinBridge.ground_below)
+                        and S.terrain_y(nx, T.vw.y + 1.0, nz) or nil
                     local hy = hit and tonumber(hit.y) or nil
-                    if hy and math.abs(hy - T.vw.y) >= 3.0 then
-                        -- POSITIVE cliff/void signal: the step is refused
-                    elseif hy and (hy - T.vw.y) > 0.25 then
-                        -- WALL: ground rises faster than any walkable slope per step -- refused
+                    if not hy then
+                        -- no ground under the next footfall (void or water): the step is refused
+                    elseif (hy - T.vw.y) > 1.5 * step then
+                        -- WALL: ground rises faster than any walkable slope -- refused
                         -- (the feast wolf was climbing a cliff face toward an unreachable kill)
+                    elseif (T.vw.y - hy) > 4.0 * step then
+                        -- CLIFF EDGE: the drop is steeper than it could walk down -- refused
                     else
-                        -- contact = follow the ground; NO contact = fail-open and keep height
-                        T.vw.x = nx; T.vw.z = nz
-                        if hy then T.vw.y = hy end
+                        T.vw.x = nx; T.vw.z = nz; T.vw.y = hy
+                        -- a step the ground vouched for: remember it as the fallback footing
+                        T.safe_pos = { x = nx, y = hy, z = nz }
                     end
                 end
                 pcall(function()
@@ -19684,6 +20925,31 @@ re.on_frame(function()
                     T.leave_t = math.max(0.0, (tonumber(T.leave_t) or 0.0) - dt)
                 end
                 return false
+            end
+
+            -- ⭐⭐⭐ 08-20 THE RESCUE ANCHOR. Everything above is a fix for ONE placement bug; this
+            -- is the net under the next one. Every stage that grounds a write stamps T.safe_pos,
+            -- and if the body is ever found far below the player - the signature of a fall, a void
+            -- step, or a warp we did not intend - it is put back and the stage skips its own logic
+            -- for that frame. ⛔ The skip is load-bearing, not tidiness: `gp` was read at the top of
+            -- the tick and is STALE the instant we warp, so letting the stage run on would have it
+            -- doing its maths from a position the body no longer occupies.
+            -- ⚠ Deliberately only DOWNWARD (12m below the player). A creature legitimately stands
+            -- above you on a slope, and the hunt parks it hundreds of metres away; "too high" is
+            -- not a reliable fault signal, but "well below your feet" is.
+            if T.safe_pos and gp and pp and gp.y < (pp.y - 12.0) then
+                pcall(function()
+                    local rv = ValueType.new(sdk.find_type_definition("via.Position"))
+                    rv.x = T.safe_pos.x; rv.y = T.safe_pos.y; rv.z = T.safe_pos.z
+                    set_upos(go, rv)
+                end)
+                if now >= (tonumber(T.rescue_log_at) or 0.0) then
+                    T.rescue_log_at = now + 1.0
+                    pcall(function() log.info(string.format(
+                        "[IrisTaming] RESCUE: creature was %.0fm below the player -> returned to its last good footing",
+                        pp.y - gp.y)) end)
+                end
+                return true
             end
 
             -- ================= the stages =================
@@ -19867,9 +21133,7 @@ re.on_frame(function()
                                     q9.x = 0; q9.y = 0; q9.z = 0; q9.w = 1
                                     local rp9 = pgo:call("get_Transform"):call("get_Position")   -- the spawner speaks RENDER
                                     rp9.y = rp9.y + 1.5   -- a flyer materialises in the air, not in the dirt
-                                    S.spawner:requestAddInstances(donor9, rp9, q9,
-                                        { spawnIdle = false, ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false }, postProcScale = false }, 1)
-                                    S.spawn_pump_until = os.clock() + 8.0
+                                    if not iris_spawn_body(donor9, rp9, q9, false, "whistle donor") then return end
                                     S.wdonor = { band = band9, seen = seen9, id = id9, until_t = now + 8.0,
                                         not_before = now + (tonumber(C.call_whistle_delay) or 1.0) }
                                     how9 = "donor spawn requested (" .. donor9 .. ")"
@@ -20774,7 +22038,32 @@ re.on_frame(function()
                             -- ONLY our freshly-conjured doe: nearest ch299 to its birthplace. NO "nearest
                             -- prey" fallback -- that grabbed pre-existing/old animals (it offered a past kill).
                             local born, bornd = nil, 30.0
+                            -- ⭐⭐ 08-20 ASK THE SPAWNER WHICH BODY IS OURS. "Nearest huntable within
+                            -- 30m of the berth" is a guess, and hunt_prey_band contains goat, doe and
+                            -- chicken -- three chassis Aurora keeps as PETS. Adopt one of those and the
+                            -- rite marks her own companion as the quarry, and the tamed-companion upkeep
+                            -- re-shields it every single frame, so it is genuinely unkillable. The
+                            -- spawner hands back its own instance (the same inst.instance:get_Chara()
+                            -- route the oxtame decoy already uses) -- that is identity, not proximity.
+                            -- The proximity sweep stays underneath it as the fallback, because the
+                            -- handle can lapse, and is_huntable now screens our own rosters as well.
+                            pcall(function()
+                                local sp3 = S.spawner
+                                if not (sp3 and sp3.instances) then return end
+                                for i9 = #sp3.instances, 1, -1 do
+                                    if born then break end
+                                    pcall(function()
+                                        local inst9 = sp3.instances[i9]
+                                        local c9 = inst9 and inst9.instance and inst9.instance:get_Chara()
+                                        if c9 and c9 ~= ch and not is_dead(c9) and char_go(c9) then born = c9 end
+                                    end)
+                                end
+                                if born then
+                                    pcall(function() log.info("[IrisTaming] quarry claimed from the spawner (identity, not proximity)") end)
+                                end
+                            end)
                             for i3 = 0, (tonumber(n3) or 0) - 1 do
+                                if born then break end
                                 pcall(function()
                                     local c3 = comps3:call("get_Item", i3) or comps3[i3]
                                     if c3 and c3 ~= ch and not is_dead(c3) and S.doe_spawn_uni then
@@ -21063,21 +22352,58 @@ re.on_frame(function()
                 wolf_clip(tonumber(C.cue_circle_clip) or 100)
                 local rx = pp.x + math.sin(T.angle) * T.ring_r
                 local rz = pp.z + math.cos(T.angle) * T.ring_r
+                -- ⛔⛔⛔ 08-20 THE RATCHET THAT KILLED A PUMA. This used to probe from `gp.y` and
+                -- write the result straight back into the body, and `gp` IS what we wrote last
+                -- frame - a feedback loop with no fixed reference. The ray's own clamp lets a
+                -- single frame gain up to 1.0m, which is under the 3.0m "cliff" refusal and so was
+                -- accepted every time; the next frame then probed from that new, higher point. At
+                -- 120fps that is a climb into the sky in well under a second. In a gorge the rock
+                -- walls supply the upward lie on every single frame.
+                -- ⇒ The cure is not a shorter ray (the clamp already bounded each step - it was
+                -- COMPOUNDING, not reach). The cure is to measure against something WE NEVER WRITE:
+                -- `pp.y`, the player's own position, which the engine keeps on real terrain. Error
+                -- against a fixed datum cannot accumulate, by construction.
+                -- ⚠ THE +2.0 IS LOAD-BEARING, NOT PADDING. The eligibility clamp is `py <= y + 1.0`
+                -- measured from the y we pass (read out of route3_cast_ground_below, not assumed).
+                -- Pass pp.y bare and any ring point more than 1m uphill returns NOTHING - so the
+                -- circle would refuse every slope in the game and just pace on the spot, which
+                -- reads as "the ritual is broken" rather than as a gate that is too tight. Raising
+                -- the datum 2m lifts the ceiling to pp.y + 3.0, matching the acceptance gate below.
+                -- ⚠ nil is NOT "keep your height" any more. Rays miss WATER entirely, so no-hit is
+                -- the water/void signature - and holding gp.y over it is precisely how a puma
+                -- hovered out over a gorge. No ground, no step.
                 local ry = gp.y
                 local ring_ok = true
                 if _G.IrisGriffinBridge and _G.IrisGriffinBridge.ground_below then
-                    local rhit = ground_probe(rx, gp.y, rz)
-                    if rhit and math.abs((tonumber(rhit.y) or gp.y) - gp.y) >= 3.0 then
-                        ring_ok = false   -- positive cliff on the ring: reverse the stalk
-                    elseif rhit then
-                        ry = tonumber(rhit.y) or gp.y
+                    local rhit = S.terrain_y(rx, pp.y + 2.0, rz)
+                    local rhy = rhit and tonumber(rhit.y) or nil
+                    if (not rhy) or math.abs(rhy - pp.y) >= 3.0 then
+                        ring_ok = false   -- void, water or a real cliff on the ring: reverse the stalk
+                        if now >= (tonumber(T.ring_log_at) or 0.0) then
+                            T.ring_log_at = now + 1.0
+                            -- ⚠ a silent refusal is indistinguishable from a broken stage, and this
+                            -- gate is exactly the shape that fails closed. Make it say so.
+                            pcall(function() log.info(string.format(
+                                "[IrisTaming] circle: ring point refused (%s) - reversing",
+                                rhy and string.format("dy %.1f", rhy - pp.y) or "no ground / water")) end)
+                        end
+                    else
+                        ry = rhy
                     end
                 end
                 if not ring_ok then
                     -- a cliff on the ring: it turns and stalks BACK the other way (never falls)
-                    T.cdir = -T.cdir
+                    -- ⛔ WITH A COOLDOWN. Where BOTH directions are blocked - a spit of land, the
+                    -- water's edge - an uncooled flip reverses every single frame and the body
+                    -- shivers in place. Pacing at a barrier is correct behaviour; a 120Hz twitch is
+                    -- the same bug wearing a different coat.
+                    if now >= (tonumber(T.flip_at) or 0.0) then
+                        T.flip_at = now + 0.4
+                        T.cdir = -T.cdir
+                    end
                     T.angle = T.angle + dt * (tonumber(C.circle_speed) or 0.55) * T.cdir * 3.0
                 else
+                    T.safe_pos = { x = rx, y = ry, z = rz }   -- ground-vouched: the rescue fallback
                     pcall(function()
                         local pv = ValueType.new(sdk.find_type_definition("via.Position"))
                         pv.x = rx; pv.y = ry; pv.z = rz
@@ -21420,7 +22746,15 @@ re.on_frame(function()
                     end
                     if T.slack > 3.0 then trial_fail("you lowered the hand"); return true end
                     if elapsed >= need_secs then
-                        if T.cat_sit then play_motion(ch, 60, 3)   -- 60:3 sit_to_idle: it rises, satisfied
+                        if T.cat_sit then
+                            play_motion(ch, 60, 3)   -- 60:3 sit_to_idle: it rises, satisfied
+                            -- ⭐ 08-20 AND SO DOES SHE. The third beat of the triad: the Arisen
+                            -- gets up out of the kneel deliberately instead of the pose simply
+                            -- being dropped and the body popping upright. Armed here, played and
+                            -- leased by the performance block, expired by the unconditional
+                            -- watchdog -- so no stage change, range gate or fail can strand her
+                            -- think-stopped halfway to her feet.
+                            S.kneel_rise_want = true
                         else play_motion(ch, 0, tonumber(C.cue_howl_end) or 4612) end
                         S.familiar[ck] = fam + 30.0; T.howl_pt = nil; pick_next(T, now); save_state()
                     end
@@ -21428,14 +22762,28 @@ re.on_frame(function()
 
             elseif T.stage == "back_off" then
                 -- it gives you room again before the final approach
+                -- ⛔⛔ 08-20 THE DESTINATION USED TO RECEDE WITH THE WALKER (Aurora: "the puma tried
+                -- to back up but ended up running on the spot and not actually backing up"). The
+                -- old target was `gp + 2m`, recomputed EVERY FRAME - and gp is wherever wolf_travel
+                -- put the body last frame, so the goal ran away at exactly the speed the walker
+                -- chased it. dd never fell, the walk clip never stopped, and on any rising ground
+                -- the walker's own wall test (>0.25m per step) refused the step outright while the
+                -- clip kept playing: a treadmill. Combined with the live MotionFsm2 (now off, see
+                -- the FSM note at the gate) the result was a creature sprinting in place.
+                -- ⇒ ONE fixed point, chosen once on stage entry, on the player->creature axis.
+                -- Arrival is then a real, reachable condition and the beat can actually end.
                 wolf_clip(tonumber(C.cue_walk_clip) or 200)
-                if d < 5.0 then
+                if not T.back_pt then
                     local bx, bz = gp.x - pp.x, gp.z - pp.z
                     local bd = math.sqrt(bx * bx + bz * bz)
-                    if bd > 0.05 then
-                        wolf_travel(gp.x + bx / bd * 2.0, gp.y, gp.z + bz / bd * 2.0, 2.0)
-                    end
-                else
+                    if bd < 0.05 then bx, bz, bd = 0.0, 1.0, 1.0 end   -- degenerate overlap: pick any bearing
+                    local want = 5.5   -- comfortably past the d >= 5.0 hand-off, so the stage completes
+                    T.back_pt = { x = pp.x + bx / bd * want, y = gp.y, z = pp.z + bz / bd * want }
+                    T.back_until = now + 6.0   -- and it never loiters: a refused path still moves the rite on
+                end
+                local remain = wolf_travel(T.back_pt.x, T.back_pt.y, T.back_pt.z, 2.0)
+                if d >= 5.0 or remain <= 0.15 or now >= (tonumber(T.back_until) or 0.0) then
+                    T.back_pt = nil; T.back_until = nil
                     pick_next(T, now)
                 end
 
@@ -21645,15 +22993,18 @@ re.on_draw_ui(function()
         if imgui.tree_node("House cat (IRIS companion)##tame_housecat") then
             imgui.text("Uses IRIS Taming's rabbit companion path: one owner for follow, solidity and pickup.")
             if C.housecat_mesh_armed ~= true then
-                imgui.text("Install and enable the v0.7 (or newer) house-cat Fluffy mod before arming.")
+                imgui.text("Mesh autoload is OFF. Install the house-cat Fluffy mod, then arm.")
                 if imgui.button("ARM house-cat mesh##tame_housecat_arm") then
                     C.housecat_mesh_armed = true
+                    C.housecat_mesh_autoload = true
+                    pcall(save_state)
                     HC.pin_mesh()
                 end
             else
                 HC.mesh_ready()
                 imgui.text("Asset: " .. tostring(S.housecat_status))
                 local hcchg
+                imgui.text("   mesh: " .. tostring(select(1, HC.asset_paths())))
                 hcchg, C.housecat_spawn_distance = imgui.drag_float("Spawn distance##tame_housecat_dist", tonumber(C.housecat_spawn_distance) or 2.6, 0.1, 1.0, 8.0)
                 if hcchg then pcall(save_state) end
                 hcchg, C.housecat_natural_scale = imgui.drag_float("Natural scale (x Size IV)##tame_housecat_natscale", tonumber(C.housecat_natural_scale) or 1.2, 0.01, 0.5, 2.5)
@@ -21682,6 +23033,36 @@ re.on_draw_ui(function()
                     hcchg, C.housecat_carry_wrist_relax = imgui.drag_float("Held front-wrist relax##tame_housecat_wristrelax", tonumber(C.housecat_carry_wrist_relax) or 0.25, 0.01, 0.0, 1.0)
                     if hcchg then pcall(save_state) end
                 end
+                -- ⭐ COAT PICKER (dev): coats are normally RANDOM per tamed cat
+                -- and stored on her record, so this is the only way to see a
+                -- specific one on demand. Writes the same rec.coat field the
+                -- random pick writes, then re-dresses the live body.
+                do
+                    local rec = S.housecat_ch and S.tamed and S.tamed[S.housecat_ch]
+                    local cur = (rec and rec.coat) or "default"
+                    local idx = 1
+                    for i, c in ipairs(HC.COATS) do if c == cur then idx = i end end
+                    local cchg, cnew = imgui.combo("Coat##tame_housecat_coat", idx, HC.COATS)
+                    if cchg and rec then
+                        rec.coat = HC.COATS[cnew] or "default"
+                        HC.pin_coat(rec.coat)
+                        pcall(save_state)
+                        S.housecat_recoat_at = os.clock() + HC.warm_secs
+                        S.status = "cat coat -> " .. tostring(rec.coat)
+                    elseif cchg then
+                        S.status = "no live cat to re-coat"
+                    end
+                    -- the material needs its async warm before it can be applied,
+                    -- so the re-dress is deferred rather than done on the click
+                    if S.housecat_recoat_at and os.clock() >= S.housecat_recoat_at then
+                        S.housecat_recoat_at = nil
+                        if S.housecat_ch then pcall(function() HC.apply_mesh(S.housecat_ch) end) end
+                    end
+                    if rec then
+                        imgui.text("   coat: " .. tostring(rec.coat or "default")
+                            .. (HC.coat_holder(rec.coat) and " (loaded)" or " (stock/warming)"))
+                    end
+                end
                 if imgui.button("Spawn / replace IRIS house cat##tame_housecat_spawn") then
                     if not HC.spawn() then S.status = "house cat: " .. tostring(S.housecat_status) end
                 end
@@ -21692,32 +23073,92 @@ re.on_draw_ui(function()
                     S.status = "house cat despawned"
                 end
                 imgui.separator()
-                local hc_bank_labels = {}
-                for i = 1, #HC.bank_sources do hc_bank_labels[i] = HC.bank_sources[i].label end
-                hcchg, C.housecat_bank_source = imgui.combo("Bank 904 source##tame_housecat_banksrc", math.floor(tonumber(C.housecat_bank_source) or 1), hc_bank_labels)
-                if hcchg then pcall(save_state) end
                 if C.housecat_bank_armed ~= true then
-                    imgui.text("Bank disarmed (autoload off). Install the v0.9.4 house-cat pak, then arm.")
+                    imgui.text("Bank autoload is OFF. Install the house-cat pak, then arm.")
                     if imgui.button("ARM motion bank##tame_housecat_bankarm") then
                         C.housecat_bank_armed = true
+                        C.housecat_bank_autoload = true
+                        pcall(save_state)
                         HC.register_bank()
                     end
                 else
-                    if imgui.button("Register bank 904 on cat##tame_housecat_bankreg") then
+                    -- ⭐ The bank now attaches itself (HC.bank_tick). This button
+                    -- stays for debugging only -- it is no longer part of the
+                    -- normal flow, so the status line is what matters here.
+                    imgui.text("Bank: " .. tostring(S.housecat_bank_status))
+                    if imgui.button("Re-register (debug)##tame_housecat_bankreg") then
+                        S.housecat_bank_key = nil
                         HC.register_bank()
                     end
                     imgui.same_line()
-                    imgui.text(tostring(S.housecat_bank_status))
-                    hcchg, C.housecat_test_clip = imgui.drag_int("W3 test clip##tame_housecat_testclip", math.floor(tonumber(C.housecat_test_clip) or 2), 1, 0, 17)
-                    if hcchg then pcall(save_state) end
-                    if imgui.button("Play W3 clip##tame_housecat_play") then
-                        if HC.register_bank() and S.housecat_ch then
-                            play_motion(S.housecat_ch, HC.bank_id, math.floor(tonumber(C.housecat_test_clip) or 2))
-                            S.status = "W3 cat clip " .. tostring(C.housecat_test_clip)
-                        end
+                    local achg
+                    achg, C.housecat_bank_autoload = imgui.checkbox(
+                        "autoload##tame_housecat_bankauto", C.housecat_bank_autoload ~= false)
+                    if achg then pcall(save_state) end
+                    -- ⭐ NAMED CLIP TESTER. The index lives in S, not C: a stale
+                    -- saved index from an older roster would be a wrong-id risk
+                    -- on a think-stopped FSM, and persisting it buys nothing.
+                    imgui.separator()
+                    local idx = math.floor(tonumber(S.housecat_clip_idx) or 1)
+                    if idx < 1 or idx > #HC.clips then idx = 1 end
+                    -- category filter: 152 clips in one flat list is unusable
+                    local catn = math.floor(tonumber(S.housecat_clip_catn) or 1)
+                    local fchg, fnew = imgui.combo("Group##tame_housecat_clipcat",
+                        catn, HC.clip_cats)
+                    if fchg then
+                        S.housecat_clip_catn = fnew
+                        S.housecat_clip_cat = HC.clip_cats[fnew] or "all"
                     end
-                    imgui.text("1 idle 2 walk 3 run 4-5 walk L/R 6-7 run L/R 8-11 idles 12-14 eat 15 taunt 16 hiss 17 death")
-                    imgui.text("(contract is 1-based; if takes look shifted by one, try id-1)")
+                    local view = HC.visible_clips()
+                    local labels, here = {}, 1
+                    for k = 1, #view do
+                        local c = HC.clips[view[k]]
+                        labels[k] = string.format("%3d  %s", c.id, c.name)
+                        if view[k] == idx then here = k end
+                    end
+                    imgui.text(string.format("   %d clips in this group (%d total)",
+                        #view, #HC.clips))
+                    local cchg, cidx = imgui.combo("Clip##tame_housecat_clip", here, labels)
+                    -- ⛔ map the VIEW position back to the real roster index
+                    if cchg and view[cidx] then HC.test_play(view[cidx]) end
+                    if imgui.button("< Prev##tame_housecat_prev") then
+                        local k = ((here - 2) % math.max(1, #view)) + 1
+                        if view[k] then HC.test_play(view[k]) end
+                    end
+                    imgui.same_line()
+                    if imgui.button("PLAY##tame_housecat_play") then HC.test_play(idx) end
+                    imgui.same_line()
+                    if imgui.button("Next >##tame_housecat_next") then
+                        local k = (here % math.max(1, #view)) + 1
+                        if view[k] then HC.test_play(view[k]) end
+                    end
+                    imgui.same_line()
+                    if imgui.button("Stop / hand back##tame_housecat_teststop") then
+                        HC.test_stop()
+                        S.status = "cat: normal behaviour restored"
+                    end
+                    local lchg
+                    lchg, S.housecat_loop = imgui.checkbox("Loop##tame_housecat_loop", S.housecat_loop == true)
+                    imgui.same_line()
+                    lchg, S.housecat_freeze = imgui.checkbox("Freeze on last frame##tame_housecat_freeze", S.housecat_freeze == true)
+                    -- leaving freeze must un-stick the layer, or the cat stays
+                    -- frozen with no obvious way back
+                    if lchg and S.housecat_freeze ~= true then HC.test_speed(1.0) end
+                    if S.housecat_test then
+                        local fr, ef = 0.0, 0.0
+                        pcall(function()
+                            local layer = HC.layer0()
+                            if layer then
+                                fr = tonumber(layer:call("get_Frame")) or 0.0
+                                ef = tonumber(layer:call("get_EndFrame")) or 0.0
+                            end
+                        end)
+                        imgui.text(string.format("TESTING  id %d  %s   frame %.0f / %.0f",
+                            HC.clips[idx].id, HC.clips[idx].name, fr, ef))
+                        imgui.text("Follow/idle driver is SUSPENDED while testing -- press Stop to hand her back.")
+                    else
+                        imgui.text("Normal behaviour. Picking a clip or pressing PLAY takes over the body.")
+                    end
                 end
             end
             imgui.text("House cat: " .. tostring(S.housecat_status))

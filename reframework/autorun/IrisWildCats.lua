@@ -2020,7 +2020,14 @@ pcall(function()
         if not dispatcher then return false, "no WwiseContainerApp" end
         local trig = native_trigger_for_id(target_go, trigger_id)
         if not trig then return false, "trigger not on target's lists" end
-        return post_request(dispatcher, trig, target_go, true)
+        -- 08-19: mark this post as OURS -- the maul whimper-mute suppresses
+        -- native mount vocals by this same trigger method, and must never
+        -- eat its own growl.
+        A.manual_wolf_post_depth = (tonumber(A.manual_wolf_post_depth) or 0) + 1
+        local ok, err = post_request(dispatcher, trig, target_go, true)
+        A.manual_wolf_post_depth = math.max(0,
+            (tonumber(A.manual_wolf_post_depth) or 1) - 1)
+        return ok, err
     end
     api.get_wolf_howl_status = function()
         return A.wolf_howl_last_post, A.wolf_trigger_trace
@@ -2073,7 +2080,11 @@ local function install_trigger_hook()
         local prey_watch = rawget(_G, "IrisWyrmPreyVocalWatch")
         local prey_hot = prey_watch ~= nil
             and os.clock() <= (tonumber(prey_watch.until_t) or 0.0)
-        if not (C.enabled and C.replace_wolf_vocals) and not prey_hot then
+        local mute_watch = rawget(_G, "IrisWyrmMuteMountVocals")
+        local mute_hot = mute_watch ~= nil
+            and os.clock() <= (tonumber(mute_watch.until_t) or 0.0)
+        if not (C.enabled and C.replace_wolf_vocals)
+            and not prey_hot and not mute_hot then
             return
         end
         local container, request = nil, nil
@@ -2166,6 +2177,31 @@ local function install_trigger_hook()
                             MOD, trigger_id, event_id))
                     end)
                 end
+            end
+        end
+        -- 08-19 WHIMPER MUTE (Aurora: the wolf's push-down clip carries a
+        -- baked whimper; the panther's variant doesn't): while a pinned maul
+        -- is live, suppress the MOUNT's own NATIVE vocal posts -- the
+        -- rodeo's growl beat owns the maul's voice. Manual posts
+        -- (manual_wolf_post_depth > 0) always pass: that IS the growl.
+        -- Same SKIP_ORIGINAL lever the cat replacer below has always used.
+        local mute = rawget(_G, "IrisWyrmMuteMountVocals")
+        if mute and os.clock() <= (tonumber(mute.until_t) or 0.0)
+            and (tonumber(A.manual_wolf_post_depth) or 0) == 0 then
+            local probe2 = owner
+            for _ = 1, 5 do
+                if not probe2 then break end
+                if object_address(probe2) == mute.addr then
+                    A.maul_muted = (tonumber(A.maul_muted) or 0) + 1
+                    return sdk.PreHookResult.SKIP_ORIGINAL
+                end
+                local parent2 = nil
+                pcall(function()
+                    local tf2 = probe2:call("get_Transform")
+                    local ptf2 = tf2 and tf2:call("get_Parent")
+                    parent2 = ptf2 and ptf2:call("get_GameObject")
+                end)
+                probe2 = parent2
             end
         end
         if not (C.enabled and C.replace_wolf_vocals) then return end
