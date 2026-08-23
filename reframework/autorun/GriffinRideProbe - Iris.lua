@@ -296,6 +296,65 @@ local DEFAULT = {
     route3_rider_lock_enabled = false, -- UNSAFE legacy puppet path; native climb must own rider position
     route3_air_seat = true, -- Drake development invariant: native ground grab hands off to Levitate in flight
     route3_native_air_guard = true, -- native Drake grab keeps attachment; suppress fall/rescue/fade machinery
+    -- Native-grab Drake route. These MUST live in DEFAULT: merge_config deliberately strips
+    -- unknown saved keys, so omitting them made the panel toggle silently reset on every reload.
+    route3_native_grab_test = false,
+    route3_ng_relatch = true,
+    route3_ng_relatch_gap = 2.5,
+    route3_ng_seat_pin = false, -- A/B only: never transform-pin over the live native attach
+    route3_ng_soar_pose = true, -- render-only Upper brace; never touches the working native attachment
+    route3_ng_soar_pose_pawn = true,
+    route3_ng_soar_pose_clip = "rs_drake_rider_normal_full",
+    route3_ng_soar_pose_frame = 27,
+    -- Native-grab soar RIDER FIT.  These are render-joint adjustments only: they
+    -- cannot move the gameplay root or compete with the grip/fall guards.  Keep a
+    -- separate set from the old Griffin/Wilds fit so tuning the Drake cannot alter
+    -- another mount.  Horse Rodeo's useful idea is the fitting surface, not its
+    -- retired transform-seat owner.
+    route3_ng_fit = true,
+    route3_ng_fit_pawn = true,
+    -- Field-tuned 08-23 after the native-grab/rootfix flight became stable.
+    route3_ng_body_pitch = -52.0,
+    route3_ng_head_yaw = -5.0,
+    route3_ng_head_pitch = -11.0,
+    route3_ng_hip_x = -0.03,
+    route3_ng_hip_y = -0.01,
+    route3_ng_hip_z = -0.09,
+    route3_ng_limb_thigh_x = 0.0,
+    route3_ng_limb_thigh_y = 0.0,
+    route3_ng_limb_thigh_z = 0.0,
+    route3_ng_limb_knee_x = 0.0,
+    route3_ng_limb_knee_y = 0.0,
+    route3_ng_limb_knee_z = 0.0,
+    route3_ng_limb_ankle_x = 0.0,
+    route3_ng_limb_ankle_y = 0.0,
+    route3_ng_limb_ankle_z = 0.0,
+    route3_ng_limb_arm_x = 0.0,
+    route3_ng_limb_arm_y = 0.0,
+    route3_ng_limb_arm_z = 0.0,
+    route3_ng_limb_elbow_x = 0.0,
+    route3_ng_limb_elbow_y = 0.0,
+    route3_ng_limb_elbow_z = 0.0,
+    route3_ng_leg_tailward = 0.0, -- position-space pair nudge, metres along Drake spine
+    route3_ng_leg_up = -0.20,     -- field-tuned position-space nudge
+    route3_ng_hand_magnet = true,
+    route3_ng_hand_grip_joint = "Spine_3",
+    route3_ng_hand_grip_width = 0.28,
+    route3_ng_hand_grip_up = 0.10,
+    route3_ng_hand_grip_fwd = 0.18,
+    -- Pawn sits rearward and must grip a rear spine joint; sharing the Arisen's
+    -- Spine_3 target visibly leaves her floating/reaching through empty air.
+    route3_ng_pawn_body_pitch = -60.0,
+    route3_ng_pawn_hip_x = 0.0,
+    route3_ng_pawn_hip_y = -0.15,
+    route3_ng_pawn_hip_z = 0.0,
+    route3_ng_pawn_leg_tailward = 0.0,
+    route3_ng_pawn_leg_up = 0.0,
+    route3_ng_pawn_hand_grip_joint = "Spine_2",
+    route3_ng_pawn_hand_grip_width = 0.28,
+    route3_ng_pawn_hand_grip_up = -0.59,
+    route3_ng_pawn_hand_grip_fwd = 0.79,
+    route3_ng_pawn_tailward = 1.95, -- metres along animated Spine_3 -> Spine_1, genuinely towards tail
     route3_shakeoff_suppress = true, -- ch257 flight clips carry authored shake-off tracks
     route3_reqabort_veto = true, -- refuse external abort requests on the mounted player's ClimbCtrl
     route3_drake_native_face_front = true, -- render-only Hip yaw; native follower keeps position
@@ -510,7 +569,7 @@ local DEFAULT = {
     route3_pawn_jump_bank = 0,
     route3_pawn_jump_clip = 430,           -- ch00_000_com_jump_start_dash (launch out of a run)
     route3_pawn_jump_air_clip = 431,       -- ch00_000_com_jump_dash (airborne hold)
-    route3_pawn_ride_back = 0.9,           -- metres further back along her spine to drop the pawn before
+    route3_pawn_ride_back = -0.5,          -- field-tuned grab-contact correction (not tail travel)
                                            -- the latch, so she lands on the rump instead of crowding the
                                            -- Arisen. Raise if they still overlap; 0 = the old behaviour
     route3_pawn_match_rider_pose = true,   -- same human climb clip -> freeze pawn at the Arisen's exact frame
@@ -1333,6 +1392,89 @@ local DEFAULT = {
     route3_gatk_damage = 1500.0,-- stomp/peck damage: a Griffin should not need a long combo to kill a Saurian
     route3_gatk_peck_damage = 1200.0,-- lightning (1500) should hit harder than an ordinary peck
     route3_gatk_cooldown = 1.2,             -- seconds between attacks
+    -- ======================= I.R.I.S. MOUNT COMBAT (2026-08-21) =======================
+    -- The wolf/panther mounted-combat architecture ported onto the griffin, and written to
+    -- be the shared combat script for every future mount. Implementation: IrisGriffin/combat.lua.
+    -- ⛔ These keys MUST live here: merge_config runs thousands of lines before combat.lua is
+    -- required and silently DISCARDS any key missing from DEFAULT (it would read as "config
+    -- isn't saving").
+    route3_combat_enabled = true,             -- master switch for the shared mount combat script
+    route3_combat_combo_enabled = true,       -- staged combo on the ground attack (stamp -> beak -> rush)
+    route3_combat_native_hitbox = true,       -- rearm the HitController so the authored clip's OWN attack event transacts
+    route3_combat_native_scale = 6.0,         -- damage multiplier applied to a NATIVE landing (she must still kill things)
+    route3_combat_fallback_pulse = true,      -- if no native window transacted, pay with the proven radius pulse
+    route3_combat_party_shield = true,        -- ⛔ her native hitboxes can never hurt the Arisen or her pawns
+    route3_combat_aim_enabled = true,
+    route3_combat_aim_deg = 180.0,            -- 180 = a genuine full circle (the wolf's 08-19 law)
+    route3_combat_aim_secs = 0.12,
+    route3_combat_reach = 9.0,                -- target acquisition reach, measured from the striking joint
+    route3_combat_width = 6.5,
+    route3_combat_vertical = 8.0,
+    route3_combat_lunge_max = 2.5,            -- how far a strike VOLUME may reach toward a locked foe (never moves her body)
+    route3_combat_cam_enabled = true,
+    route3_combat_cam_side_deg = -55.0,
+    route3_combat_cam_dist = 7.5,
+    route3_combat_cam_height = 3.2,
+    route3_combat_cam_bias = 0.55,            -- 0 = frame her, 1 = frame the victim
+    route3_combat_cam_smooth = 0.22,
+    route3_combat_cam_tail = 0.5,             -- camera hands back over this long instead of snapping
+    route3_combat_link3_clip = 512,           -- 50:512 ch53_000_atk_rush_beak_F -- the combo finisher
+    route3_combat_link3_tail_clip = 515,      -- 50:515 its authored recovery
+    -- ⛔ 0 = AUTO (a fraction of the clip's MEASURED EndFrame). 08-21 field: the gust measurement
+    -- proved clip 202 is 347 frames long, i.e. DD2 motion runs at ~60fps, not the 30 this mod
+    -- assumed everywhere. My first-pass 22/34/46 for the rush beak therefore cut it off at ~0.8s
+    -- -- Aurora: "it flies up a bit (looks really cool) but then ends before an attack happens".
+    -- Fractions are framerate- AND length-independent; a stamped absolute above 0 overrides them.
+    route3_combat_link3_hit_frame = 0.0,
+    route3_combat_link3_link_frame = 0.0,
+    route3_combat_link3_end_frame = 0.0,
+    route3_combat_frac_hit = 0.62,            -- where a link's impact sits, as a fraction of its clip
+    route3_combat_frac_link = 0.72,           -- earliest frame the next combo link may take over
+    route3_combat_frac_end = 0.97,            -- let the authored animation finish
+    route3_combat_fps = 60.0,                 -- measured live; this is only the pre-measurement seed
+    route3_combat_frames_fix_version = 0,     -- migration latch (saved config always outranks DEFAULT)
+    route3_combat_marker_aspect = 0.62,       -- target box width as a fraction of its height
+    route3_combat_link3_radius = 3.0,
+    route3_combat_link3_forward = 3.6,
+    route3_combat_link3_damage = 2400.0,
+    route3_combat_link3_knock = true,         -- the finisher gets the native knockback shell
+    route3_combat_reqid_capture = false,      -- DIAGNOSTIC: record a real ch253's own collider request ids
+    route3_combat_reqid_stomp = -1,           -- ⛔ -1 = UNKNOWN. Never guess one: pin only ids the capture actually saw
+    route3_combat_reqid_beak = -1,
+    route3_combat_reqid_rush = -1,
+    route3_combat_marker_style = 1,           -- 0 = nothing, 1 = subtle corner ticks, 2 = the old [ LOCK ] text
+    route3_combat_marker_alpha = 140,
+    route3_combat_marker_size = 14.0,
+    route3_combat_marker_colour = 0x00E8D9B0, -- RGB only; opacity comes from _alpha
+    -- The gust finale's knockback, and the frame data that times it.
+    route3_gust_blow_mode = 1,                -- 0 = legacy scripted fling, 1 = native Barghest shell, 2 = both
+    route3_gust_shell_path = "AppSystem/ch/ch227/001/userdata/ch227001darkareashellparamdata.user",
+    -- ⭐ IRIS CASTS THIS SHELL ITSELF -- no Bestiary, no SkillCreator, no dependency (the whole
+    -- cast is app.ShellManager.requestCreateShell + a created app.ShellParamData userdata).
+    -- 0 = auto: use an installed handler when there IS one, because only its colour hook can hide
+    -- the dome's VFX so the wing animation stays the visual; otherwise cast it standalone.
+    -- 1 = force the standalone cast (dome VISIBLE). 2 = force the handler, fail if absent.
+    route3_gust_shell_route = 0,
+    route3_gust_shell_size = 6.0,
+    route3_gust_shell_delay = 0.0,
+    route3_gust_shell_lifetime = 0.5,
+    route3_gust_flap_autocal = true,          -- MEASURE clip 202's real last wing beat and pin route3_gust_finale_frame
+    route3_gust_flap_joints = "L_Wing_Upper,R_Wing_Upper",
+    route3_gust_flap_min_drop = 0.05,         -- metres of downstroke that count as a real wing beat
+    -- ⭐ 08-21 FIELD: the measurement came back "clip 202 beats: f36 f97 f152 f246 f326, end=347".
+    -- So the wind-down is FIVE wing beats and ~5.8s long at 60fps, and Aurora's verdict was "the
+    -- ending takes too long to end, the goblin is already back to standing by the time I get to
+    -- him". Three knobs shorten it without lying about where the wings actually beat:
+    -- Seeded with Aurora's OWN 08-21 measurement so the very first gust after this update already
+    -- knows where the beats are; the next real measurement overwrites it.
+    route3_gust_beat_frames = "36,97,152,246,326",
+    route3_gust_finale_beat = 2,              -- which beat carries the knock, counting BACK from the last (1 = the true final flap)
+    route3_gust_end_after_frames = 35.0,      -- retire the wind-down this soon after the knock (0 = play clip 202 out in full)
+    route3_gust_end_speed = 1.5,              -- play the wind-down this much faster (1.0 = authored speed)
+    -- RT on a knocked-down enemy: the maul's contract, using the existing eat cycle.
+    route3_ground_eat_prone = true,
+    route3_ground_eat_prone_range = 4.5,
+    route3_ground_eat_prone_facing = 0.15,    -- dot product: roughly in front of her
     -- SPRINT + ATTACK: grounded LandDash charge. Locomotion remains on the proven terrain drive;
     -- these clips supply the authored body motion and a swept beak volume supplies honest contact.
     route3_charge_enabled = true,
@@ -1606,6 +1748,16 @@ local DEFAULT = {
     route3_meal_kill_for_blood = true,
     route3_meal_think_stop_prey = false,   -- r23: see the meal tick note
     route3_meal_think_wake_s = 0.4,
+    -- ⭐ r23 BLOOD LADDER. One variable per rung, each printed in the receipt,
+    -- so a field test can never be ambiguous about which one was on. Both
+    -- default OFF = today's behaviour.
+    route3_meal_skip_restore = false,  -- rung A: replay WITHOUT the 18-field
+                                       -- re-stamp (this is the one difference
+                                       -- from the wolf's copy, which paints)
+    route3_meal_keep_cc = false,       -- rung B: leave the prey's
+                                       -- CharacterController ENABLED during
+                                       -- the meal (diagnostic only -- physics
+                                       -- may fight the beak pin)
     route3_meal_peck_frames = "5310:48,202,296",
     route3_meal_peck_lead = 6,      -- fire this many frames early (human lag)
     route3_meal_stamp_merge = 12,   -- taps this close = the same stab
@@ -1709,6 +1861,14 @@ local ctx = require("IrisGriffin.context")
 local C, S = ctx.C, ctx.S
 for k in pairs(C) do C[k] = nil end
 for k, v in pairs(merge_config(merge_config({}, DEFAULT), json.load_file(MOD .. ".json"))) do C[k] = v end
+-- 08-22 native-grab pose heal: braced@129 was field-proven to be an overhead/rollercoaster
+-- capture, not a forward brace. Migrate only that exact shipped pair; preserve later tuning.
+if tostring(C.route3_ng_soar_pose_clip or "") == "rs_drake_rider_braced_full"
+    and math.floor(tonumber(C.route3_ng_soar_pose_frame) or -1) == 129 then
+    C.route3_ng_soar_pose_clip = "rs_drake_rider_normal_full"
+    C.route3_ng_soar_pose_frame = 27
+    pcall(function() json.dump_file(MOD .. ".json", C) end)
+end
 -- The temporary metallic confirmation sound predates native contact packets.
 -- Retire that exact saved default while preserving any deliberate custom ID.
 if tonumber(C.route3_gatk_hit_sound_id) == 1075806062 then C.route3_gatk_hit_sound_id = 0 end
@@ -1726,6 +1886,18 @@ end
 if (tonumber(C.route3_revive_health_fix_version) or 0) < 1 then
     C.route3_revive_health_fix_version = 1
     C.route3_downed_revive_frac = 0.10
+    pcall(function() json.dump_file(MOD .. ".json", C) end)
+end
+-- MOUNT COMBAT FRAMES v1 (2026-08-21). ⛔ SAVED CONFIG ALWAYS OUTRANKS DEFAULT, and this file
+-- save_config()s at the end of every load -- so the rush beak's first-pass 22/34/46 are already
+-- on disk and changing DEFAULT alone cannot reach them. The field measurement proved DD2 motion
+-- runs at ~60fps (clip 202 = 347 frames), which made those numbers cut the animation off at ~0.8s.
+-- Clear them to 0 = AUTO once, so the fraction-of-measured-EndFrame path takes over.
+if (tonumber(C.route3_combat_frames_fix_version) or 0) < 1 then
+    C.route3_combat_frames_fix_version = 1
+    C.route3_combat_link3_hit_frame = 0.0
+    C.route3_combat_link3_link_frame = 0.0
+    C.route3_combat_link3_end_frame = 0.0
     pcall(function() json.dump_file(MOD .. ".json", C) end)
 end
 -- The old predation UI persisted -1 ("leave whatever stale value is there").
@@ -12920,6 +13092,8 @@ local function dismount_griffin()
     -- round 6b: disarm the onAbortClimb veto BEFORE any teardown -- rejected aborts
     -- during dismount = "she stays glued to the body" (the steady-seat lesson below).
     S.route3_abort_veto_off_until = os.clock() + 3.0
+    -- theft law: restore her root motion FIRST, unconditionally (statue-hazard rule)
+    pcall(iris_native_grab_rootfix_restore)
     -- Drake stool v10: release the external hierarchy before ordinary player
     -- recovery runs.  The lab restores AdjustJack, collision and the scene parent.
     if S.route3_external_stool_ride == true then
@@ -17388,6 +17562,493 @@ function iris_drake_air_rider_protected()
     return nm:find("ch257", 1, true) ~= nil
 end
 
+-- ⭐⭐⭐ NATIVE GRAB TEST (2026-08-22, dd2-root-motion-theft-law). While she rides the
+-- drake's NATIVE climb, her climb clips' root translation fights the grip solver every
+-- frame -- the "vibrates like crazy" that levitate (v17) and the stool (v12 lab) were
+-- both workarounds for.  Kill the theft at HER motion component instead and let the
+-- native grab run untouched.  Knocking + fade already have standing defenses on this
+-- route (updateShakeOff skip is mounted-gated; camvib/fade vetoes arm via
+-- iris_drake_air_rider_protected when airborne with the air seat off).
+local function iris_native_grab_root_mode(motion)
+    if not motion then return nil end
+    local value = nil
+    pcall(function() value = motion:call("get_RootMotion") end)
+    local numeric = tonumber(value)
+    if numeric ~= nil then return numeric end
+    local text = tostring(value or "")
+    if text:find("Continuance", 1, true) then return 2 end
+    if text:find("FixedWithScale", 1, true) then return 4 end
+    if text:find("FixedUniversal", 1, true) then return 5 end
+    if text:find("Joint", 1, true) then return 3 end
+    if text:find("Fixed", 1, true) then return 1 end
+    if text:find("None", 1, true) then return 0 end
+    return nil
+end
+
+-- REFramework's managed call can return nil for a missing overload without throwing. Verify
+-- the setter through get_RootMotion instead of treating pcall success as proof.
+local function iris_native_grab_set_root_mode(motion, mode)
+    if not motion then return false, nil end
+    pcall(function() motion:call("set_RootMotion(via.motion.RootPlayMode)", mode) end)
+    local after = iris_native_grab_root_mode(motion)
+    if after ~= mode then
+        pcall(function() motion:call("set_RootMotion", mode) end)
+        after = iris_native_grab_root_mode(motion)
+    end
+    return after == mode, after
+end
+
+function iris_native_grab_rootfix_restore()
+    if S.route3_ng_rootfix_on ~= true and S.route3_ng_rootfix_orig_captured ~= true then return end
+    S.route3_ng_rootfix_on = nil
+    local restored = false
+    local wanted = tonumber(S.route3_ng_rootfix_orig) or 2   -- Continuance
+    pcall(function()
+        local pl = get_player()
+        local m = pl and pl:call("get_Motion")
+        if not m then
+            S.route3_ng_rootfix_status = "RESTORE PENDING: no player Motion"
+            return
+        end
+        local after = nil
+        restored, after = iris_native_grab_set_root_mode(m, wanted)
+        pcall(function() m:call("set_RootScaleDisabled(System.Boolean)", false) end)
+        pcall(function() m:call("set_RootScaleDisabled", false) end)
+        S.route3_ng_rootfix_status = restored
+            and ("restored RootPlayMode=" .. tostring(after))
+            or ("RESTORE RECEIPT FAILED (wanted " .. tostring(wanted) .. ", got " .. tostring(after) .. ")")
+    end)
+    -- Keep the captured original alive after a failed receipt. The ordinary late tick will
+    -- retry the restore instead of silently abandoning a player who may still be on None.
+    if restored then
+        S.route3_ng_rootfix_orig = nil
+        S.route3_ng_rootfix_orig_captured = nil
+    end
+    S.route3_ng_relatch_stance = nil
+    S.route3_ng_relatch_candidate = nil
+    S.route3_ng_relatch_candidate_since = nil
+    S.route3_ng_relatch_pending = nil
+    S.route3_ng_relatch_next = nil
+    S.route3_ng_gap = nil
+end
+
+function iris_native_grab_rootfix_tick()
+    local want = C.route3_native_grab_test == true
+        and C.enabled == true and S.mounted == true
+        and S.route3_air_seat_on ~= true
+        and (S.route3_mount_is_drake == true
+            or tostring(S.route3_tamed_species or ""):find("ch257", 1, true) ~= nil)
+    if want ~= true then
+        if S.route3_ng_rootfix_on == true or S.route3_ng_rootfix_orig_captured == true then
+            iris_native_grab_rootfix_restore()
+        end
+        return
+    end
+    pcall(iris_native_grab_fit_late_register)
+    local ok = false
+    pcall(function()
+        local pl = get_player()
+        local m = pl and pl:call("get_Motion")
+        if not m then return end
+        if S.route3_ng_rootfix_orig_captured ~= true then
+            -- Capture exactly once, BEFORE suppression. If the getter has no receipt, use the
+            -- game's ordinary Continuance mode; never let the following frame's None become
+            -- the alleged original and strand the player walking on the spot after dismount.
+            S.route3_ng_rootfix_orig = iris_native_grab_root_mode(m) or 2
+            S.route3_ng_rootfix_orig_captured = true
+        end
+        -- RE-APPLIED EVERY FRAME (the law): a one-shot setter loses to whatever undoes it
+        local after = nil
+        ok, after = iris_native_grab_set_root_mode(m, 0)
+        pcall(function() m:call("set_RootScaleDisabled(System.Boolean)", true) end)
+        pcall(function() m:call("set_RootScaleDisabled", true) end)
+        S.route3_ng_rootfix_status = ok
+            and "receipt OK: RootPlayMode=None"
+            or ("RECEIPT FAILED: RootPlayMode=" .. tostring(after))
+    end)
+    S.route3_ng_rootfix_on = ok == true or nil
+end
+
+-- ⭐ NATIVE GRAB RE-LATCH WATCHDOG (08-22). The climb solver orients her to whatever
+-- surface the grip landed on, and the grip wanders over the animated hide (upside down on
+-- the flank, riding the tail).  The proven native lever: PLACEMENT DECIDES THE GRIP --
+-- startClimb grabs the NEAREST surface (the v13 ground re-latch law).  When her body has
+-- strayed from the saddle zone, place her there and re-fire the native latch; the native
+-- attach then carries her from the right spot with the right surface orientation.
+-- Stance-aware anchor: flight uses the stable mesh-root saddle, ground the root-space seat.
+function iris_native_grab_latch_tick()
+    if S.route3_ng_rootfix_on ~= true then return end
+    if C.route3_ng_relatch == false then return end
+    local now = os.clock()
+    local pl = get_player()
+    local _, go = reacquire_griffin()
+    local pgo = pl and char_go(pl)
+    if not (pl and go and pgo) then return end
+    local seat = nil
+    if S.airborne == true then
+        pcall(function() seat = iris_drake_stable_seat_position(go, false) end)
+    end
+    if not seat then
+        pcall(function()
+            seat = route3_root_space_seat_position(go,
+                tonumber(C.route3_seat_offset_x) or 0.0,
+                tonumber(C.route3_seat_offset_y) or 2.3,
+                tonumber(C.route3_seat_offset_z) or 1.6)
+        end)
+    end
+    local pp = transform_pos(pgo)
+    if not (seat and pp) then return end
+    local dx = (tonumber(seat.x) or 0.0) - (tonumber(pp.x) or 0.0)
+    local dy = (tonumber(seat.y) or 0.0) - (tonumber(pp.y) or 0.0)
+    local dz = (tonumber(seat.z) or 0.0) - (tonumber(pp.z) or 0.0)
+    local gap = math.sqrt(dx * dx + dy * dy + dz * dz)
+    S.route3_ng_gap = gap
+
+    local latched = false
+    pcall(function() latched = pl:call("get_IsClimbOnCharacter") == true end)
+    if latched then
+        -- Field result 08-22: re-latching a LIVE grip on the take-off stance transition
+        -- selected a new surface normal and folded the rider sideways/upside-down. Never
+        -- teleport or fire startClimb over a live attach; gap is diagnostic only while held.
+        S.route3_ng_relatch_status = string.format("native grip LIVE; gap %.2fm (untouched)", gap)
+        return
+    end
+
+    -- Lost grip only: use the proven smart-mount acquisition rule. Do not fire into an
+    -- in-progress climb transition (that double-start has previously crashed natively), and
+    -- retry a genuine miss at the established 0.4s cadence until the receipt turns true.
+    local ctrl = get_climb_ctrl(pl)
+    local climbing = false
+    pcall(function() climbing = ctrl and ctrl:call("get_IsClimbing") == true end)
+    if climbing then
+        S.route3_ng_relatch_status = "lost grip; climb transition pending"
+        return
+    end
+    if now < (tonumber(S.route3_ng_relatch_next) or 0.0) then return end
+    S.route3_ng_relatch_next = now + 0.4
+    S.route3_ng_relatch_count = (tonumber(S.route3_ng_relatch_count) or 0) + 1
+    pcall(function() set_character_transform(pl, seat, nil) end)
+    local latch_status = "latch call failed"
+    pcall(function()
+        latch_status = griffin_fire_player_climb_latch(pl, go)
+    end)
+    S.route3_ng_relatch_status = string.format(
+        "LOST grip; re-latch %d @ gap %.2fm: %s",
+        tonumber(S.route3_ng_relatch_count) or 0, gap, tostring(latch_status))
+end
+
+-- Native grab owns gameplay position + orientation. During soar its stock climb pose leaves both
+-- hands reaching into open air, so paint only the visible upper skeleton at PrepareRendering.
+-- Hip and every leg joint are deliberately absent: this cannot move, rotate or detach either rider.
+local IRIS_NG_SOAR_POSE_BONES = {
+    "Spine_0", "Spine_1", "Spine_2", "Neck_0", "Neck_1", "Head_0",
+    "R_Arm_Clavicle", "R_Arm_Upper", "R_Arm_Lower", "R_Arm_Hand",
+    "L_Arm_Clavicle", "L_Arm_Upper", "L_Arm_Lower", "L_Arm_Hand",
+}
+local iris_ng_soar_pose_cache = nil
+
+local function iris_native_grab_soar_pose_wanted()
+    if C.route3_ng_soar_pose == false or S.route3_ng_rootfix_on ~= true
+        or S.mounted ~= true or S.airborne ~= true then return false end
+    local now = os.clock()
+    -- Photo mode freezes the drive flags that normally identify soar. Retain an
+    -- already-live layer while paused so the final render pose remains editable.
+    if S.route3_ng_soar_pose_live == true
+        and (S.world_paused == true or griffin_world_paused()) then return true end
+    local burst = S.route3_quick_burst
+    local quick_rise = type(burst) == "table" and burst.phase == "rise"
+    return S.last_character_root_move_run == true
+        or S.route3_soar_coasting == true
+        or now < (tonumber(S.route3_simple_rise_until) or 0.0)
+        or quick_rise
+end
+
+local function iris_native_grab_soar_pose_frame()
+    local clip = tostring(C.route3_ng_soar_pose_clip or "rs_drake_rider_normal_full")
+    local wanted = math.max(1, math.floor(tonumber(C.route3_ng_soar_pose_frame) or 27))
+    local key = clip .. "@" .. tostring(wanted)
+    if type(iris_ng_soar_pose_cache) == "table" and iris_ng_soar_pose_cache.key == key then
+        return iris_ng_soar_pose_cache.frame, key
+    end
+    local data = nil
+    pcall(function() data = json.load_file("Animations/" .. clip .. ".json") end)
+    local frames = data and data.frames
+    if type(frames) ~= "table" or #frames < 1 then
+        iris_ng_soar_pose_cache = { key = key, frame = false }
+        return nil, key
+    end
+    local index = math.min(wanted, #frames)
+    iris_ng_soar_pose_cache = { key = key, frame = frames[index] }
+    return frames[index], clip .. "@" .. tostring(index)
+end
+
+local function iris_native_grab_soar_pose_write(ch, frame)
+    local go = ch and char_go(ch)
+    local tf = go and transform_of(go)
+    if not (tf and type(frame) == "table") then return false end
+    local wrote = 0
+    for _, name in ipairs(IRIS_NG_SOAR_POSE_BONES) do
+        local e = frame[name]
+        local joint = e and managed_call(tf, "getJointByName", name)
+        if joint then
+            pcall(function()
+                joint:call("set_LocalEulerAngle", Vector3f.new(
+                    tonumber(e[1]) or 0.0, tonumber(e[2]) or 0.0, tonumber(e[3]) or 0.0))
+                wrote = wrote + 1
+            end)
+        end
+    end
+    return wrote > 0, wrote
+end
+
+function iris_native_grab_soar_pose_apply()
+    if not iris_native_grab_soar_pose_wanted() then
+        if S.route3_ng_soar_pose_live == true then
+            S.route3_ng_soar_pose_status = "native pose (brace released)"
+        end
+        S.route3_ng_soar_pose_live = nil
+        return
+    end
+    -- Do not race rs_anim_lab if Aurora deliberately enables its separate whole-rider layer.
+    if S.route3_wilds_rider_pose_active == true then
+        S.route3_ng_soar_pose_live = nil
+        S.route3_ng_soar_pose_status = "stood down: another rider pose owns rendering"
+        return
+    end
+    local frame, key = iris_native_grab_soar_pose_frame()
+    if not frame then
+        S.route3_ng_soar_pose_live = nil
+        S.route3_ng_soar_pose_status = "pose load FAILED: " .. tostring(key)
+        return
+    end
+    local player_ok, player_n = iris_native_grab_soar_pose_write(get_player(), frame)
+    local pawn_ok, pawn_n = false, 0
+    if C.route3_ng_soar_pose_pawn ~= false and S.route3_pawn_ride_on == true then
+        pcall(function()
+            pawn_ok, pawn_n = iris_native_grab_soar_pose_write(
+                S.route3_pawn_ride_pawn or griffin_get_main_pawn(), frame)
+        end)
+    end
+    S.route3_ng_soar_pose_live = player_ok == true
+    S.route3_ng_soar_pose_status = string.format(
+        "%s Upper: Arisen %s/%d | pawn %s/%d",
+        tostring(key), player_ok and "ON" or "FAILED", tonumber(player_n) or 0,
+        pawn_ok and "ON" or "off", tonumber(pawn_n) or 0)
+end
+
+-- Horse-Rodeo-style fitting over the safe Drake soar overlay.  This deliberately
+-- stops at the skeleton: Hip LOCAL position is a visual nudge, not a character or
+-- controller transform.  Large values therefore reveal the honest limit of this
+-- layer (camera/gameplay root remains behind); the separate neck-seat handoff must
+-- own a genuine relocation if Aurora wants more than a modest anatomical fit.
+function iris_native_grab_fit_write(ch, pawn_mode)
+    if C.route3_ng_fit == false or S.route3_ng_soar_pose_live ~= true then return false end
+    local go = ch and char_go(ch)
+    local tf = go and transform_of(go)
+    if not tf then return false end
+    local actor_key = tostring(go)
+    pcall(function() actor_key = tostring(go:get_address()) end)
+    local wrote = 0
+    pcall(function()
+        local hip = tf:call("getJointByName", "Hip")
+        local hp = hip and hip:call("get_LocalPosition")
+        if hip and hp then
+            local hx = tonumber(pawn_mode and C.route3_ng_pawn_hip_x or C.route3_ng_hip_x) or 0.0
+            local hy = tonumber(pawn_mode and C.route3_ng_pawn_hip_y or C.route3_ng_hip_y) or 0.0
+            local hz = tonumber(pawn_mode and C.route3_ng_pawn_hip_z or C.route3_ng_hip_z) or 0.0
+            -- Photo mode can run several render passes without Motion rebuilding
+            -- the skeleton. Adding to the current Hip each pass therefore drifts
+            -- forever. Recover the unadjusted base only when the current value is
+            -- the exact output of our previous pass; otherwise animation supplied
+            -- a fresh base for this frame.
+            S.route3_ng_hip_receipts = S.route3_ng_hip_receipts or {}
+            local curx, cury, curz = tonumber(hp.x) or 0.0,
+                tonumber(hp.y) or 0.0, tonumber(hp.z) or 0.0
+            local rec = S.route3_ng_hip_receipts[actor_key]
+            local bx, by, bz = curx, cury, curz
+            if rec then
+                local dd = math.abs(curx - rec.ox) + math.abs(cury - rec.oy)
+                    + math.abs(curz - rec.oz)
+                if dd < 0.00001 then bx, by, bz = rec.bx, rec.by, rec.bz end
+            end
+            local ox, oy, oz = bx + hx, by + hy, bz + hz
+            hip:call("set_LocalPosition", Vector3f.new(ox, oy, oz))
+            S.route3_ng_hip_receipts[actor_key] = {
+                bx = bx, by = by, bz = bz, ox = ox, oy = oy, oz = oz,
+            }
+            wrote = wrote + 1
+        end
+        -- Field-mapped humanoid axes for THIS captured pose (Aurora, 08-23):
+        -- X = roll, Y = forward/back pitch, Z = left/right turn. Do not infer these
+        -- from another rig or quaternion convention again.
+        local spine = tf:call("getJointByName", "Spine_0")
+        local se = spine and spine:call("get_LocalEulerAngle")
+        local pitch = math.rad(tonumber(pawn_mode and C.route3_ng_pawn_body_pitch
+            or C.route3_ng_body_pitch) or 0.0)
+        if spine and se and math.abs(pitch) > 0.00001 then
+            spine:call("set_LocalEulerAngle", Vector3f.new(
+                tonumber(se.x) or 0.0, (tonumber(se.y) or 0.0) + pitch,
+                tonumber(se.z) or 0.0))
+            wrote = wrote + 1
+        end
+        -- Frame 27's Head_0 yaw is about +66 degrees: the source itself is why
+        -- both passengers stare sideways.  Make yaw an explicit absolute value
+        -- relative to the neck, while keeping the source frame's small natural
+        -- pitch/roll and allowing a separate nod adjustment.
+        local head = tf:call("getJointByName", "Head_0")
+        local he = head and head:call("get_LocalEulerAngle")
+        if head and he then
+            head:call("set_LocalEulerAngle", Vector3f.new(
+                tonumber(he.x) or 0.0,
+                (tonumber(he.y) or 0.0) + math.rad(tonumber(C.route3_ng_head_pitch) or 0.0),
+                math.rad(tonumber(C.route3_ng_head_yaw) or 0.0)))
+            wrote = wrote + 1
+        end
+        -- Position-space leg pair control. Unlike raw joint angles, these move
+        -- both thigh roots by an explicit world-space amount: up/down and along
+        -- the Drake's animated spine towards its tail. Convert that delta through
+        -- Hip inverse rotation because thigh local positions are Hip-relative.
+        pcall(function()
+            local _, dgo = reacquire_griffin()
+            local dtf = dgo and transform_of(dgo)
+            local js3 = dtf and dtf:call("getJointByName", "Spine_3")
+            local js1 = dtf and dtf:call("getJointByName", "Spine_1")
+            local ps3 = js3 and js3:call("get_Position")
+            local ps1 = js1 and js1:call("get_Position")
+            local tx, ty, tz = 0.0, 0.0, 0.0
+            if ps3 and ps1 then
+                tx = (tonumber(ps1.x) or 0.0) - (tonumber(ps3.x) or 0.0)
+                ty = (tonumber(ps1.y) or 0.0) - (tonumber(ps3.y) or 0.0)
+                tz = (tonumber(ps1.z) or 0.0) - (tonumber(ps3.z) or 0.0)
+                local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+                if tl > 0.0001 then tx, ty, tz = tx / tl, ty / tl, tz / tl end
+            end
+            local tail = tonumber(pawn_mode and C.route3_ng_pawn_leg_tailward
+                or C.route3_ng_leg_tailward) or 0.0
+            local up = tonumber(pawn_mode and C.route3_ng_pawn_leg_up
+                or C.route3_ng_leg_up) or 0.0
+            local hq = hip and hip:call("get_Rotation")
+            if not hq then return end
+            local ld = griffin_q_rotate_vec({
+                x = -(tonumber(hq.x) or 0.0), y = -(tonumber(hq.y) or 0.0),
+                z = -(tonumber(hq.z) or 0.0), w = tonumber(hq.w) or 1.0,
+            }, { x = tx * tail, y = ty * tail + up, z = tz * tail })
+            S.route3_ng_joint_pos_receipts = S.route3_ng_joint_pos_receipts or {}
+            for _, name in ipairs({ "L_Leg_Upper", "R_Leg_Upper" }) do
+                local j = tf:call("getJointByName", name)
+                local p = j and j:call("get_LocalPosition")
+                if j and p and ld then
+                    local key = actor_key .. ":pos:" .. name
+                    local cx, cy, cz = tonumber(p.x) or 0.0,
+                        tonumber(p.y) or 0.0, tonumber(p.z) or 0.0
+                    local rec = S.route3_ng_joint_pos_receipts[key]
+                    local bx, by, bz = cx, cy, cz
+                    if rec then
+                        local dd = math.abs(cx - rec.ox) + math.abs(cy - rec.oy)
+                            + math.abs(cz - rec.oz)
+                        if dd < 0.00001 then bx, by, bz = rec.bx, rec.by, rec.bz end
+                    end
+                    local ox = bx + (tonumber(ld.x) or 0.0)
+                    local oy = by + (tonumber(ld.y) or 0.0)
+                    local oz = bz + (tonumber(ld.z) or 0.0)
+                    j:call("set_LocalPosition", Vector3f.new(ox, oy, oz))
+                    S.route3_ng_joint_pos_receipts[key] = {
+                        bx = bx, by = by, bz = bz, ox = ox, oy = oy, oz = oz,
+                    }
+                    wrote = wrote + 1
+                end
+            end
+        end)
+        local function pair(ln, rn, kx, ky, kz)
+            local dx = math.rad(tonumber(C[kx]) or 0.0)
+            local dy = math.rad(tonumber(C[ky]) or 0.0)
+            local dz = math.rad(tonumber(C[kz]) or 0.0)
+            S.route3_ng_euler_receipts = S.route3_ng_euler_receipts or {}
+            for _, name in ipairs({ ln, rn }) do
+                local j = tf:call("getJointByName", name)
+                local e = j and j:call("get_LocalEulerAngle")
+                if j and e then
+                    local key = actor_key .. ":" .. name
+                    local cx, cy, cz = tonumber(e.x) or 0.0,
+                        tonumber(e.y) or 0.0, tonumber(e.z) or 0.0
+                    local rec = S.route3_ng_euler_receipts[key]
+                    local bx, by, bz = cx, cy, cz
+                    if rec then
+                        local dd = math.abs(cx - rec.ox) + math.abs(cy - rec.oy)
+                            + math.abs(cz - rec.oz)
+                        if dd < 0.00001 then bx, by, bz = rec.bx, rec.by, rec.bz end
+                    end
+                    local ox, oy, oz = bx + dx, by + dy, bz + dz
+                    j:call("set_LocalEulerAngle", Vector3f.new(
+                        ox, oy, oz))
+                    S.route3_ng_euler_receipts[key] = {
+                        bx = bx, by = by, bz = bz, ox = ox, oy = oy, oz = oz,
+                    }
+                    wrote = wrote + 1
+                end
+            end
+        end
+        pair("L_Leg_Upper", "R_Leg_Upper",
+            "route3_ng_limb_thigh_x", "route3_ng_limb_thigh_y", "route3_ng_limb_thigh_z")
+        pair("L_Leg_Lower", "R_Leg_Lower",
+            "route3_ng_limb_knee_x", "route3_ng_limb_knee_y", "route3_ng_limb_knee_z")
+        pair("L_Leg_Ankle", "R_Leg_Ankle",
+            "route3_ng_limb_ankle_x", "route3_ng_limb_ankle_y", "route3_ng_limb_ankle_z")
+        pair("L_Arm_Upper", "R_Arm_Upper",
+            "route3_ng_limb_arm_x", "route3_ng_limb_arm_y", "route3_ng_limb_arm_z")
+        pair("L_Arm_Lower", "R_Arm_Lower",
+            "route3_ng_limb_elbow_x", "route3_ng_limb_elbow_y", "route3_ng_limb_elbow_z")
+    end)
+    return wrote > 0, wrote
+end
+
+function iris_native_grab_rider_fit_apply()
+    if C.route3_ng_fit == false or S.route3_ng_soar_pose_live ~= true then
+        S.route3_ng_fit_status = "waiting for soar"
+        S.route3_ng_hand_seed = nil
+        S.route3_ng_hip_receipts = nil
+        S.route3_ng_euler_receipts = nil
+        S.route3_ng_joint_pos_receipts = nil
+        return
+    end
+    local aok, an = iris_native_grab_fit_write(get_player(), false)
+    local pok, pn = false, 0
+    if C.route3_ng_fit_pawn ~= false and S.route3_pawn_ride_on == true then
+        pcall(function()
+            pok, pn = iris_native_grab_fit_write(
+                S.route3_pawn_ride_pawn or griffin_get_main_pawn(), true)
+        end)
+    end
+    S.route3_ng_fit_status = string.format(
+        "render fit Arisen %s/%d | pawn %s/%d",
+        aok and "ON" or "off", tonumber(an) or 0,
+        pok and "ON" or "off", tonumber(pn) or 0)
+end
+
+-- Register at runtime, after every autorun script has installed its ordinary
+-- PrepareRendering callback. Photo mode exposed the ordering bug: the animation
+-- layer could repaint after this file's early callback and erase Hip/fit edits.
+-- This deliberately-late finishing pass is the sole fit writer.
+function iris_native_grab_fit_late_register()
+    if S.route3_ng_fit_registered == true then return end
+    S.route3_ng_fit_registered = true
+    re.on_application_entry("PrepareRendering", function()
+        if S.route3_world_live ~= true or S.mounted ~= true then return end
+        safe_run("iris_ng_photo_pawn_seat", griffin_pawn_seat_follow_late)
+        safe_run("iris_ng_late_pose", iris_native_grab_soar_pose_apply)
+        safe_run("iris_ng_late_fit", iris_native_grab_rider_fit_apply)
+        safe_run("iris_ng_late_hands_arisen", function()
+            griffin_rider_hand_magnet_apply(get_player(), true, false)
+        end)
+        if C.route3_ng_fit_pawn ~= false and S.route3_pawn_ride_on == true then
+            safe_run("iris_ng_late_hands_pawn", function()
+                griffin_rider_hand_magnet_apply(
+                    S.route3_pawn_ride_pawn or griffin_get_main_pawn(), true, true)
+            end)
+        end
+    end)
+end
+
 -- Read-only feasibility probe for a genuine saddle constraint. A CaughtController transaction
 -- is an engine-owned joint attachment (unlike the failed transform pin), but startCatch is unsafe
 -- unless both live controller halves exist. Record their actual surfaces before attempting any
@@ -18469,6 +19130,12 @@ function iris_drake_native_facing_late()
     if iris_drake_air_rider_protected() ~= true
         and S.route3_saddle_constraint_active ~= true then return end
     if S.route3_air_seat_on == true or C.route3_drake_native_face_front == false then return end
+    -- Native-grab field result 08-22: yawing Hip over the live climb pose turned the rider
+    -- sideways and contorted the legs. Native climb owns the whole orientation on this route.
+    if S.route3_ng_rootfix_on == true then
+        S.route3_drake_native_face_status = "stood down: native grab owns orientation"
+        return
+    end
     local pgo = char_go(get_player())
     local _, ggo = reacquire_griffin()
     local ptf = pgo and transform_of(pgo)
@@ -18542,6 +19209,8 @@ re.on_application_entry("LateUpdateBehavior", function()
     -- to Iris's OLD position and then moved Iris, so the Arisen visibly stayed behind.
     griffin_rise_stage("LATE: authority returned -> rider_pin_late")
     if S.mounted == true then safe_run("route3_rider_pin_late", route3_rider_pin_late) end
+    safe_run("iris_native_grab_rootfix", iris_native_grab_rootfix_tick)
+    safe_run("iris_native_grab_latch", iris_native_grab_latch_tick)
     safe_run("iris_drake_native_facing_late", iris_drake_native_facing_late)
     -- Same frame slot, same reason: the pawn's climb Follower also settles after ordinary ticks,
     -- so her seat write has to land here or it is overwritten before anything renders.
@@ -18583,6 +19252,9 @@ re.on_application_entry("PrepareRendering", function()
     if S.route3_world_live == true and S.mounted == true then
         safe_run("route3_rider_pin_render", route3_rider_pin_late)
         safe_run("iris_drake_native_facing_render", iris_drake_native_facing_late)
+        safe_run("iris_native_grab_soar_pose", iris_native_grab_soar_pose_apply)
+        -- Fit + hands run in iris_native_grab_fit_late_register's runtime-appended
+        -- pass, after animation/photo-mode render writers.
     end
 end)
 
@@ -21152,7 +21824,16 @@ function route3_dogfight_marker_tick()
         return
     end
     S.route3_df_marker = "lock: " .. tostring(go_name(fgo) or "?")
-    pcall(function() iris_hud_text("[ LOCK ]", (tonumber(sp.x) or 0.0) - 34.0, tonumber(sp.y) or 0.0, 0xFFE05548, 18) end)
+    -- ⭐ 08-21 (Aurora: "remove the [LOCK] marker on enemies, it's quite ugly and can be
+    -- annoying -- a thin highlight or something, or just nothing at all"). The LOCK itself is
+    -- load-bearing (it feeds the pounce, the lightning and every ground move's auto-facing), so
+    -- only its DRAWING changed: iris_mc_draw_target_marker paints four thin corner ticks by
+    -- default, nothing at style 0, and the old red text at style 2 for anyone who wants it back.
+    -- ⭐ 08-21 r2: the marker sizes ITSELF from the body now, so it gets the GameObject; sp stays
+    -- as the fallback point for a body that cannot be projected.
+    pcall(function()
+        iris_mc_draw_target_marker(fgo, tonumber(sp.x) or 0.0, tonumber(sp.y) or 0.0)
+    end)
 end
 
 function route3_dogfight_hotkey_tick()
@@ -21582,11 +22263,20 @@ function route3_ground_move_blocked()
     if S.airborne == true then return true end
     if griffin_grab_active() or griffin_divebomb_active() then return true end
     if griffin_gust_active() or griffin_gatk_active() then return true end
+    -- ⛔ ONE-NODE-AT-A-TIME: the combo owns the base layer and her facing for its whole chain;
+    -- a gust or grab starting on top of it is the cross-fire jitter the live-window work banned.
+    if type(iris_mc_combo_active) == "function" and iris_mc_combo_active() then return true end
     return false
 end
 
 function route3_gust_end(reason)
     S.route3_gust = nil
+    -- ⛔ The wind-down may have been running at route3_gust_end_speed. Hand the motion component
+    -- back at 1.0 explicitly rather than trusting the successor paint to do it -- a griffin left
+    -- walking at 1.5x is the kind of bug that gets blamed on something else entirely.
+    if type(iris_mc_set_motion_speed) == "function" then
+        pcall(function() iris_mc_set_motion_speed(1.0) end)
+    end
     S.base_owner = nil   -- release the base layer BEFORE painting the successor
     S.audition_until_clock = 0.0
     -- NEVER paint restore clips on a body we no longer own: on dismount the native FSM is
@@ -25310,8 +26000,12 @@ function route3_gust_tick()
         -- Fallback only. Once layer zero exposes the authored EndFrame below, the finale keys from
         -- that playhead instead and damage + knockback land as ONE event on the last large flap.
         st.finale_fallback_frame = math.max(end_impact, blow_at) * 30.0
+        -- ⭐ 08-21 r2: the finale frame comes from the MEASURED beat list and the chosen beat
+        -- index (see iris_mc_gust_finale_frame), so changing route3_gust_finale_beat takes effect
+        -- on the very next gust. The old single stored number remains the fallback.
         st.finale_frame = math.max(1.0,
-            tonumber(C.route3_gust_finale_frame) or st.finale_fallback_frame)
+            (type(iris_mc_gust_finale_frame) == "function" and iris_mc_gust_finale_frame())
+            or tonumber(C.route3_gust_finale_frame) or st.finale_fallback_frame)
         st.cur_clip = math.floor(tonumber(C.route3_gust_end_clip) or 202)
         st.flap_clip = nil; st.flap_last_frame = nil; st.flap_hit_done = nil
         pcall(function() play_griffin_motion(st.cur_clip, bank, false, "gust") end)
@@ -25321,26 +26015,74 @@ function route3_gust_tick()
         -- Read the authored clip rather than racing it with wall time. The 30fps fallback keeps
         -- the move bounded if a native transition briefly hides layer zero.
         local frame, authored_end = route3_gust_motion_sample(st, bank)
+        local real_frame = frame   -- nil unless layer zero genuinely shows clip 202 on this bank
         frame = frame or math.max(0.0, (now - (tonumber(st.end_t0) or now)) * 30.0)
         st.frame = frame
         if authored_end and authored_end > 1.0 then
             st.end_frame = math.max(tonumber(st.end_frame) or 0.0, authored_end)
         end
+        -- ⭐ 08-21 r2 (Aurora: "the ending takes too long to end, the goblin is already back to
+        -- standing by the time I get to him"). Clip 202 is 347 frames -- ~5.8s of authored
+        -- wind-down. Two honest shorteners, neither of which invents a wing beat:
+        --   (a) retire the phase a set number of frames AFTER the knock instead of playing the
+        --       remaining flaps out to the authored end;
+        --   (b) run the wind-down faster, so the same authored beats arrive sooner. Frame NUMBERS
+        --       are unchanged by play speed, so the measurement stays valid at any speed.
+        -- ⛔ (b) must be re-applied every tick: play_griffin_motion resets PlaySpeed to 1.0 on
+        -- every paint, and the stomp-recovery above repaints whenever the native FSM interferes.
+        local end_after = tonumber(C.route3_gust_end_after_frames) or 0.0
+        if end_after > 0.0 then
+            local fin = tonumber(st.finale_frame) or 0.0
+            st.end_frame = math.min(tonumber(st.end_frame) or 0.0, fin + end_after)
+        end
+        local espeed = math.max(0.25, math.min(3.0, tonumber(C.route3_gust_end_speed) or 1.0))
+        if espeed ~= 1.0 and type(iris_mc_set_motion_speed) == "function" then
+            pcall(function() iris_mc_set_motion_speed(espeed) end)
+        end
         -- This is the REAL layer-zero playhead, not elapsed time or a percentage of the clip.
         -- Aurora placed the final heavy down-beat at roughly 3s, i.e. frame 90 at game motion rate.
         -- Keeping it as an explicit authored frame makes later one-frame tuning honest and stable.
+        -- ⭐ 08-21 WING-BEAT FRAME DATA (Aurora: "for the windgust we'll need frame data for
+        -- when the actual wings flap for the very last hit"). ⛔ The atlas cannot answer this --
+        -- its endframe is ALWAYS 0 -- and a guessed number drifts silently. So MEASURE it: the
+        -- sampler tracks the wing joint's height against her root every frame of clip 202 and
+        -- records each real down-beat; the commit at clip end pins the LAST one into
+        -- route3_gust_finale_frame. One field pass calibrates it permanently.
+        -- ⛔ Only ever measure against the REAL playhead. The 30fps wall-clock fallback above is
+        -- there to keep the move bounded when a native transition hides layer zero -- calibrating
+        -- from it would pin a number that describes our timer, not her wings.
+        if real_frame then
+            pcall(function() iris_mc_gust_flap_sample(st, real_frame) end)
+        end
         local finale_frame = tonumber(st.finale_frame) or tonumber(st.finale_fallback_frame) or 90.0
         if st.finale_done ~= true and frame >= finale_frame then
             st.finale_done = true
             -- One authored finale transaction: the large flap hurts and launches together.
-            if C.route3_gust_blow_enabled ~= false then route3_gust_finale_blow() end
+            -- ⭐ The launch is now the wolf howl's own Barghest knockback SHELL by default --
+            -- the ENGINE owns its collision and reaction semantics, so there is no ragdoll
+            -- forcing, no AI blackout and no transform arc fighting GroundFixer. Mode 0 restores
+            -- the legacy scripted fling verbatim; mode 2 casts both.
+            if C.route3_gust_blow_enabled ~= false then
+                -- Guarded, not bare: if combat.lua ever fails to load, the gust must keep its
+                -- knockback rather than losing the finale to a nil call.
+                if type(iris_mc_gust_finale) == "function" then
+                    pcall(iris_mc_gust_finale)
+                else
+                    pcall(function() route3_gust_finale_blow() end)
+                end
+            end
             st.hit = {}
             route3_ground_aoe_damage(tonumber(C.route3_gust_end_radius) or ((tonumber(C.route3_gust_radius) or 7.0) + 2.0),
                 tonumber(C.route3_gust_end_damage) or 300.0, st.hit)
             S.route3_gust_status = string.format("gust FINALE wing-beat f%.0f/%.0f",
                 frame, tonumber(authored_end) or -1.0)
         end
-        if frame >= (tonumber(st.end_frame) or 60.0) then route3_gust_end("done") end
+        if frame >= (tonumber(st.end_frame) or 60.0) then
+            -- Commit the measurement on the way out: a descent still in progress at the very
+            -- end of 202 IS the final beat -- the wings never come back up.
+            pcall(function() iris_mc_gust_flap_commit(st) end)
+            route3_gust_end("done")
+        end
     end
 end
 
@@ -25365,6 +26107,17 @@ function route3_gatk_start_attack(now, chained)
         S.audition_until_clock = now + rush_secs + math.max(0.2, tonumber(C.route3_charge_end_secs) or 0.65)
         S.route3_gatk_status = "charge (LandDash contact attack)"
         return S.route3_gatk
+    end
+    -- ⭐ 08-21 SHARED MOUNT COMBAT (Aurora: "natural comboing in the basic ground attack ...
+    -- like a flowing combo just like the wolf bite combo"). The standing-still ground attack is
+    -- now a staged chain in IrisGriffin/combat.lua: talon stamp -> beak -> rush-beak finisher,
+    -- each link reacquiring, re-aiming and firing through the authored clip's own hitbox.
+    -- The SPRINT charge above keeps priority -- it is a different move and it already works.
+    -- Returning nil hands ownership over; route3_gatk_tick treats that as "not mine".
+    if C.route3_combat_combo_enabled ~= false and type(iris_mc_combo_start) == "function" then
+        local took = false
+        pcall(function() took = iris_mc_combo_start(now) == true end)
+        if took then return nil end
     end
     S.route3_gatk_alt = not (S.route3_gatk_alt == true)
     local stomp = S.route3_gatk_alt == true
@@ -25510,6 +26263,13 @@ function route3_gatk_tick()
     local now = os.clock()
     local pressed = down and S.route3_gatk_btn ~= true
     local st = S.route3_gatk
+    -- ⛔ ONE OWNER FOR THE ATTACK BUTTON. While the shared combo holds the ground attack it
+    -- reads the same binding itself (to buffer the next link); this reader must keep its own
+    -- edge state current but must never start a second, competing move on top of it.
+    if type(iris_mc_combo_active) == "function" and iris_mc_combo_active() then
+        S.route3_gatk_btn = down == true
+        return
+    end
     if pressed and not st then
         local cd = math.max(0.2, tonumber(C.route3_gatk_cooldown) or 1.2)
         if not route3_ground_move_blocked()
@@ -26894,7 +27654,7 @@ function griffin_rider_limbfit_apply()
     mirror_pair("L_Arm_Lower", "R_Arm_Lower", ex, ey, ez)
 end
 
-function griffin_rider_hand_magnet_apply()
+function griffin_rider_hand_magnet_apply(target_ch, force_ng, pawn_mode)
     if iris_puppet_seat_active() then return end -- 07-24: puppet seat owns the hands
     if S.route3_air_seat_on == true then return end -- animated Neck_0 would reintroduce visible rider travel
     -- HAND MAGNET (round-32, Aurora's ask): each hand is pulled onto a grip point
@@ -26905,23 +27665,42 @@ function griffin_rider_hand_magnet_apply()
     -- SEEDED euler extraction (continuity with last frame; init from the clip pose)
     -- so the write never jumps branches. Runs post-lab, after limbfit; owns the
     -- arm chain while enabled.
-    if C.route3_hand_magnet == false then return end
-    if S.route3_wilds_rider_pose_active ~= true then return end
-    local player = get_player()
+    local ng_mode = force_ng == true and C.route3_ng_fit ~= false
+        and S.route3_ng_soar_pose_live == true
+    if ng_mode then
+        if C.route3_ng_hand_magnet == false then return end
+    else
+        if C.route3_hand_magnet == false then return end
+        if S.route3_wilds_rider_pose_active ~= true then return end
+    end
+    local player = target_ch or get_player()
     local pgo = char_go(player)
     local ptf = pgo and pgo:call("get_Transform")
     local _, ggo = reacquire_griffin()
     local gtf = ggo and transform_of(ggo)
     if not (ptf and gtf) then return end
-    local nj = managed_call(gtf, "getJointByName", tostring(C.route3_hand_grip_joint or "Neck_0"))
+    local grip_joint
+    if ng_mode and pawn_mode == true then
+        grip_joint = C.route3_ng_pawn_hand_grip_joint
+    else
+        grip_joint = ng_mode and C.route3_ng_hand_grip_joint or C.route3_hand_grip_joint
+    end
+    local nj = managed_call(gtf, "getJointByName", tostring(grip_joint or "Neck_0"))
     local np = nj and managed_call(nj, "get_Position")
     if not np then return end
     local gyaw = yaw_from_transform(ggo) or 0.0
     local fwx, fwz = math.sin(gyaw), math.cos(gyaw)
     local rgx, rgz = math.cos(gyaw), -math.sin(gyaw)
-    local GW = tonumber(C.route3_hand_grip_width) or 0.25
-    local GH = tonumber(C.route3_hand_grip_up) or 0.05
-    local GF = tonumber(C.route3_hand_grip_fwd) or 0.15
+    local GW, GH, GF
+    if ng_mode and pawn_mode == true then
+        GW = tonumber(C.route3_ng_pawn_hand_grip_width) or 0.28
+        GH = tonumber(C.route3_ng_pawn_hand_grip_up) or 0.0
+        GF = tonumber(C.route3_ng_pawn_hand_grip_fwd) or 0.18
+    else
+        GW = tonumber(ng_mode and C.route3_ng_hand_grip_width or C.route3_hand_grip_width) or 0.25
+        GH = tonumber(ng_mode and C.route3_ng_hand_grip_up or C.route3_hand_grip_up) or 0.05
+        GF = tonumber(ng_mode and C.route3_ng_hand_grip_fwd or C.route3_hand_grip_fwd) or 0.15
+    end
     -- self-contained math (file-scope locals live far above -- LUA TRAP)
     local function v(x, y, z) return { x = x, y = y, z = z } end
     local function vsub(a, b) return v(a.x - b.x, a.y - b.y, a.z - b.z) end
@@ -26988,7 +27767,16 @@ function griffin_rider_hand_magnet_apply()
         end
         return best[1], best[2], best[3]
     end
-    S.route3_hand_seed = S.route3_hand_seed or {}
+    local seed_store
+    local actor_key = "legacy"
+    if ng_mode then
+        S.route3_ng_hand_seed = S.route3_ng_hand_seed or {}
+        seed_store = S.route3_ng_hand_seed
+        pcall(function() actor_key = tostring(player:get_address()) end)
+    else
+        S.route3_hand_seed = S.route3_hand_seed or {}
+        seed_store = S.route3_hand_seed
+    end
     for _, sd in ipairs({ { side = "L", sx = 1.0 }, { side = "R", sx = -1.0 } }) do
         pcall(function()
             local side, sx = sd.side, sd.sx
@@ -27035,7 +27823,8 @@ function griffin_rider_hand_magnet_apply()
             local Rl_rest = quat_m3(lbase)
             local Rl = griffin_m3_mul(rot_between(griffin_m3_mulv(Rl_rest, Xax),
                 griffin_m3_tmulv(Wup, foredir)), Rl_rest)
-            local ks = S.route3_hand_seed[side]
+            local seed_key = actor_key .. ":" .. side
+            local ks = seed_store[seed_key]
             if not ks then
                 local cu = uj:call("get_LocalEulerAngle")
                 local cl = lj:call("get_LocalEulerAngle")
@@ -27048,7 +27837,7 @@ function griffin_rider_hand_magnet_apply()
             local lx, ly, lz = m3_euler_seeded(Rl, ks.l)
             ks.u = { ux, uy, uz }
             ks.l = { lx, ly, lz }
-            S.route3_hand_seed[side] = ks
+            seed_store[seed_key] = ks
             uj:call("set_LocalEulerAngle", Vector3f.new(ux, uy, uz))
             lj:call("set_LocalEulerAngle", Vector3f.new(lx, ly, lz))
         end)
@@ -29407,7 +30196,7 @@ _G.iris_reqabort_fn = function(args)
         local pca = tonumber(S.route3_player_climb_addr) or -1
         if pca < 0 or sdk.to_int64(args[2]) ~= pca then return nil end
         S.route3_reqabort_player = (tonumber(S.route3_reqabort_player) or 0) + 1
-        if C.route3_reqabort_veto == false or C.route3_air_seat == true
+        if C.route3_reqabort_veto == false
             or iris_drake_air_rider_protected() ~= true then return nil end
         if S.route3_air_seat_on == true then return nil end   -- air seat: aborts must flow (issue 8)
         if os.clock() < (tonumber(S.route3_abort_veto_off_until) or 0.0) then return nil end
@@ -29764,8 +30553,18 @@ function iris_shakeoff_calm_tick()
                     shake_seen = tonumber(S.route3_shake_seen) or 0,
                     shake_skipped = tonumber(S.route3_shakeoff_skip_count) or 0,
                     abort_requests = tonumber(S.route3_reqabort_count) or 0,
+                    abort_player_requests = tonumber(S.route3_reqabort_player) or 0,
                     abort_vetoed = tonumber(S.route3_reqabort_veto_count) or 0,
                     abort_callbacks = tonumber(S.route3_onabort_player) or 0,
+                    ng_rootfix = tostring(S.route3_ng_rootfix_status or "-"),
+                    ng_gap = tonumber(S.route3_ng_gap),
+                    ng_relatches = tonumber(S.route3_ng_relatch_count) or 0,
+                    ng_relatch = tostring(S.route3_ng_relatch_status or "-"),
+                    ng_facing = tostring(S.route3_drake_native_face_status or "-"),
+                    ng_soar_pose = tostring(S.route3_ng_soar_pose_status or "-"),
+                    ng_fit = tostring(S.route3_ng_fit_status or "-"),
+                    ng_grip_joint = tostring(C.route3_ng_hand_grip_joint or "Spine_3"),
+                    ng_body_pitch = tonumber(C.route3_ng_body_pitch) or 0.0,
                     fall_actions_vetoed = tonumber(S.route3_air_fall_veto) or 0,
                     rollback_vetoed = tonumber(S.route3_rider_rollback_blocked) or 0,
                     vibration = string.format("%d/%d", tonumber(S.route3_camvib_veto_count) or 0,
@@ -30616,6 +31415,12 @@ function iris_air_seat_tick()
         S.route3_air_seat_air_since = nil
         return
     end
+    -- ⭐ NATIVE GRAB TEST (08-22): stand the air seat down entirely -- she keeps the
+    -- native climb through flight and iris_native_grab_rootfix_tick kills the theft.
+    if C.route3_native_grab_test == true then
+        S.route3_air_seat_status = "NATIVE GRAB TEST: air seat stood down (rootfix rides native climb)"
+        return
+    end
     if S.route3_air_seat_air_since == nil then S.route3_air_seat_air_since = now end
     -- The active seat now survives false airborne seams itself, so the Drake needs only a tiny
     -- take-off debounce. Leaving native climb alive for 0.35s let the first flight shake track
@@ -31146,8 +31951,17 @@ function route3_rider_pin_late()
         if not (okA or okT) then S.route3_txi_live = false end
     end
     local yaw = S.heading_yaw or yaw_from_transform(go) or 0.0
+    -- ⭐ NATIVE GRAB TEST (08-22): rootfix live = the theft is dead, so seat writes STICK.
+    -- Ride the proven air-seat rigid path (stable mesh-root saddle + hip feedback), just
+    -- with the native climb still alive underneath instead of levitate.
+    -- ⛔ 08-22 FIELD: pinning the transform OVER a live native attach re-created the
+    -- documented two-authority pendulum (leg stretch, wrong seat, worst-ever cam shake).
+    -- Native attach owns position on this route; the RE-LATCH watchdog owns WHERE it
+    -- attaches. The pin stays available behind route3_ng_seat_pin for A/B only.
+    local ng_seat = S.route3_ng_rootfix_on == true and S.route3_air_seat_on ~= true
+        and C.route3_ng_seat_pin == true
     -- AIR SEAT: the flight seat IS the rigid pin, S-scoped (no config flags = no leak class).
-    local rigid = S.route3_air_seat_on == true
+    local rigid = S.route3_air_seat_on == true or ng_seat
         or (C.route3_rider_lock_enabled == true
             and (S.route3_wilds_rider_pose_active == true or C.route3_wilds_rider_pose_enabled == true))
     if rigid then
@@ -31164,14 +31978,15 @@ function route3_rider_pin_late()
         -- Drake's silhouette; that movement was authored skeleton deformation, not
         -- useful mount motion.  The compact Wilds pose is specifically intended to
         -- hide the remaining body deformation around this fixed saddle point.
-        if S.route3_air_seat_on == true then
+        if S.route3_air_seat_on == true or ng_seat then
             pcall(function()
                 seat_pos, anchor_name = iris_drake_stable_seat_position(go, false)
             end)
         end
         -- AIR SEAT rides the mesh-root seat above, never the joint weld: the spine joints are
         -- exactly the whipping surface we left. (Flat transform fallback below covers errors.)
-        if C.route3_rider_joint_anchor_enabled ~= false and S.route3_air_seat_on ~= true then
+        if C.route3_rider_joint_anchor_enabled ~= false and S.route3_air_seat_on ~= true
+            and ng_seat ~= true then
             anchor_name = tostring(C.route3_rider_anchor_joint or C.route3_seat_joint or "Spine_2")
             local gtf = transform_of(go)
             local joint = gtf and managed_call(gtf, "getJointByName", anchor_name) or nil
@@ -31356,7 +32171,7 @@ function route3_rider_pin_late()
         -- below it. Close the loop on what actually renders: measure Hip in render space and
         -- shift the current universal root by Hip->saddle. Render/universal differ only by the
         -- streaming-cell translation, so the delta is valid in both spaces.
-        if S.route3_air_seat_on == true then
+        if S.route3_air_seat_on == true or ng_seat then
             local ptf = transform_of(pgo)
             local hip = ptf and managed_call(ptf, "getJointByName", "Hip")
             local hp = hip and managed_call(hip, "get_Position")
@@ -31495,7 +32310,8 @@ function route3_rider_pin_late()
         -- mode the puppet never engages (everything stays alive by design), so this legacy
         -- puppet-only gate would silently drop every seat write -- the seat would exist on
         -- paper and never move her. Air seat writes whenever it owns the rider.
-        if S.route3_rider_puppet_on ~= true and S.route3_air_seat_on ~= true then
+        if S.route3_rider_puppet_on ~= true and S.route3_air_seat_on ~= true
+            and ng_seat ~= true then
             if S.route3_wilds_rider_pose_active == true then
                 pcall(route3_rider_pose_cleanup, pgo, nil)
                 if S.route3_limbfit_registered ~= true then
@@ -32541,9 +33357,10 @@ function griffin_pawn_nameplate_sync_tick()
     end
 end
 
--- Where the pawn is trying to end up: the seat joint, rebased to universal space, slid back along
--- the spine. The leap and the latch both ask this, so they cannot drift apart -- a jump that lands
--- somewhere the latch is not expecting would drop her through the griffin.
+-- Where the pawn is trying to end up.  ch257's anatomical forward runs along its
+-- skeleton X (joint tape: head +4.2m, tail negative), NOT the GameObject AxisZ.
+-- Keep the old yaw-Z `ride_back` term as the useful grab-contact correction Aurora
+-- identified, and give tailward travel its own measured Spine_3 -> Spine_1 axis.
 function griffin_pawn_seat_point(ggo)
     local gtf = transform_of(ggo)
     local gup = transform_pos(ggo)
@@ -32553,10 +33370,28 @@ function griffin_pawn_seat_point(ggo)
     if not (gup and grp and jp) then return nil end
     local gyaw = yaw_from_transform(ggo) or 0.0
     local back = tonumber(C.route3_pawn_ride_back) or 0.0
+    local tail = tonumber(C.route3_ng_pawn_tailward) or 0.0
+    local tx, ty, tz = 0.0, 0.0, 0.0
+    pcall(function()
+        local jhead = gtf:call("getJointByName", "Spine_3")
+        local jtail = gtf:call("getJointByName", "Spine_1")
+        local ph = jhead and jhead:call("get_Position")
+        local pt = jtail and jtail:call("get_Position")
+        if not (ph and pt) then return end
+        tx = (tonumber(pt.x) or 0.0) - (tonumber(ph.x) or 0.0)
+        ty = (tonumber(pt.y) or 0.0) - (tonumber(ph.y) or 0.0)
+        tz = (tonumber(pt.z) or 0.0) - (tonumber(ph.z) or 0.0)
+        local tl = math.sqrt(tx * tx + ty * ty + tz * tz)
+        if tl > 0.0001 then tx, ty, tz = tx / tl, ty / tl, tz / tl
+        else tx, ty, tz = 0.0, 0.0, 0.0 end
+    end)
     return make_position(
-        (tonumber(gup.x) or 0.0) + (tonumber(jp.x) or 0.0) - (tonumber(grp.x) or 0.0) - math.sin(gyaw) * back,
-        (tonumber(gup.y) or 0.0) + (tonumber(jp.y) or 0.0) - (tonumber(grp.y) or 0.0) + 0.3,
-        (tonumber(gup.z) or 0.0) + (tonumber(jp.z) or 0.0) - (tonumber(grp.z) or 0.0) - math.cos(gyaw) * back)
+        (tonumber(gup.x) or 0.0) + (tonumber(jp.x) or 0.0) - (tonumber(grp.x) or 0.0)
+            - math.sin(gyaw) * back + tx * tail,
+        (tonumber(gup.y) or 0.0) + (tonumber(jp.y) or 0.0) - (tonumber(grp.y) or 0.0)
+            + 0.3 + ty * tail,
+        (tonumber(gup.z) or 0.0) + (tonumber(jp.z) or 0.0) - (tonumber(grp.z) or 0.0)
+            - math.cos(gyaw) * back + tz * tail)
 end
 
 -- THE LEAP (Aurora: "can the pawn physically run and jump onto the griffin"). The latch alone
@@ -38841,6 +39676,13 @@ end
 function griffin_predation_disable_meal_collision(prey, cgo, big, eat)
     if not (prey and cgo and eat) then return 0 end
     eat.meal_collision_disabled = eat.meal_collision_disabled or {}
+    -- r23 rung B (route3_meal_keep_cc): the EPV damage-trigger unit is a
+    -- collision-side object, so a disabled controller is a live suspect for
+    -- "converter NEVER RAN". Diagnostic only -- with collision on, physics can
+    -- fight the beak pin, so this is never a shipping default.
+    if C.route3_meal_keep_cc == true and big ~= true then
+        return 0
+    end
     pcall(function() set_character_controller_enabled(prey, false) end)
     local types = { "via.physics.CharacterController" }
     if big == true then
@@ -39260,10 +40102,11 @@ function griffin_predation_carry_eat_tick()
         pcall(function() prey:call("set_IsThinkStop", true) end)
     end
     -- ⭐ r6 CHOMP BEATS (Aurora: "reacts in pain with blood gushing like the
-    -- wolf maul"): every beat fires a REAL pipeline damage transaction =
-    -- native blood + hit FX, HP-floored at 1 so the kill stays with the
-    -- consume. The wolf's paint-anchor flag (the rodeo's converter hook)
-    -- aims the spray at the victim's live head.
+    -- wolf maul"): every beat drains HP, paints, and cries. The wolf's
+    -- paint-anchor flag (the rodeo's converter hook) aims the spray at the
+    -- victim's live head. ⚠ r23: the beat used to floor HP back to 1
+    -- unconditionally "so the kill stays with the consume" -- see the long
+    -- note at the bottom of this block for why that was the whole bug.
     if eat.phase == "loop" and griffin_meal_beat_due(eat, now) then
         -- ⛔ r7 WHY r6's CHOMPS WERE BLOODLESS: griffin_apply_attack_damage's
         -- two native routes (damage_via_pipeline / _via_update) are BOTH
@@ -39276,6 +40119,11 @@ function griffin_predation_carry_eat_tick()
         pcall(function()
             local hc = get_component(cgo, "app.HitController")
             local hp = hc and tonumber(hc:call("get_Hp")) or nil
+            -- r23: the blood-kill latch is keyed by body address -- the floor
+            -- at the bottom of this beat has to read the same key the burst
+            -- wrote, or it undoes the kill (see the note down there).
+            local vaddr = nil
+            pcall(function() vaddr = cgo:get_address() end)
             if hc and hp and hp > 2.0 then
                 local bite = math.min(
                     math.max(10.0, tonumber(C.route3_predation_eat_chomp_dmg) or 90.0),
@@ -39313,8 +40161,27 @@ function griffin_predation_carry_eat_tick()
                     S.route3_meal_cry = tostring(cwhy or (cok and "cried" or "?"))
                 end
             end)
-            -- the prey must survive to the end of the meal: floor at 1 HP
-            if hc then
+            -- ⛔⛔⛔ r23 THE RESURRECTION BUG -- ONE root cause for BOTH
+            -- field symptoms (Aurora: "still no blood... but also got XP twice
+            -- again, once at the beginning and once at the end").
+            -- When a paint is refused, griffin_meal_blood_burst kills the prey
+            -- ON PURPOSE so the next beat has a dead body to paint. That kill
+            -- pays kill XP #1. Then, two lines later, THIS floor read HP 0,
+            -- saw 0 < 1.0, and set it back to 1 -- resurrecting the corpse we
+            -- had just deliberately made. Field proof: the receipt reads
+            -- "hp 1.0, ALIVE", which is literally this floor's own number
+            -- handed back to us. Consequences, both of them ours:
+            --   * the r19 dead-body route has NEVER ONCE EXECUTED (the latch
+            --     forbids a second kill, so the prey stayed alive at 1 HP for
+            --     every remaining beat) -- we have been re-reading the same
+            --     failure and calling it a test;
+            --   * the meal-end consume then found a breathing body and killed
+            --     it a second time = XP #2.
+            -- The floor only ever existed to stop the CHOMP finishing the prey
+            -- early, and the chomp already clamps its bite to hp-1.0, so it
+            -- never could. A body we killed on purpose must STAY dead.
+            if hc and not (S.route3_meal_killed and vaddr
+                and S.route3_meal_killed[vaddr]) then
                 pcall(function()
                     local nhp = tonumber(hc:call("get_Hp")) or 0.0
                     if nhp < 1.0 then
@@ -39431,6 +40298,14 @@ function griffin_predation_carry_eat_tick()
         -- the end"): the chomp's blood-kill and this consume kill were both
         -- paying out. Only finish a body that is still breathing.
         local still_alive = true
+        -- r23: the blood-kill has ALREADY paid this body's XP. HP reads lag the
+        -- kill by a frame or two, so trust the latch over the number -- reading
+        -- HP alone is exactly how the second payout survived r22's guard.
+        local vaddr9 = nil
+        pcall(function() vaddr9 = cgo:get_address() end)
+        if vaddr9 and S.route3_meal_killed and S.route3_meal_killed[vaddr9] then
+            still_alive = false
+        end
         pcall(function()
             local hc9 = get_component(cgo, "app.HitController")
             local hp9 = hc9 and tonumber(hc9:call("get_Hp")) or nil
@@ -39441,6 +40316,12 @@ function griffin_predation_carry_eat_tick()
         end)
         if still_alive then
             pcall(function() griffin_apply_attack_damage(prey, 99999.0) end)   -- devoured
+        end
+        -- ⛔ the engine RECYCLES GameObject addresses. A latch left behind
+        -- would silently forbid killing a LATER meal's prey -- no blood, and
+        -- no receipt explaining why. Release this body's entry with the meal.
+        if vaddr9 and S.route3_meal_killed then
+            S.route3_meal_killed[vaddr9] = nil
         end
         griffin_predation_restore_meal_collision(eat)
         -- ⭐ 08-19 CONSUME (was missing here entirely -- this end path had no
@@ -40681,14 +41562,48 @@ re.on_frame(function()
     end)
 end)
 
+-- r23 THE LADDER, as config toggles. Passed to the shared blood service so
+-- one field test changes exactly ONE variable and the receipt names the rung.
+function griffin_meal_paint_opts()
+    return {
+        skip_restore = C.route3_meal_skip_restore == true,
+        probe_catch = true,
+        why = "griffin meal",
+    }
+end
+
 function griffin_meal_blood_burst(victim_go, eater_go)
     if not victim_go then return false end
     local reason = "no blood service"
     local painted = false
+    -- ⭐ r23 RECEIPT HEAD: WHICH BEAT, and what state the body was in when we
+    -- asked. Beat 1 on a living prey is expected to refuse; beat 2+ (dead, now
+    -- that the floor no longer resurrects it) must not. Without the beat index
+    -- every receipt looked identical and the failure could not be located in
+    -- time. Counter resets itself whenever the victim changes -- no meal-start
+    -- hook to forget.
+    local vaddr0 = nil
+    pcall(function() vaddr0 = victim_go:get_address() end)
+    if S.route3_meal_beat_go ~= vaddr0 then
+        S.route3_meal_beat_go = vaddr0
+        S.route3_meal_beat_n = 0
+    end
+    S.route3_meal_beat_n = (tonumber(S.route3_meal_beat_n) or 0) + 1
+    local head = string.format("beat %d ", S.route3_meal_beat_n)
+    pcall(function()
+        local hc0 = get_component(victim_go, "app.HitController")
+        local hp0 = hc0 and tonumber(hc0:call("get_Hp")) or nil
+        local ch0 = get_component(victim_go, "app.Character")
+        local dead0 = ch0 and ch0:call("get_IsDead") == true
+        head = string.format("beat %d (hp %s, %s) ", S.route3_meal_beat_n,
+            hp0 and string.format("%.0f", hp0) or "?",
+            dead0 and "DEAD" or "alive")
+    end)
     pcall(function()
         local paint = rawget(_G, "IrisPaintBloodOn")
         if type(paint) ~= "function" then return end
-        local ok, why = paint(victim_go, "Head_0", eater_go)
+        local ok, why = paint(victim_go, "Head_0", eater_go,
+            griffin_meal_paint_opts())
         reason = tostring(why or "?")
         -- "fired" is not enough: only a converter that RAN proves the engine
         -- walked the paint path
@@ -40737,14 +41652,31 @@ function griffin_meal_blood_burst(victim_go, eater_go)
                         0.0, true, 0)
                 end)
             end
-            reason = reason .. " -> killed for the next beat"
+            reason = reason .. " -> killed"
+        end)
+        -- ⭐ r23 SAME-BEAT RETRY. The body is dead RIGHT NOW, so ask again in
+        -- this very beat rather than waiting for the next one. Two wins: if
+        -- r19's dead-body theory is right, the FIRST beak stab already bleeds
+        -- (no bloodless opening beat); and if it is wrong, we learn that from
+        -- one meal instead of another field trip. The retry goes through the
+        -- full service on purpose -- the first callbackHit may have mutated
+        -- the recycled DamageInfo, so it needs the re-stamp.
+        pcall(function()
+            local paint2 = rawget(_G, "IrisPaintBloodOn")
+            if type(paint2) ~= "function" then return end
+            local ok2, why2 = paint2(victim_go, "Head_0", eater_go,
+                griffin_meal_paint_opts())
+            local w2 = tostring(why2 or "?")
+            reason = reason .. " | RETRY: " .. w2
+            if ok2 and w2:find("converter ran", 1, true) then painted = true end
         end)
     end
-    S.route3_meal_blood = reason
-    if S.route3_meal_blood_logged ~= reason then
-        S.route3_meal_blood_logged = reason
+    S.route3_meal_blood = head .. reason
+    if S.route3_meal_blood_logged ~= S.route3_meal_blood then
+        S.route3_meal_blood_logged = S.route3_meal_blood
         pcall(function() log.info(
-            "[GriffinRideProbe (IRIS)] meal blood: " .. reason) end)
+            "[GriffinRideProbe (IRIS)] meal blood: "
+            .. tostring(S.route3_meal_blood)) end)
     end
     return true
 end
@@ -40841,6 +41773,15 @@ function griffin_ground_eat_recover(ch, go)
             griffin_predation_restore_meal_collision(st)
         end
     end)
+    -- ⛔ NEVER ORPHAN A THINK-STOPPED BODY. If a prone finisher was interrupted (dismount,
+    -- takeoff, the player walking off) the victim is still alive and still parked -- give its
+    -- brain back here, at the one exit every ground-meal path already runs through.
+    pcall(function()
+        local st = S.route3_ground_eat
+        if st and st.prone == true and st.prone_killed ~= true and st.target then
+            set_think_stop(st.target, false)
+        end
+    end)
     -- the carry meal's proven hand-back, one place, used by every ground-meal
     -- exit. ORDER MATTERS: clear ownership -> hand the body back -> repose ->
     -- re-arm the ride's AI suppression -> let the landing recover normalise.
@@ -40889,6 +41830,28 @@ function griffin_ground_eat_scan()
     local _, go = reacquire_griffin()
     local gp = go and transform_pos(go)
     if not gp then return end
+    -- ⭐ 08-21 PRONE FINISHER (Aurora: "for enemies that are knocked down just like the maul --
+    -- if there's a knocked prone enemy, walk up and press RT, it positions them for the eat and
+    -- does the eat cycle"). This path is checked FIRST and is deliberately NOT subject to the
+    -- living-hostile veto below: a body on its back in the middle of a fight is the finisher,
+    -- not a bystander snack. The veto still owns the corpse path, which is what it was for.
+    -- ⛔ The liveness law decides which path a body is on: a READABLE hp above the floor means
+    -- prone, not dead -- get_IsDead lies TRUE on a downed-but-alive body.
+    if C.route3_ground_eat_prone ~= false and type(iris_mc_find_prone) == "function" then
+        local pch, ppgo, pd = nil, nil, nil
+        pcall(function() pch, ppgo, pd = iris_mc_find_prone(nil) end)
+        if pch and ppgo then
+            S.route3_ground_eat_ready = { target = pch, go = ppgo, d = pd, prone = true }
+            S.route3_ground_eat_status = string.format(
+                "prone enemy ready (%.1fm) - RT to finish", tonumber(pd) or 0.0)
+            if S.route3_ground_eat_status ~= S.route3_ground_eat_status_logged then
+                S.route3_ground_eat_status_logged = S.route3_ground_eat_status
+                pcall(function() log.info("[GriffinRideProbe (IRIS)] ground eat: "
+                    .. tostring(S.route3_ground_eat_status)) end)
+            end
+            return
+        end
+    end
     -- the wolf's law: a living hostile near means the hunt comes first.
     -- 08-19 fix: griffin_find_enemy's dead-filter misses on behavior refs
     -- (a corpse could read "living" and block the meal forever) -- use the
@@ -40998,6 +41961,10 @@ function griffin_ground_eat_start()
         t0 = now,
         until_t = now + math.max(3.0, tonumber(C.route3_ground_eat_secs) or 15.0),
         stage = 0, target = rec.target, go = rec.go,
+        -- 08-21: a knocked-down LIVING enemy runs the identical cycle. The only
+        -- differences are that its brain has to be held down for the duration and
+        -- that the first chomp is the kill (see iris_mc_prone_* in combat.lua).
+        prone = rec.prone == true,
     }
     S.route3_ground_eat_ready = nil
     pcall(function()
@@ -41084,6 +42051,10 @@ function griffin_ground_eat_tick()
             if ch then set_character_transform(ch, pp2, pr2) end
         end
     end)
+    -- ⛔⛔ HOLD THE PRONE ONE DOWN. The align pin below can only own a body whose own brain is
+    -- not standing it up -- the wolf's maul paid for this lesson (RT during a prey get-up froze
+    -- it mid-getup). A corpse needs none of this and gets none of it.
+    pcall(function() iris_mc_prone_hold(st) end)
     -- ⭐ r9 (Aurora: "can the griffin align to the corpse, or the corpse to
     -- the griffin, so the talons always go on the corpse and the beak always
     -- reaches the body?"): the CARRY meal already solves this -- it lays the
@@ -41182,6 +42153,14 @@ function griffin_ground_eat_tick()
     -- sprays from the carcass under her beak.
     -- r14 (Aurora: "same for the dead body one too, but minus the screams"):
     -- beat-timed blood on the corpse meal, and NO cry -- it is already dead.
+    -- ⭐ 08-21: on a PRONE victim the first beak-in-the-body beat is the kill. ⛔ Order matters:
+    -- the blood is asked for BEFORE the kill lands, because a living think-stopped body refuses
+    -- the paint (the r21 law) while a fresh corpse accepts it -- iris_mc_prone_finish_kill wakes
+    -- it, paints, cries, then kills via killAndSetDieLoop (never setHp-to-0, which is refused at
+    -- 1 HP). Everything after this is an ordinary corpse meal.
+    if st.prone == true and st.stage >= 2 then
+        pcall(function() iris_mc_prone_finish_kill(st, go) end)
+    end
     if st.stage == 2 and griffin_meal_beat_due(st, now) then
         griffin_meal_blood_burst(st.go, go)
     end
@@ -42597,11 +43576,29 @@ ctx.play_griffin_motion = play_griffin_motion
 ctx.set_griffin_motion_speed = set_griffin_motion_speed
 ctx.reacquire_griffin = reacquire_griffin
 ctx.system_array_to_table = system_array_to_table
+-- Shared mount combat needs these five, and every one of them is FILE-LOCAL here (a local
+-- resolves to a nil global inside a module, silently, inside a pcall -- the local-function law).
+ctx.save_config = save_config
+ctx.is_player_or_party = is_player_or_party
+ctx.raw_gamepad_button_down = raw_gamepad_button_down
+ctx.set_object_rotation_only = set_object_rotation_only
+ctx.set_character_rotation_only = set_character_rotation_only
 
 require("IrisGriffin.flap")
 require("IrisGriffin.orders")
 require("IrisGriffin.stable")
 require("IrisGriffin.downed")
+-- ⛔ WRAPPED, unlike its siblings, and deliberately: a throw inside a require here kills the rest
+-- of this chunk -- which is where re.on_frame is registered -- so a fault in the NEWEST module
+-- would take the whole mod down with it. Every iris_mc_* call site is type-guarded or pcall'd, so
+-- a failed load degrades to "combat features absent" and says so loudly in the log.
+do
+    local ok, err = pcall(function() require("IrisGriffin.combat") end)
+    if not ok then
+        pcall(function() log.error("[GriffinRideProbe (IRIS)] IrisGriffin/combat.lua FAILED to load: "
+            .. tostring(err)) end)
+    end
+end
 
 re.on_frame(function()
     -- the WHOLE per-frame suite (orders, whistle, climb state, ally writes,
@@ -42676,6 +43673,9 @@ re.on_frame(function()
     safe_run("catch_pose_watchdog", griffin_predation_carry_pose_watchdog)
     safe_run("caughtmotion_tape_sample", griffin_caughtmotion_tape_sample)
     safe_run("route3_gust_blown_tick", route3_gust_blown_tick)
+    -- ⛔ BEFORE route3_gatk_tick, deliberately: the combo owns the attack button while it is
+    -- live and the legacy reader stands down behind iris_mc_combo_active().
+    safe_run("iris_mc_tick", iris_mc_tick)
     safe_run("route3_gatk_tick", route3_gatk_tick)
     -- Last rider-animation writer: renew after flight/combat nodes have updated.
     safe_run("griffin_rider_mount_still", griffin_rider_mount_still_tick)
@@ -42826,6 +43826,11 @@ re.on_draw_ui(function()
             yn(S.route3_proxy_ride_active), yn(S.airborne), tostring(S.route3_flight_status or "(none)")))
         imgui.separator()
 
+        -- Feature modules define functions only; every re.* registration lives here (require()
+        -- caches a module and a script reset does not reliably clear it, so a callback registered
+        -- from a module chunk can quietly fail to come back).
+        pcall(function() if type(iris_mc_draw_panel) == "function" then iris_mc_draw_panel() end end)
+
         if imgui.tree_node("🩸 GRIFFIN MEAL — eat camera / blood / bones##c_meal") then
             imgui.text_colored("Meal camera (right stick orbits it live during a meal)", 0xFF66FF66)
             local mc1, mc2, mc3, mc4, mc5, mc6
@@ -42909,6 +43914,17 @@ re.on_draw_ui(function()
                 "ragdoll the LIVE prey (suspect: blocks blood)##c_meal_rag",
                 C.route3_meal_ragdoll_prey == true)
             if mrg then save_config() end
+            imgui.text_colored("  BLOOD LADDER -- one rung at a time", 0xFF66FF66)
+            local mr1
+            mr1, C.route3_meal_skip_restore = imgui.checkbox(
+                "rung A: replay WITHOUT the 18-field re-stamp##c_meal_skiprest",
+                C.route3_meal_skip_restore == true)
+            if mr1 then save_config() end
+            local mr2
+            mr2, C.route3_meal_keep_cc = imgui.checkbox(
+                "rung B: keep the prey's collision ON during the meal##c_meal_keepcc",
+                C.route3_meal_keep_cc == true)
+            if mr2 then save_config() end
             local mlg
             mlg, C.route3_ground_eat_lie = imgui.checkbox(
                 "ground meal: also force the carcass flat (usually OFF)##c_meal_glie",
@@ -42982,6 +43998,162 @@ re.on_draw_ui(function()
             imgui.text("STATUS: " .. tostring(stool_status or "?"))
             if tonumber(stool_gap) then
                 imgui.text(string.format("player / stool distance: %.2fm", tonumber(stool_gap)))
+            end
+            -- ⭐⭐⭐ ROOT-MOTION THEFT LAW A/B (dd2-root-motion-theft-law, Brinebound-proven
+            -- 08-22): ON = RootPlayMode=None held on the seated rider every frame (the thing
+            -- levitate was secretly doing); OFF = the v12 baseline with the jitter. Compare
+            -- the jitter cm numbers in STATUS between the two.
+            if type(stool) == "table" and type(stool.root_fix) == "function" then
+                local rfch, rfval = imgui.checkbox(
+                    "rider ROOT-MOTION FIX (theft-law A/B)##c_drk_rootfix",
+                    stool.root_fix_enabled() == true)
+                if rfch then stool.root_fix(rfval) end
+                imgui.text("   rootfix: " .. tostring(stool.root_fix_state()))
+            end
+            imgui.separator()
+            -- ⭐ NATIVE GRAB TEST: ride the drake exactly like the griffin (RT mount,
+            -- native climb kept through flight), with the theft-law rootfix on the rider.
+            local ngch
+            ngch, C.route3_native_grab_test = imgui.checkbox(
+                "NATIVE GRAB TEST — RT mount like the griffin, rootfix rider##c_drk_ngrab",
+                C.route3_native_grab_test == true)
+            if ngch then save_config() end
+            local ngrch
+            ngrch, C.route3_ng_relatch = imgui.checkbox(
+                "native grip re-latch watchdog##c_drk_ngrelatch",
+                C.route3_ng_relatch ~= false)
+            if ngrch then save_config() end
+            local nggch
+            nggch, C.route3_ng_relatch_gap = imgui.drag_float(
+                "saddle-zone warning distance (m)##c_drk_nggap",
+                tonumber(C.route3_ng_relatch_gap) or 2.5, 0.05, 0.5, 6.0)
+            if nggch then save_config() end
+            local ngpch
+            ngpch, C.route3_ng_soar_pose = imgui.checkbox(
+                "upper-body brace during soar / quick rise##c_drk_ngpose",
+                C.route3_ng_soar_pose ~= false)
+            if ngpch then save_config() end
+            local ngpfch
+            ngpfch, C.route3_ng_soar_pose_frame = imgui.slider_int(
+                "rider brace frame##c_drk_ngposeframe",
+                math.floor(tonumber(C.route3_ng_soar_pose_frame) or 27), 1, 37)
+            if ngpfch then save_config() end
+            imgui.text("   source: " .. tostring(C.route3_ng_soar_pose_clip or "rs_drake_rider_normal_full"))
+            imgui.text("   brace: " .. tostring(S.route3_ng_soar_pose_status or "waiting for soar"))
+            imgui.separator()
+            imgui.text_colored("RIDER FIT — LIVE CONTROLS", 0xFF80FFD0)
+                local fch
+                fch, C.route3_ng_fit = imgui.checkbox(
+                    "render-only rider fit##c_drk_ngfit", C.route3_ng_fit ~= false)
+                if fch then save_config() end
+                local fpch
+                fpch, C.route3_ng_fit_pawn = imgui.checkbox(
+                    "apply the same fit to pawn##c_drk_ngfit_pawn", C.route3_ng_fit_pawn ~= false)
+                if fpch then save_config() end
+                local function fit_drag(label, key, speed, lo, hi, fallback)
+                    local changed
+                    changed, C[key] = imgui.drag_float(label, tonumber(C[key]) or fallback,
+                        speed, lo, hi)
+                    if changed then save_config() end
+                end
+                fit_drag("forward lean (mapped Y pitch, deg)##c_drk_ng_bodypitch",
+                    "route3_ng_body_pitch", 0.5, -70.0, 70.0, -52.0)
+                fit_drag("head turn (0 = forward)##c_drk_ng_headyaw",
+                    "route3_ng_head_yaw", 0.5, -90.0, 90.0, -5.0)
+                fit_drag("head nod##c_drk_ng_headpitch",
+                    "route3_ng_head_pitch", 0.5, -60.0, 60.0, -11.0)
+                imgui.text("visual Hip nudge only — modest values; this does not move the gameplay root")
+                fit_drag("Hip side##c_drk_ng_hipx", "route3_ng_hip_x", 0.01, -1.5, 1.5, -0.03)
+                fit_drag("Hip height##c_drk_ng_hipy", "route3_ng_hip_y", 0.01, -1.5, 1.5, -0.01)
+                fit_drag("Hip forward##c_drk_ng_hipz", "route3_ng_hip_z", 0.01, -1.5, 1.5, -0.09)
+                imgui.text("leg pair position (metres, photo-mode safe)")
+                fit_drag("legs towards tail##c_drk_ng_legtail", "route3_ng_leg_tailward",
+                    0.01, -1.5, 1.5, 0.0)
+                fit_drag("legs up##c_drk_ng_legup", "route3_ng_leg_up",
+                    0.01, -1.0, 1.0, -0.20)
+                imgui.separator()
+                local hmch
+                hmch, C.route3_ng_hand_magnet = imgui.checkbox(
+                    "hands grip the Drake##c_drk_ng_hmag", C.route3_ng_hand_magnet ~= false)
+                if hmch then save_config() end
+                imgui.text("grip joint: " .. tostring(C.route3_ng_hand_grip_joint or "Spine_3"))
+                for _, jn in ipairs({ "Spine_2", "Spine_3", "Neck_0", "Head_0" }) do
+                    if imgui.button(jn .. "##c_drk_ng_grip_" .. jn) then
+                        C.route3_ng_hand_grip_joint = jn
+                        S.route3_ng_hand_seed = nil
+                        save_config()
+                    end
+                    if jn ~= "Head_0" then imgui.same_line() end
+                end
+                fit_drag("grip width##c_drk_ng_gw", "route3_ng_hand_grip_width",
+                    0.01, 0.0, 1.2, 0.28)
+                fit_drag("grip height##c_drk_ng_gh", "route3_ng_hand_grip_up",
+                    0.01, -1.0, 1.0, 0.10)
+                fit_drag("grip forward##c_drk_ng_gf", "route3_ng_hand_grip_fwd",
+                    0.01, -1.0, 1.5, 0.18)
+                imgui.separator()
+                imgui.text_colored("PAWN REAR SEAT", 0xFFFFD080)
+                fit_drag("pawn grab-contact correction##c_drk_pawnback", "route3_pawn_ride_back",
+                    0.05, -2.0, 4.0, -0.50)
+                fit_drag("pawn towards tail (real spine axis)##c_drk_pawntail",
+                    "route3_ng_pawn_tailward", 0.05, -1.0, 3.0, 1.95)
+                imgui.text("tail/contact seat offsets apply fully on the next mount; pose controls are live")
+                fit_drag("pawn forward lean##c_drk_ng_pawn_pitch",
+                    "route3_ng_pawn_body_pitch", 0.5, -70.0, 70.0, -60.0)
+                fit_drag("pawn Hip side##c_drk_ng_pawn_hipx",
+                    "route3_ng_pawn_hip_x", 0.01, -1.0, 1.0, 0.0)
+                fit_drag("pawn Hip height##c_drk_ng_pawn_hipy",
+                    "route3_ng_pawn_hip_y", 0.01, -1.0, 1.0, -0.15)
+                fit_drag("pawn Hip forward##c_drk_ng_pawn_hipz",
+                    "route3_ng_pawn_hip_z", 0.01, -1.0, 1.0, 0.0)
+                fit_drag("pawn legs towards tail##c_drk_ng_pawn_legtail",
+                    "route3_ng_pawn_leg_tailward", 0.01, -1.5, 1.5, 0.0)
+                fit_drag("pawn legs up##c_drk_ng_pawn_legup",
+                    "route3_ng_pawn_leg_up", 0.01, -1.0, 1.0, 0.0)
+                imgui.text("pawn grip joint: "
+                    .. tostring(C.route3_ng_pawn_hand_grip_joint or "Spine_2"))
+                for _, jn in ipairs({ "Spine_1", "Spine_2", "Spine_3" }) do
+                    if imgui.button(jn .. "##c_drk_ng_pawn_grip_" .. jn) then
+                        C.route3_ng_pawn_hand_grip_joint = jn
+                        S.route3_ng_hand_seed = nil
+                        save_config()
+                    end
+                    if jn ~= "Spine_3" then imgui.same_line() end
+                end
+                fit_drag("pawn grip width##c_drk_ng_pawn_gw", "route3_ng_pawn_hand_grip_width",
+                    0.01, 0.0, 1.2, 0.28)
+                fit_drag("pawn grip height##c_drk_ng_pawn_gh", "route3_ng_pawn_hand_grip_up",
+                    0.01, -1.0, 1.0, -0.59)
+                fit_drag("pawn grip forward##c_drk_ng_pawn_gf", "route3_ng_pawn_hand_grip_fwd",
+                    0.01, -1.0, 1.5, 0.79)
+                if imgui.tree_node("Fine limb angles##c_drk_nglimbs") then
+                    imgui.text("receipt-based degrees; no accumulation in photo mode")
+                    imgui.text("raw axes: X roll, Y pitch, Z turn on this captured humanoid pose")
+                    for _, row in ipairs({
+                        { "thigh", "route3_ng_limb_thigh" },
+                        { "knee", "route3_ng_limb_knee" },
+                        { "ankle", "route3_ng_limb_ankle" },
+                        { "upper arm", "route3_ng_limb_arm" },
+                        { "elbow", "route3_ng_limb_elbow" },
+                    }) do
+                        fit_drag(row[1] .. " X##c_drk_" .. row[2] .. "x",
+                            row[2] .. "_x", 0.5, -90.0, 90.0, 0.0)
+                        fit_drag(row[1] .. " Y##c_drk_" .. row[2] .. "y",
+                            row[2] .. "_y", 0.5, -90.0, 90.0, 0.0)
+                        fit_drag(row[1] .. " Z##c_drk_" .. row[2] .. "z",
+                            row[2] .. "_z", 0.5, -90.0, 90.0, 0.0)
+                    end
+                    imgui.tree_pop()
+                end
+                imgui.text("   fit: " .. tostring(S.route3_ng_fit_status or "waiting for soar"))
+            imgui.text("   grab rootfix: " .. (S.route3_ng_rootfix_on == true
+                and "LIVE (RootPlayMode=None on rider)" or "off (engages while mounted)"))
+            imgui.text("   receipt: " .. tostring(S.route3_ng_rootfix_status or "not attempted"))
+            if S.route3_ng_rootfix_on == true then
+                imgui.text(string.format("   saddle gap %.2fm | re-latches %d | %s",
+                    tonumber(S.route3_ng_gap) or -1.0,
+                    tonumber(S.route3_ng_relatch_count) or 0,
+                    tostring(S.route3_ng_relatch_status or "grip holding")))
             end
             imgui.separator()
             imgui.text_colored("Levitate verdict: storm removed, attachment failed (retired from current test).",
@@ -44237,6 +45409,8 @@ re.on_script_reset(function()
     -- v14: restore any overridden camera BaseDistance BEFORE S dies (a reload wipes the
     -- saved originals while the field would stay overridden = far-camera-on-foot leak)
     pcall(iris_camdist_restore)
+    -- theft law: never leave her on RootPlayMode=None across a reload
+    pcall(iris_native_grab_rootfix_restore)
     -- v18: and give back every effect/sound component the quiet sweep muted -- a reload wipes
     -- the restore list, so a mid-flight reset would leave her permanently silent and glowless
     pcall(iris_air_seat_quiet_sweep, false)
