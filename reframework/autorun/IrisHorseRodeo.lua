@@ -5559,8 +5559,19 @@ function iris_blood_repoint(di, old_addr, victim_go)
     return n
 end
 
-function iris_paint_blood_on(victim_go, joint_name, aim_go)
+-- ⭐ r23 OPTIONAL `opts` (4th arg, additive -- every existing 3-arg caller is
+-- untouched). It carries the DIAGNOSTIC LADDER rungs, because the shared
+-- service is the only place that can honestly report which rung was live:
+--   opts.skip_restore -- do NOT re-stamp the 18 snapshotted fields. This is
+--     the ONE thing the shared service does that the wolf's own maul copy
+--     (which paints, on a LIVING enemy) does not, so it has to be testable.
+--   opts.probe_catch  -- read and PRINT the victim's catch/held state.
+-- ⛔ an opts table is used rather than a _G flag on purpose: these two files
+-- hot-reload independently and in alphabetical order, so cross-file state can
+-- be stale on the very first frame after a reset.
+function iris_paint_blood_on(victim_go, joint_name, aim_go, opts)
     if not valid(victim_go) then return false, "no victim" end
+    opts = (type(opts) == "table") and opts or {}
     local addr = object_address(victim_go)
     local pkt = _G.IrisBloodPkts and _G.IrisBloodPkts[addr] or nil
     local src = "own"
@@ -5715,11 +5726,76 @@ function iris_paint_blood_on(victim_go, joint_name, aim_go)
             stopped and ", THINK-STOPPED (woken)" or "",
             (ragon == true) and ", ragcomp" or "")
     end)
+    -- ⭐ r23 CATCH PROBE. The griffin's meal victim was snatched in her talons;
+    -- a body the engine still considers HELD is the leading suspect left for a
+    -- callbackHit that returns without converting. ⛔ THE PROBE LAW: this must
+    -- be able to print BOTH answers, so an unknown getter says "catch:n/a"
+    -- rather than quietly reading as "not caught" -- three earlier rounds were
+    -- sent chasing ghosts by a probe that could only ever say one thing.
+    if opts.probe_catch == true then
+        pcall(function()
+            local ch3 = get_component(victim_go, "app.Character")
+            local hu3 = get_component(victim_go, "app.Human")
+            local said = nil
+            for _, g in ipairs({ "get_IsCatched", "get_IsCaught", "get_IsCatch",
+                "get_CatchState", "get_IsGrabbed", "get_IsHold" }) do
+                for _, o in ipairs({ ch3, hu3 }) do
+                    if o and said == nil then
+                        pcall(function()
+                            local v = o:call(g)
+                            if v ~= nil then
+                                said = g:gsub("^get_", "") .. "="
+                                    .. tostring(v)
+                            end
+                        end)
+                    end
+                end
+                if said then break end
+            end
+            if not said then
+                -- name the real getters ONCE so the next round is not a guess
+                if not rawget(_G, "__iris_catch_names_logged") then
+                    rawset(_G, "__iris_catch_names_logged", true)
+                    pcall(function()
+                        local names = {}
+                        for _, tn in ipairs({ "app.Character", "app.Human" }) do
+                            local td3 = sdk.find_type_definition(tn)
+                            for _, m in ipairs(td3 and td3:get_methods() or {}) do
+                                local n = m:get_name()
+                                if n:find("atch") or n:find("rab") then
+                                    names[#names + 1] = tn .. "." .. n
+                                end
+                            end
+                        end
+                        log.info("[IrisBlood] catch-state candidates: "
+                            .. table.concat(names, ", "))
+                    end)
+                end
+                said = "n/a (candidates logged)"
+            end
+            vstate = vstate .. ", catch:" .. said
+        end)
+    end
     local hits0 = tonumber(S.wyrm_paint_fix_hits) or 0
+    -- ⭐ r23 MID-PATH BISECT. "converter NEVER RAN" only says the walk stopped
+    -- somewhere before the conversion -- it cannot say WHERE. getDamageNearJoint
+    -- sits earlier on the same path, so a second counter splits the black box
+    -- in two: joint+/conv- means it entered and bailed on the effect lookup;
+    -- joint-/conv- means it never got past the entry checks at all.
+    -- ⛔ measured as a DELTA around our own call only -- the hook is global and
+    -- wolf mauls, the TEST button and our own receipt line all bump it too.
+    pcall(iris_wyrm_install_near_joint_probe)
+    local njoint0 = tonumber(S.wyrm_near_joint_hits) or 0
     local dmg_used = 0
     -- r22: restore the captured hit BEFORE replaying -- the engine has very
-    -- probably overwritten this instance since we caught it
-    local restored = iris_blood_restore(pkt.di, pkt.snap)
+    -- probably overwritten this instance since we caught it.
+    -- r23: rung A makes this skippable -- the wolf's own maul copy does NOT
+    -- re-stamp and it paints, so the re-stamp itself has to be a testable
+    -- suspect rather than an assumption.
+    local restored = 0
+    if opts.skip_restore ~= true then
+        restored = iris_blood_restore(pkt.di, pkt.snap)
+    end
     local ok = pcall(function()
         local d = tonumber(pkt.di:get_field("Damage")) or 0
         if (d <= 0 or d < (tonumber(pkt.dmg) or 0) * 0.5)
@@ -5737,10 +5813,15 @@ function iris_paint_blood_on(victim_go, joint_name, aim_go)
     -- only proof the engine walked the paint path), the packet's age, and
     -- the damage the painter saw (it skips zero-damage packets as non-hits).
     local rewrites = (tonumber(S.wyrm_paint_fix_hits) or 0) - hits0
+    local njoint = (tonumber(S.wyrm_near_joint_hits) or 0) - njoint0
     if not ok then return false, "painter threw" end
-    return true, string.format("fired [%s pkt/%s unit, %.0fs old, dmg %.0f, %d fields restored%s, hook %s, converter %s]",
-        src, unit_path, age, dmg_used, restored, vstate,
+    return true, string.format("fired [%s pkt/%s unit, %.0fs old, dmg %.0f, %s%s, hook %s, nearJoint %s, converter %s]",
+        src, unit_path, age, dmg_used,
+        (opts.skip_restore == true) and "restore SKIPPED (rung A)"
+            or string.format("%d fields restored", restored),
+        vstate,
         hooked and "on" or "MISSING",
+        (njoint > 0) and "ran" or "no",
         rewrites > 0 and "ran" or "NEVER RAN")
 end
 rawset(_G, "IrisPaintBloodOn", iris_paint_blood_on)
@@ -6117,6 +6198,22 @@ function iris_wyrm_install_grab_block()
 end
 pcall(iris_wyrm_install_grab_block)
 
+-- r23: the bisect counter (see the receipt note in iris_paint_blood_on).
+-- Installed lazily on first paint -- nothing is captured at load time, so a
+-- script reset rebuilds it cleanly.
+function iris_wyrm_install_near_joint_probe()
+    if rawget(_G, "__iris_near_joint_hook") then return true end
+    local td = sdk.find_type_definition(
+        "app.EPVExpertCharacterDamageTriggerUnit")
+    local method = td and td:get_method("getDamageNearJoint")
+    if not method then return false end
+    sdk.hook(method, function(args)
+        S.wyrm_near_joint_hits = (tonumber(S.wyrm_near_joint_hits) or 0) + 1
+    end, function(retval) return retval end)
+    rawset(_G, "__iris_near_joint_hook", true)
+    return true
+end
+
 -- r17: rewrite the EPV converter's attack-side positions to the victim's
 -- live head while OUR replay is in flight (flag-gated; natural hits pass
 -- through untouched). Fields named from the il2cpp dump:
@@ -6171,6 +6268,10 @@ function iris_wyrm_install_paint_anchor_fix()
     return true
 end
 pcall(iris_wyrm_install_paint_anchor_fix)
+-- r23: install the bisect probe at LOAD time alongside its sibling; the lazy
+-- call inside the painter then early-returns. Hooking mid-paint would be
+-- installing a hook from inside the very frame we are measuring.
+pcall(iris_wyrm_install_near_joint_probe)
 
 pcall(iris_wyrm_dump_hitcontroller_api)
 pcall(iris_wyrm_install_native_hit_capture)

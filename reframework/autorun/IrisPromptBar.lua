@@ -206,8 +206,26 @@ _G.IrisPad.bit = function(...)
     _log("⛔ pad resolve FAILED for: " .. table.concat({ ... }, ", ") .. " - none of those fields exist")
     return 0, nil
 end
+-- ⛔ THE "B to ..." PROMPTS NEVER WORKED ON KEYBOARD (2026-08-22).  Every IRIS module that
+-- publishes a prompt reads the press back through IrisPad.down, and this only ever asked the
+-- GAMEPAD -- so the panel said "B  Dive" / "B  Sow" / "B  Cook", the game showed the player F,
+-- and pressing F did nothing at all.  Aurora: "all this time we had the 'B to' prompts ... but
+-- the F key for it never worked."
+-- The pad masks vary by merged-device family (B is 0x80, 0x40000 or 0x40080 depending on the
+-- device; A likewise), so every observed spelling maps to the same key.
+local IRIS_PAD_KB = {
+    [0x40080] = 0x46, [0x80] = 0x46, [0x40000] = 0x46, [16777280] = 0x46,   -- B  -> F
+    [0x20020] = 0x20, [0x20]  = 0x20, [0x20000] = 0x20, [8] = 0x20,          -- A  -> Space
+    [0x400]   = 0x02, [0x100] = 0x11,                                        -- RB -> RMB, LB -> Ctrl
+}
 _G.IrisPad.down = function(bit)
     if not bit or bit == 0 then return false end
+    local vk = IRIS_PAD_KB[math.floor(bit)]
+    if vk then
+        local hit = false
+        pcall(function() hit = reframework:is_key_down(vk) == true end)
+        if hit then return true end
+    end
     local d = false
     pcall(function()
         -- ⛔ via.hid.GamePad is a NATIVE singleton. get_managed_singleton returns nil and the

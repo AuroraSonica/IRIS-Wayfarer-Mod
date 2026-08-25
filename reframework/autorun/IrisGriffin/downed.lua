@@ -665,15 +665,17 @@ function griffin_downed_friendly_attacker(di)
     -- lists 81 fields and not one of them is an attacker -- yet this ladder demonstrably works.
     local ago = nil
     pcall(function() ago = di:get_field("<AttackOwnerObject>k__BackingField") end)
-    if not ago then
-        -- arrows / spells: the shell carries its caster, so a pawn's bowshot still attributes home
-        pcall(function()
-            local ahc = di:get_field("<AttackHitController>k__BackingField")
-            local shell = ahc and ahc:get_field("<CachedShell>k__BackingField")
-            local owner = shell and shell:get_field("<OwnerCharacter>k__BackingField")
-            ago = owner and owner:call("get_GameObject")
-        end)
-    end
+    -- A shell's AttackOwnerObject can be the detached spell/VFX GameObject.
+    -- CachedShell.OwnerCharacter is the authoritative caster, so prefer it even
+    -- when AttackOwnerObject was readable. This is essential for ch257 magic:
+    -- otherwise her own shell reaches the companion clamp as hostile damage.
+    pcall(function()
+        local ahc = di:get_field("<AttackHitController>k__BackingField")
+        local shell = ahc and ahc:get_field("<CachedShell>k__BackingField")
+        local owner = shell and shell:get_field("<OwnerCharacter>k__BackingField")
+        local owner_go = owner and owner:call("get_GameObject")
+        if owner_go then ago = owner_go end
+    end)
     if not ago then
         pcall(function()
             local ahc = di:get_field("<AttackHitController>k__BackingField")
@@ -688,6 +690,12 @@ function griffin_downed_friendly_attacker(di)
     local aaddr = nil
     pcall(function() aaddr = ago:get_address() end)
     if not aaddr then return nil end
+    if aaddr == tonumber(S.route3_combat_self_addr)
+        and (type(S.route3_drake_attack) == "table"
+            or S.route3_drake_sprint_hit_active == true
+            or os.clock() <= (tonumber(S.route3_drake_self_guard_until) or 0.0)) then
+        return "mount self"
+    end
     return (griffin_friendly_attackers_refresh() or {})[aaddr]
 end
 
@@ -784,16 +792,14 @@ function griffin_downed_install_hook()
             -- that a zero-damage packet "is not a hit and must not manufacture a flinch", so the
             -- animal simply ignores the blow instead of staggering for nothing. The authoritative
             -- HP subtraction is a different argument entirely and is stopped in updateDamageHp.
-            if C.route3_friendly_fire_shield ~= false then
-                local who = griffin_downed_friendly_attacker(di)
-                if who then
-                    pcall(function()
-                        di:set_field("Damage", 0.0)
-                        di:set_field("FixedDamage", 0.0)
-                    end)
-                    griffin_downed_note_friendly_block(who, "reaction")
-                    return
-                end
+            local who = griffin_downed_friendly_attacker(di)
+            if who and (who == "mount self" or C.route3_friendly_fire_shield ~= false) then
+                pcall(function()
+                    di:set_field("Damage", 0.0)
+                    di:set_field("FixedDamage", 0.0)
+                end)
+                griffin_downed_note_friendly_block(who, "reaction")
+                return
             end
             -- Scale/clamp before raising visual state. A zero-damage overlap
             -- packet is not a hit and must not manufacture a flinch.
@@ -871,13 +877,11 @@ function griffin_downed_install_hook()
                     -- args[4], a separate argument, which is why the block above it exists in the
                     -- same shape for winged falls. Zeroing the field without zeroing args[4] would
                     -- have looked correct and changed nothing about the HP loss.
-                    if C.route3_friendly_fire_shield ~= false then
-                        local who = griffin_downed_friendly_attacker(di)
-                        if who then
-                            args[4] = sdk.float_to_ptr(0.0)
-                            griffin_downed_note_friendly_block(who, "hp")
-                            return
-                        end
+                    local who = griffin_downed_friendly_attacker(di)
+                    if who and (who == "mount self" or C.route3_friendly_fire_shield ~= false) then
+                        args[4] = sdk.float_to_ptr(0.0)
+                        griffin_downed_note_friendly_block(who, "hp")
+                        return
                     end
                     local hp = tonumber(hc:call("get_Hp"))
                     local amount = sdk.to_float(args[4])

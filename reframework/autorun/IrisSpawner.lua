@@ -140,19 +140,36 @@ local function bare_code(code)
     return tostring(code or ""):match("^ch%d+_%d+$") ~= nil
 end
 
-local function build_path_ctrl(code)
-    if not bare_code(code) then return nil end
+-- Build a controller around an explicit .pfb path.
+-- ⭐ get_Exist() is checked FIRST (borrowed from the house cat's own installer):
+-- a path the game cannot serve is the documented hard-crash lever once it
+-- reaches requestCreateInstance, so a path that does not exist must never
+-- become a job.
+local function build_path_ctrl(path)
+    if not path or path == "" then return nil end
     local ctrl, made = nil, nil
     pcall(function()
-        local species = tostring(code):sub(1, 5)
         local prefab = sdk.create_instance("via.Prefab"):add_ref()
-        prefab:set_Path("AppSystem/ch/" .. species .. "/prefab/"
-            .. tostring(code) .. ".pfb")
+        prefab:set_Path(path)
+        local exists = false
+        pcall(function() exists = prefab:get_Exist() == true end)
+        if not exists then
+            pcall(function() prefab:release() end)
+            return
+        end
         local c = sdk.create_instance("app.PrefabController"):add_ref()
         c._Item = prefab
         ctrl, made = c, prefab
     end)
     return ctrl, made
+end
+
+-- the catalog's own path shape, confirmed by the in-game probe:
+--   AppSystem/ch/<band5>/Prefab/<code>.pfb
+local function code_path(code)
+    if not bare_code(code) then return nil end
+    return "AppSystem/ch/" .. tostring(code):sub(1, 5) .. "/Prefab/"
+        .. tostring(code) .. ".pfb"
 end
 
 -- ═══ PUBLIC: spawn ═══════════════════════════════════════════════════════════
@@ -178,11 +195,22 @@ local function spawn(code, pos, rot, opts)
     if not (gm and method) then return nil, "GenerateManager not ready" end
 
     local ctrl, prefab, route = nil, nil, nil
-    ctrl = resolve_catalog_ctrl(enum_v)
-    if ctrl then
-        route = "catalog"
-    else
-        ctrl, prefab = build_path_ctrl(code)
+    -- ⭐ opts.prefab_path: spawn a stock body wearing a CUSTOM prefab (the
+    -- house cat's W3 assets ride the rabbit chassis this way). An explicit
+    -- path always wins -- the caller knows something the catalog does not.
+    if opts.prefab_path then
+        ctrl, prefab = build_path_ctrl(opts.prefab_path)
+        if ctrl then route = "custom" end
+        if not ctrl then
+            return nil, "custom prefab not found: " .. tostring(opts.prefab_path)
+        end
+    end
+    if not ctrl then
+        ctrl = resolve_catalog_ctrl(enum_v)
+        if ctrl then route = "catalog" end
+    end
+    if not ctrl then
+        ctrl, prefab = build_path_ctrl(code_path(code))
         if ctrl then route = "path" end
     end
     if not ctrl then
@@ -224,7 +252,7 @@ end
 local function demote(job, why)
     job.err = why
     if job.route ~= "path" and not job.tried.path and bare_code(job.code) then
-        local ctrl, prefab = build_path_ctrl(job.code)
+        local ctrl, prefab = build_path_ctrl(code_path(job.code))
         if ctrl then
             pcall(function() ctrl:get_Item():set_Standby(true) end)
             job.ctrl, job.prefab, job.route = ctrl, prefab, "path"

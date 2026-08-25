@@ -130,13 +130,19 @@ function griffin_stable_prepare_summon(ch)
     -- from the destroyed body. Start with its own canonical controller.
     local hc = nil
     pcall(function() hc = griffin_target_hit_controller(ch) end)
+    local template_max = nil
+    pcall(function() template_max = hc and tonumber(griffin_hp_max_from_component(hc)) end)
     if hc then pcall(function() griffin_downed_set_hp(hc, want) end) end
     -- Spawned characters finish initialising over several frames and can restore
     -- their template HP during that window. Reassert only an upper bound: damage
     -- taken during construction is never healed back up by this handover.
     S.stable_hp_restore = {
         ch = ch, hc = hc, want = want,
-        until_clock = os.clock() + 2.0,
+        template_max = template_max, target_max = maxhp,
+        exact_until = os.clock() + 2.0,
+        -- IV max-HP is applied, stamped back to the chassis value around t+2s,
+        -- then self-heals. Keep a narrow second-stage handover for that race.
+        until_clock = os.clock() + ((template_max and maxhp > template_max + 0.5) and 6.0 or 2.0),
     }
     griffin_stable_write()
     return true
@@ -152,8 +158,11 @@ function griffin_stable_hp_restore_tick()
     end
     pcall(function()
         local hc = q.hc
-        local hp = nil
-        pcall(function() hp = hc and tonumber(griffin_hp_from_component(hc)) end)
+        local hp, live_max = nil, nil
+        pcall(function()
+            hp = hc and tonumber(griffin_hp_from_component(hc))
+            live_max = hc and tonumber(griffin_hp_max_from_component(hc))
+        end)
         if not hc then
             local ignored = nil
             hp, ignored, hc = griffin_stable_read_live_hp(q.ch)
@@ -164,7 +173,27 @@ function griffin_stable_hp_restore_tick()
         -- refused to heal it back. The window is 2s -- nothing legitimate hurts a
         -- fresh summon in it -- so hold the handover value from BOTH sides.
         if hc and hp and want and math.abs(hp - want) > 0.05 then
-            griffin_downed_set_hp(hc, want)
+            local exact_until = tonumber(q.exact_until)
+            local exact = exact_until == nil or now < exact_until
+            local template_max = tonumber(q.template_max)
+            local target_max = tonumber(q.target_max)
+            -- After the original two-second landing window, restore upward only
+            -- for the proven IV clamp signature: the pool is ready again and HP
+            -- still sits at the old template ceiling. Damage below that ceiling
+            -- is genuine and is never healed by the handover.
+            local iv_clamped = not exact and template_max and target_max
+                and target_max > template_max + 0.5
+                and live_max and live_max >= target_max - 0.6
+                and hp >= template_max - 0.6 and want > template_max
+            if exact or iv_clamped or hp > want then
+                griffin_downed_set_hp(hc, want)
+                if iv_clamped then
+                    q.until_clock = now + 0.1
+                    pcall(function() log.info(string.format(
+                        "[IrisStable] IV spawn-clamp repaired: %.1f -> %.1f / %.1f",
+                        hp, want, live_max)) end)
+                end
+            end
         end
     end)
 end

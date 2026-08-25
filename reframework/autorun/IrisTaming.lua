@@ -213,12 +213,96 @@ local HC = {
     -- the only two bridges Stray ships. ⛔ There is NO stand<->lying clip, so
     -- lying is only reachable through sitting; sit<->lie the 8-frame blend covers.
     IDLE_T = { stand_sit = 90, sit_stand = 79 },
+    -- ⭐ MINIMUM TIME ON A CARD. Some idles are only ~40 frames (0.7s); without
+    -- a floor the deck deals a new one every second and reads as spam
+    -- (Aurora 08-20: "really short and spammy"). A card must have been up this
+    -- long AND have completed a play before the next is dealt, so short clips
+    -- simply loop a few times and long ones (the 717-frame one is ~12s) still
+    -- play exactly once.
+    IDLE_DWELL = 4.0,
+    -- ⛔⛔ TIME BACKSTOP. The frame-based completion test only runs when the
+    -- layer reads back as OUR bank; when it does not, the re-pin arm replays
+    -- the same card forever and the deck STALLS (Aurora 08-20: "grooming 2
+    -- about 20+ times and it still isn't changing"). Nothing may hold longer
+    -- than this, whatever the playhead says.
+    IDLE_MAX = 14.0,
     -- ⭐ RARITY, not uniform random: finding a calico should mean something.
     COAT_WEIGHTS = {
-        { "default", 30 }, { "graytabby", 25 }, { "tuxedo", 20 },
-        { "blackcat", 15 }, { "tortoiseshell", 6 }, { "calico", 4 },
+        { "default", 25 }, { "graytabby", 20 }, { "browntabby", 18 },
+        { "biscuit", 15 }, { "blackcat", 12 }, { "tortoiseshell", 6 },
+        { "calico", 4 },
     },
     bank_id = 904,
+    -- TRESSYM FULL MOTION TEST (08-23): entirely custom paths and bank 905. This is
+    -- applied only to the already-spawned IRIS housecat by an explicit panel
+    -- button; no vanilla rabbit asset is replaced and no wild body is touched.
+    tressym_mesh = "riftspeak/tressym/iris_tressym.mesh",
+    tressym_mdf = "riftspeak/tressym/iris_tressym_v07.mdf2",
+    tressym_motlist = "riftspeak/tressym/iris_tressym_full_v3.motlist",
+    tressym_bank_id = 905,
+    -- Content Editor order was binary-audited after conversion. IDs 1-158 are
+    -- byte-exact from the approved v1 hybrid; IDs 159-204 are v3 composites.
+    tressym_groups = {
+        "Flight", "Ground + jumps", "Grooming + play", "Quiet idles",
+        "Food + sleep", "Affection", "Experimental",
+    },
+    tressym_clips = {
+        { id = 153, group = "Flight", name = "take-off", loop = false },
+        { id = 154, group = "Flight", name = "hover", loop = true },
+        { id = 155, group = "Flight", name = "glide", loop = true },
+        { id = 156, group = "Flight", name = "fall", loop = true },
+        { id = 157, group = "Flight", name = "land", loop = false },
+        { id = 158, group = "Flight", name = "perch", loop = true },
+        { id = 159, group = "Ground + jumps", name = "open idle", loop = true },
+        { id = 160, group = "Ground + jumps", name = "wing stretch", loop = false },
+        { id = 161, group = "Ground + jumps", name = "body + feather ruffle", loop = false },
+        { id = 162, group = "Ground + jumps", name = "open-wing walk", loop = true },
+        { id = 163, group = "Ground + jumps", name = "open-wing run", loop = true },
+        { id = 164, group = "Ground + jumps", name = "assisted jump short", loop = false },
+        { id = 165, group = "Ground + jumps", name = "assisted jump long", loop = false },
+        { id = 166, group = "Grooming + play", name = "grooming 1", loop = false },
+        { id = 167, group = "Grooming + play", name = "grooming 2", loop = false },
+        { id = 168, group = "Grooming + play", name = "grooming 3", loop = false },
+        { id = 169, group = "Grooming + play", name = "hunt a fly", loop = false },
+        { id = 170, group = "Grooming + play", name = "scratch neck standing", loop = false },
+        { id = 171, group = "Grooming + play", name = "scratch neck seated", loop = false },
+        { id = 174, group = "Grooming + play", name = "prone tail-watch", loop = true },
+        { id = 175, group = "Grooming + play", name = "seated cleaning", loop = false },
+        { id = 176, group = "Quiet idles", name = "sit balled watch", loop = true },
+        { id = 177, group = "Quiet idles", name = "sit balled still", loop = true },
+        { id = 178, group = "Quiet idles", name = "sit watch", loop = true },
+        { id = 179, group = "Quiet idles", name = "sit watch left", loop = true },
+        { id = 180, group = "Quiet idles", name = "sit idle", loop = true },
+        { id = 181, group = "Quiet idles", name = "sit idle 2", loop = true },
+        { id = 182, group = "Quiet idles", name = "stand still", loop = true },
+        { id = 183, group = "Quiet idles", name = "tail idle 2", loop = true },
+        { id = 184, group = "Quiet idles", name = "tail idle 3", loop = true },
+        { id = 185, group = "Quiet idles", name = "tail idle 5", loop = true },
+        { id = 186, group = "Quiet idles", name = "lying idle", loop = true },
+        { id = 187, group = "Quiet idles", name = "sleeping still", loop = true },
+        { id = 188, group = "Quiet idles", name = "sleeping still 2", loop = true },
+        { id = 189, group = "Quiet idles", name = "stand to sit", loop = false },
+        { id = 190, group = "Quiet idles", name = "sit to stand", loop = false },
+        { id = 191, group = "Food + sleep", name = "eat start", loop = false },
+        { id = 192, group = "Food + sleep", name = "eat loop", loop = true },
+        { id = 193, group = "Food + sleep", name = "eat end", loop = false },
+        { id = 194, group = "Food + sleep", name = "drink start", loop = false },
+        { id = 195, group = "Food + sleep", name = "drink loop", loop = true },
+        { id = 196, group = "Food + sleep", name = "drink end", loop = false },
+        { id = 197, group = "Food + sleep", name = "sleep start", loop = false },
+        { id = 198, group = "Food + sleep", name = "sleep loop", loop = true },
+        { id = 199, group = "Food + sleep", name = "sleep end", loop = false },
+        { id = 200, group = "Affection", name = "biscuits start", loop = false },
+        { id = 201, group = "Affection", name = "biscuits loop", loop = true },
+        { id = 202, group = "Affection", name = "biscuits end", loop = false },
+        { id = 203, group = "Affection", name = "rub player left", loop = false },
+        { id = 204, group = "Affection", name = "rub player right", loop = false },
+        -- These are retained for diagnosis only. The cat rolls directly onto the
+        -- wing roots; no autonomous deck may select them without body reanimation.
+        { id = 172, group = "Experimental", name = "UNSAFE tail roll 1", loop = false },
+        { id = 173, group = "Experimental", name = "UNSAFE tail roll 2", loop = false },
+    },
+    tressym_default_clip = 158,
     -- W3 GAIT PROFILE (08-18, the axis-fixed catalogue field-proven): species_clips()
     -- serves THIS to the follow driver for the housecat body -- the cat walks, runs
     -- and idles in Witcher motion and never plays a rabbit clip. Served only while
@@ -358,7 +442,21 @@ local C = {
     housecat_height_offset = 0.0,  -- extra ride height above the probed floor (rough-terrain dial)
     housecat_tail_lift = 0.0,      -- radians, per-frame joint pre-rotation: + lifts / - drops (find the look live)
     housecat_tail_relax = 0.0,     -- 0 = animated tail, 1 = held at rest pose
+    -- SETTLEMENT STRAYS (08-24): curated points only. There is deliberately
+    -- no city-centre scatter or rabbit navigation here: Aurora records clear
+    -- street/yard berths in-game and each stationary ambient cat owns its own
+    -- mesh, material, bank and idle deck.
+    housecat_strays_enabled = true,
+    housecat_stray_activate = 48.0,
+    housecat_stray_despawn = 78.0,
+    housecat_stray_spawn_min = 5.0,
+    housecat_stray_global_cap = 4,
+    housecat_stray_settlement_cap = 2,
+    housecat_stray_min_anchor = 8.0,
+    housecat_stray_y_offset = 0.0,
+    housecat_stray_pose_contract_v1 = false,
     oxtame_enabled = true,        -- THE PROPER GRIFFIN TAMING (Aurora's canon scene): kill an ox as the OFFERING
+    oxtame_require_mode = true,   -- ⭐ 08-21 (Aurora): an ox kill only tempts a griffin down while TAMING MODE is on. false = the old always-armed behaviour
     oxtame_griffin_range = 800.0, -- only a wild griffin genuinely in the area can answer the ox offering
     oxtame_guaranteed_approach = true, -- after scenting the kill, FC-off terrain-following flight owns the approach instead of trusting a patrol waypoint
     oxtame_guaranteed_delay = 0.8,     -- short beat for the kill/scent card before the visible turn-in begins
@@ -1013,6 +1111,7 @@ local S = {
     housecat_bank_pin = nil,
     housecat_bank_key = nil,
     housecat_bank_status = "bank disarmed",
+    housecat_wild = nil,
 }
 -- ⭐ published BY REFERENCE for other modules (08-05: IrisFarming's monster guard must never
 -- evict a tamed creature - wolves are tameable TODAY, chimera/garm may follow, and a species
@@ -1726,6 +1825,15 @@ end
 local function creature_label(go2)
     -- proper-case per-creature name from the object name (never lowercase "the wolf")
     local nm = tostring(go_name(go2) or "")
+    local wildcat = nil
+    pcall(function()
+        local ga = go2 and go2:get_address()
+        wildcat = ga and S.housecat_wild_by_go
+            and S.housecat_wild_by_go[tostring(ga)] or nil
+    end)
+    if wildcat then
+        return wildcat.identity and wildcat.identity.tressym and "Tressym" or "Stray Cat"
+    end
     if nm:find("ch253", 1, true) then return "Griffin" end
     if nm:find("ch223", 1, true) then
         -- a converted cat wears a wolf/dog band name (08-05, Aurora: the puma tame
@@ -2178,16 +2286,23 @@ local function oxtame_request_decoy(st, pos)
     if C.oxtame_live_bait == false or not (st and pos) then return false end
     if oxtame_decoy_target(st) then return true end
     if st.decoy_requested then return false end
-    if S.oxtame_decoy_spawner then return false end -- prior scene cleanup has not completed yet
+    if S.oxtame_decoy_spawner or S.oxtame_decoy_handle then return false end -- prior scene cleanup has not completed yet
     local ok = false
     pcall(function()
-        local SR = require("EnemySpawner/spawnRequest")
-        local sp = SR:new()
-        sp:updateConfig({
-            spawnIdle = true,
-            instLimit = 1,
-            spawnMultiple = { enable = false, qty = 1 },
-        })
+        -- 08-20: the decoy is IrisSpawner's now. It still owns a SEPARATE
+        -- handle from the ritual-hunt quarry -- the two must never delete or
+        -- claim one another's bodies.
+        local ISPb = rawget(_G, "IrisSpawner")
+        local SR, sp = nil, nil
+        if not ISPb then
+            SR = require("EnemySpawner/spawnRequest")
+            sp = SR:new()
+            sp:updateConfig({
+                spawnIdle = true,
+                instLimit = 1,
+                spawnMultiple = { enable = false, qty = 1 },
+            })
+        end
         local q = ValueType.new(sdk.find_type_definition("via.Quaternion"))
         q.x = 0; q.y = 0; q.z = 0; q.w = 1
         local p = ValueType.new(sdk.find_type_definition("via.Position"))
@@ -2201,11 +2316,21 @@ local function oxtame_request_decoy(st, pos)
         p.x = target_x
         p.y = target_y + 600.0
         p.z = target_z
-        sp:requestAddInstances(tostring(C.oxtame_live_bait_cid or "ch299210_A_00"), p, q, {
-            spawnIdle = true,
-            ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
-            postProcScale = false,
-        }, 1)
+        local bait_cid = tostring(C.oxtame_live_bait_cid or "ch299210_A_00")
+        if ISPb then
+            local hb, eb = ISPb.spawn(bait_cid, p, q, { idle = true, label = "ox bait" })
+            if not hb then
+                pcall(function() log.info("[IrisTaming] bait spawn refused: " .. tostring(eb)) end)
+                return
+            end
+            S.oxtame_decoy_handle = hb
+        else
+            sp:requestAddInstances(bait_cid, p, q, {
+                spawnIdle = true,
+                ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
+                postProcScale = false,
+            }, 1)
+        end
         S.oxtame_decoy_spawner = sp
         S.oxtame_decoy_pump_until = os.clock() + math.max(3.0,
             tonumber(C.oxtame_live_bait_spawn_timeout) or 8.0)
@@ -2223,6 +2348,20 @@ local function oxtame_acquire_decoy(st)
     if not st then return nil end
     local have = oxtame_decoy_target(st)
     if have then return have end
+    -- IrisSpawner fills .chara a few frames after the request
+    local hb = S.oxtame_decoy_handle
+    if hb and hb.chara then
+        local born_ok = false
+        pcall(function()
+            born_ok = (not is_dead(hb.chara)) and char_go(hb.chara) ~= nil
+        end)
+        if born_ok then
+            st.decoy_ch = hb.chara
+            S.oxtame_decoy_ch = hb.chara
+            pcall(function() set_nav_stop(hb.chara, true) end)
+            return hb.chara
+        end
+    end
     local sp = S.oxtame_decoy_spawner
     if not (sp and sp.instances) then return nil end
     for i = #sp.instances, 1, -1 do
@@ -4796,6 +4935,11 @@ local function find_candidate(pgo)
                 if not horse_owned and not resident9
                     and (name_in_csv(nm, C.target_bands) or name_in_csv(nm, C.critter_bands))
                     and not name_in_csv(nm, C.exclude_bands)
+                    -- Settlement strays have their own taming route next. Until
+                    -- that exists, never let the generic rabbit rite claim the
+                    -- rabbit chassis underneath a cat mesh.
+                    and not (ca and S.housecat_wild_by_addr
+                             and S.housecat_wild_by_addr[tostring(ca)])
                     and not S.tamed[ch] and not is_dead(ch)
                     and not (comp_addr and ca == comp_addr)
                     and not (pend_addr and ca == pend_addr)
@@ -4897,6 +5041,16 @@ local function load_state()
             for pk, pv in pairs(posture_code) do
                 if pv and (tonumber(C[pk]) or 0.0) > 0.0 then C[pk] = pv end
             end
+        end
+        -- Settlement stray pose repair (08-24). The first berth build disabled
+        -- MotionFsm2 and then tried to correct the resulting inverted rig by
+        -- moving its root. That merely put the paws on the surface while the cat
+        -- hung below them. The proven house-cat controller contract keeps
+        -- MotionFsm2 alive and reasserts our custom bank when needed. Discard any
+        -- Y correction measured from that invalid pose exactly once.
+        if C.housecat_stray_pose_contract_v1 ~= true then
+            C.housecat_stray_pose_contract_v1 = true
+            C.housecat_stray_y_offset = 0.0
         end
         -- migration: the game spells it "Pitywort" (one T) -- older saved configs carry only the
         -- two-T guess, which never matched the real drop
@@ -9072,6 +9226,22 @@ re.on_application_entry("UpdateBehavior", function()
         -- the palm mid-mount + the griffin launched/froze). If a rabbit rite is live, the ox offering
         -- simply waits -- no scene created. Only blocks a FRESH scene (not one already in progress).
         if not S.oxtame and (S.trial ~= nil or S.mode == "trusting" or S.ox_rite ~= nil) then return end   -- (+ the yoke rite, 07-21)
+        -- ⭐ 08-21 TAMING MODE OWNS THE OFFERING (Aurora: "can we make it so the
+        -- ox kill to tempt a griffin down only works when you're in taming
+        -- mode?"). Killing an ox is an ordinary thing to do in this game; it
+        -- should not silently arm a courtship scene, spawn a bait rat and drop
+        -- a friend-shield over every wild griffin in range. Same rule the soar
+        -- hint already follows ~180 lines up.
+        -- ⛔ SILENT by design: a refused prompt on every ox you happen to kill
+        -- would be worse noise than the bug. And gated on `not S.oxtame` like
+        -- the rest, so a scene ALREADY running is untouched -- which matters,
+        -- because taming mode switches itself OFF the instant a bond is sealed
+        -- (tame_mode_stay = false) and a mid-scene gate would kill the rite at
+        -- its own climax.
+        if not S.oxtame and C.oxtame_require_mode ~= false and S.tame_mode ~= true then
+            S.oxtame_shield = nil   -- no scene = no shield; wild stays wild
+            return
+        end
         -- ⭐ FRESH-SCENE GATES (07-21, Aurora): a tame must not START against a griffin that is
         -- (a) GROUNDED -- the whole bait ladder (dive pokes, swoop nodes) assumes a flier; aimed
         -- at a landed bird it just screams in place and goes nowhere -- or (b) mid-FIGHT -- an
@@ -9130,6 +9300,13 @@ re.on_application_entry("UpdateBehavior", function()
                 -- A failed prefab birth is recoverable. Retire this request and try a fresh one on
                 -- the next scene tick; never silently substitute the player as prey.
                 pcall(function() if S.oxtame_decoy_spawner then S.oxtame_decoy_spawner:deleteAll() end end)
+                pcall(function()
+                    local ISPb = rawget(_G, "IrisSpawner")
+                    if ISPb and S.oxtame_decoy_handle then
+                        ISPb.destroy(S.oxtame_decoy_handle)
+                    end
+                    S.oxtame_decoy_handle = nil
+                end)
                 S.oxtame_decoy_spawner = nil; S.oxtame_decoy_ch = nil
                 S.oxtame_decoy_pump_until = nil; S.oxtame_decoy_pos = nil
                 st0.decoy_requested = nil; st0.decoy_request_at = nil
@@ -14281,6 +14458,12 @@ _G.IrisTaming.nameplates_on = function() return C.companion_nameplate ~= false e
 -- pets? Takes the GAMEOBJECT address (named _body to keep the address-class law visible).
 _G.IrisTaming.is_pet_body = function(go_addr)
     if not go_addr then return false end
+    -- Settlement strays are intentionally outside S.tamed so several may live
+    -- at once, but they are still IRIS-owned bodies. Wild Blood and any other
+    -- generic creature sweeper must stand down exactly as they do for the
+    -- ordinary spawned house cat.
+    if S.housecat_wild_by_go
+        and S.housecat_wild_by_go[tostring(go_addr)] then return true end
     local hit = false
     pcall(function()
         for kch in pairs(S.tamed or {}) do
@@ -14302,7 +14485,13 @@ end
 -- character id -- so one holder per coat gives several cats DIFFERENT looks in
 -- the world at the same time. "default" is the stock ginger and needs no extra
 -- pak file. Names must match the mdf2s built by rs_build_coat_materials.py.
-HC.COATS = { "default", "blackcat", "calico", "graytabby", "tortoiseshell", "tuxedo" }
+-- ⛔ NO TUXEDO. That mod paints its pattern on Stray's FUR SHELL, and its
+-- CAT_Body_D is a blank 512 placeholder (63 KB, near-zero saturation) that
+-- nobody sees in Stray because fur covers it. We culled the fur submesh, so we
+-- render the placeholder -- a white cat with a black smudge. Re-adding it needs
+-- the fur submesh back, which is a mesh rebuild, not a texture swap.
+HC.COATS = { "default", "blackcat", "calico", "graytabby", "tortoiseshell",
+             "browntabby", "biscuit" }
 
 function HC.coat_mdf_path(coat)
     if coat == nil or coat == "default" then return HC.mdf_stray end
@@ -14432,6 +14621,7 @@ function HC.pin_mesh()
     S.housecat_mdf_holder = mdf_holder
     S.housecat_warm_at = os.clock()
     S.housecat_status = "mesh and material streaming"
+    HC.pin_all_coats()      -- ⭐ every coat starts loading now, not on demand
     return true
 end
 
@@ -14475,10 +14665,10 @@ function HC.load_motlist()
     S.housecat_bank_holder = holder
     if ok and holder then
         S.housecat_bank_path = path
-        S.housecat_bank_status = "motlist loaded: " .. tostring(src.label)
+        S.housecat_bank_status = "motlist loaded: " .. tostring(path)
         return true
     end
-    S.housecat_bank_status = "motlist unavailable: " .. tostring(src.label)
+    S.housecat_bank_status = "motlist unavailable: " .. tostring(path)
     return false
 end
 
@@ -14563,7 +14753,12 @@ function HC.apply_mesh(ch)
     -- re-identify the cat.
     local rec = S.tamed and S.tamed[ch]
     local coat = rec and rec.coat or nil
-    local mat_holder = HC.coat_holder(coat) or S.housecat_mdf_holder
+    local mat_holder = HC.coat_holder(coat)
+    local coat_worn = coat
+    if not mat_holder then
+        mat_holder = S.housecat_mdf_holder   -- still warming: stock for now
+        coat_worn = (coat == nil or coat == "default") and "default" or nil
+    end
     local material_ok, material_err = pcall(function()
         mesh:call("set_Material", mat_holder)
     end)
@@ -14573,6 +14768,8 @@ function HC.apply_mesh(ch)
         end)
     end
     pcall(function() mesh:call("set_Enabled", true) end)
+    -- nil here means "not what the record wants" -> coat_tick will keep trying
+    if rec then rec.hc_coat_applied = material_ok and coat_worn or nil end
     if not ok then
         pcall(function() holder:release() end)
         return false, "mesh assignment failed: " .. tostring(err)
@@ -14583,6 +14780,289 @@ function HC.apply_mesh(ch)
     end
     if S.housecat_holder then pcall(function() S.housecat_holder:release() end) end
     S.housecat_holder = holder
+    return true
+end
+
+-- Load the isolated Tressym proof assets. Hold every resource/holder for the
+-- session: the live mesh and DynamicMotionBank retain native references, so
+-- releasing our side while the cat wears them is the familiar UAF crash class.
+function HC.pin_tressym_proof()
+    local rec = S.housecat_ch and S.tamed and S.tamed[S.housecat_ch]
+    local coat = rec and rec.coat or "default"
+    local suffix = (coat == "default") and "v07" or tostring(coat)
+    local mdf_path = "riftspeak/tressym/iris_tressym_" .. suffix .. ".mdf2"
+    -- The mesh and motion bank are shared, but the fourth-slot Tressym MDF is
+    -- coat-specific.  Keying this cache only by motlist reused whichever coat
+    -- was loaded first (for example a brown Tressym on a blackcat record),
+    -- while the coat dropdown quite correctly continued to show blackcat.
+    if S.tressym_mesh_holder and S.tressym_mot_holder and S.tressym_mdf_holder
+       and S.tressym_mot_path == HC.tressym_motlist
+       and S.tressym_mdf_path == mdf_path then
+        return true
+    end
+    local ok, err = pcall(function()
+        local mesh_res = sdk.create_resource("via.render.MeshResource", HC.tressym_mesh)
+        local mdf_res = sdk.create_resource("via.render.MeshMaterialResource", mdf_path)
+        local mot_res = sdk.create_resource("via.motion.MotionListResource", HC.tressym_motlist)
+        if not mesh_res then error("mesh unavailable: " .. HC.tressym_mesh) end
+        if not mdf_res then error("material unavailable: " .. mdf_path) end
+        if not mot_res then error("motlist unavailable: " .. HC.tressym_motlist) end
+        mesh_res:add_ref(); mdf_res:add_ref(); mot_res:add_ref()
+        local mesh_holder = mesh_res:create_holder("via.render.MeshResourceHolder")
+        local mdf_holder = mdf_res:create_holder("via.render.MeshMaterialResourceHolder")
+        local mot_holder = mot_res:create_holder("via.motion.MotionListResourceHolder")
+        if not (mesh_holder and mdf_holder and mot_holder) then error("holder creation failed") end
+        mesh_holder:add_ref(); mdf_holder:add_ref(); mot_holder:add_ref()
+        -- A hot reload may leave the old one-clip proof pinned. Do not release
+        -- native resources still referenced by a live Mesh/DynamicMotionBank;
+        -- retain them for the session and switch our active pins atomically.
+        if S.tressym_mesh_holder or S.tressym_mot_holder or S.tressym_mdf_holder then
+            S.tressym_retired_pins = S.tressym_retired_pins or {}
+            S.tressym_retired_pins[#S.tressym_retired_pins + 1] = {
+                S.tressym_mesh_res, S.tressym_mesh_holder,
+                S.tressym_mdf_res, S.tressym_mdf_holder,
+                S.tressym_mot_res, S.tressym_mot_holder,
+            }
+        end
+        S.tressym_mesh_res, S.tressym_mesh_holder = mesh_res, mesh_holder
+        S.tressym_mdf_res, S.tressym_mdf_holder = mdf_res, mdf_holder
+        S.tressym_mot_res, S.tressym_mot_holder = mot_res, mot_holder
+        S.tressym_mdf_path = mdf_path
+        S.tressym_mot_path = HC.tressym_motlist
+        S.tressym_warm_at = os.clock() + 2.0
+    end)
+    if not ok then
+        S.tressym_status = "asset load failed: " .. tostring(err)
+        return false
+    end
+    S.tressym_status = "assets streaming (2 seconds)"
+    return true
+end
+
+function HC.apply_tressym_proof_now()
+    local ch = S.housecat_ch
+    local go = ch and char_go(ch)
+    if not (ch and go) then S.tressym_status = "spawn the IRIS house cat first"; return false end
+    if not HC.pin_tressym_proof() then return false end
+    if os.clock() < (tonumber(S.tressym_warm_at) or 0.0) then
+        S.tressym_status = "assets still streaming"
+        return false
+    end
+    local render_mesh = comp(go, "via.render.Mesh")
+    if not render_mesh then S.tressym_status = "house-cat body has no render Mesh"; return false end
+    local motion = nil
+    pcall(function() motion = ch:call("get_Motion") end)
+    if not motion then S.tressym_status = "house-cat body has no Motion"; return false end
+
+    local ok, err = pcall(function()
+        render_mesh:call("set_Enabled", false)
+        local mesh_ok = pcall(function() render_mesh:call("setMesh", S.tressym_mesh_holder) end)
+        if not mesh_ok then render_mesh:call("set_Mesh", S.tressym_mesh_holder) end
+        local mat_ok = pcall(function() render_mesh:call("set_Material", S.tressym_mdf_holder) end)
+        if not mat_ok then render_mesh:call("setMaterial", S.tressym_mdf_holder) end
+        render_mesh:call("set_Enabled", true)
+
+        local count = tonumber(motion:call("getDynamicMotionBankCount")) or 0
+        local bank, index = nil, count
+        for i = 0, count - 1 do
+            local candidate = motion:call("getDynamicMotionBank", i)
+            local id = nil
+            if candidate then pcall(function() id = candidate:call("get_BankID") end) end
+            if tonumber(id) == HC.tressym_bank_id then bank, index = candidate, i; break end
+        end
+        if not bank then
+            motion:call("setDynamicMotionBankCount", count + 1)
+            bank = sdk.create_instance("via.motion.DynamicMotionBank")
+            bank = bank and bank:add_ref() or nil
+            if not bank then error("could not create bank 905") end
+            S.tressym_bank_pin = bank
+        end
+        bank:call("set_MotionList", S.tressym_mot_holder)
+        bank:call("set_OverwriteBankID", true)
+        bank:call("set_BankID", HC.tressym_bank_id)
+        motion:call("setDynamicMotionBank", index, bank)
+    end)
+    if not ok then
+        pcall(function() render_mesh:call("set_Enabled", true) end)
+        S.tressym_status = "apply/register failed: " .. tostring(err)
+        return false
+    end
+
+    -- The ordinary follow/idle writers must stand down while bank 905 owns
+    -- layer 0. Existing tester tick gives us a hitch-free loop at EndFrame.
+    S.housecat_rebind_at = nil
+    S.housecat_test = true
+    local requested = tonumber(S.tressym_pending_clip) or HC.tressym_default_clip
+    local selected = nil
+    for _, clip in ipairs(HC.tressym_clips) do
+        if clip.id == requested then selected = clip; break end
+    end
+    if not selected then
+        for _, clip in ipairs(HC.tressym_clips) do
+            if clip.id == HC.tressym_default_clip then selected = clip; break end
+        end
+    end
+    if not selected then error("Tressym default clip missing from audited roster") end
+    S.tressym_pending_clip = nil
+    S.housecat_loop = selected.loop == true
+    S.housecat_freeze = selected.loop ~= true
+    S.tressym_proof = true
+    S.tressym_clip_id = selected.id
+    S.tressym_clip_name = selected.name
+    HC.test_speed(1.0)
+    play_motion(ch, HC.tressym_bank_id, selected.id)
+    S.tressym_status = "LIVE: bank 905, clip " .. selected.id .. " " .. selected.name
+    log.info("[IrisTaming] Tressym full motion test LIVE on the IRIS housecat only")
+    return true
+end
+
+function HC.queue_tressym_proof(clip_id)
+    if not S.housecat_ch then S.tressym_status = "spawn the IRIS house cat first"; return false end
+    S.tressym_pending_clip = tonumber(clip_id) or HC.tressym_default_clip
+    S.tressym_apply_queued = true
+    if not HC.pin_tressym_proof() then S.tressym_apply_queued = nil; return false end
+    return true
+end
+
+function HC.play_tressym_clip(clip_id, sequence_owned)
+    local selected = nil
+    clip_id = tonumber(clip_id)
+    for _, clip in ipairs(HC.tressym_clips) do
+        if clip.id == clip_id then selected = clip; break end
+    end
+    if not selected then
+        S.tressym_status = "refused unknown Tressym clip " .. tostring(clip_id)
+        return false
+    end
+    if S.tressym_flight_test and sequence_owned ~= true then
+        HC.stop_tressym_flight_test(true)
+    end
+    if not (S.tressym_proof and S.housecat_ch) then
+        return HC.queue_tressym_proof(selected.id)
+    end
+    S.housecat_test = true
+    S.housecat_loop = selected.loop == true
+    S.housecat_freeze = selected.loop ~= true
+    S.tressym_clip_id = selected.id
+    S.tressym_clip_name = selected.name
+    HC.test_speed(1.0)
+    play_motion(S.housecat_ch, HC.tressym_bank_id, selected.id)
+    S.tressym_status = "LIVE: bank 905, clip " .. selected.id .. " " .. selected.name
+    return true
+end
+
+-- A contained transform-driven pass for judging the composite motions away
+-- from the floor. This is deliberately not the scout controller: it fixes X/Z
+-- at the launch point, owns only the IRIS housecat and always restores the
+-- exact starting position after landing or abort.
+function HC.stop_tressym_flight_test(restore_position)
+    local test = S.tressym_flight_test
+    S.tressym_flight_test = nil
+    if restore_position == true and test and S.housecat_ch then
+        local go = char_go(S.housecat_ch)
+        if go and test.origin then
+            pcall(function()
+                local p = ValueType.new(sdk.find_type_definition("via.Position"))
+                p.x = test.origin.x; p.y = test.origin.y; p.z = test.origin.z
+                set_upos(go, p)
+            end)
+        end
+    end
+end
+
+function HC.start_tressym_flight_test()
+    if not (S.tressym_proof and S.housecat_ch) then
+        S.tressym_status = "apply the full Tressym first"
+        return false
+    end
+    local go = char_go(S.housecat_ch)
+    local pos = go and upos(go)
+    if not pos then S.tressym_status = "could not read the Tressym position"; return false end
+    HC.stop_tressym_flight_test(false)
+    S.tressym_flight_test = {
+        origin = { x = tonumber(pos.x) or 0.0, y = tonumber(pos.y) or 0.0,
+                   z = tonumber(pos.z) or 0.0 },
+        height = 1.40, stage = 1, t0 = os.clock(),
+    }
+    HC.play_tressym_clip(153, true)
+    S.tressym_status = "LIFTED TEST: take-off"
+    return true
+end
+
+function HC.tressym_flight_test_tick()
+    local test = S.tressym_flight_test
+    local ch = test and S.housecat_ch
+    local go = ch and char_go(ch)
+    if not (test and go and test.origin) then
+        if test then HC.stop_tressym_flight_test(false) end
+        return
+    end
+    local now = os.clock()
+    local elapsed = now - (tonumber(test.t0) or now)
+    local durations = { 1.05, 2.00, 2.85, 1.13, 0.80 }
+    local stage = math.floor(tonumber(test.stage) or 1)
+    local duration = durations[stage] or 0.1
+    local k = math.max(0.0, math.min(1.0, elapsed / duration))
+    local smooth = k * k * (3.0 - 2.0 * k)
+    local h = tonumber(test.height) or 1.40
+    local lift = h
+    if stage == 1 then
+        lift = h * smooth
+    elseif stage == 4 then
+        lift = h + (0.25 - h) * smooth
+    elseif stage == 5 then
+        lift = 0.25 * (1.0 - smooth)
+    end
+    pcall(function()
+        local p = ValueType.new(sdk.find_type_definition("via.Position"))
+        p.x = test.origin.x; p.y = test.origin.y + lift; p.z = test.origin.z
+        set_upos(go, p)
+    end)
+    if elapsed < duration then return end
+
+    test.stage = stage + 1
+    test.t0 = now
+    if test.stage == 2 then
+        HC.play_tressym_clip(154, true); S.tressym_status = "LIFTED TEST: hover"
+    elseif test.stage == 3 then
+        HC.play_tressym_clip(155, true); S.tressym_status = "LIFTED TEST: glide"
+    elseif test.stage == 4 then
+        HC.play_tressym_clip(156, true); S.tressym_status = "LIFTED TEST: fall"
+    elseif test.stage == 5 then
+        HC.play_tressym_clip(157, true); S.tressym_status = "LIFTED TEST: land"
+    else
+        HC.stop_tressym_flight_test(true)
+        HC.play_tressym_clip(158, true)
+        S.tressym_status = "LIFTED TEST COMPLETE: perched at launch point"
+    end
+end
+
+function HC.tressym_proof_tick()
+    if S.tressym_apply_queued ~= true then return end
+    if os.clock() < (tonumber(S.tressym_warm_at) or 0.0) then return end
+    S.tressym_apply_queued = nil
+    HC.apply_tressym_proof_now()
+end
+
+function HC.restore_from_tressym_proof()
+    local ch = S.housecat_ch
+    if not ch then S.tressym_status = "no live house cat"; return false end
+    HC.stop_tressym_flight_test(true)
+    S.tressym_apply_queued = nil
+    S.tressym_pending_clip = nil
+    S.tressym_proof = nil
+    S.tressym_clip_id = nil
+    S.tressym_clip_name = nil
+    S.housecat_test = nil
+    S.housecat_loop = nil
+    S.housecat_freeze = nil
+    HC.test_speed(1.0)
+    local ok, why = HC.apply_mesh(ch)
+    if not ok then S.tressym_status = "restore failed: " .. tostring(why); return false end
+    S.housecat_bank_key = nil
+    S.housecat_gait_at = os.clock() + 0.25
+    HC.register_bank()
+    S.tressym_status = "ordinary house cat restored"
     return true
 end
 
@@ -14615,6 +15095,11 @@ end
 function HC.delete()
     HC.forget_body()
     if S.housecat_spawner then pcall(function() S.housecat_spawner:deleteAll() end) end
+    pcall(function()
+        local ISPc = rawget(_G, "IrisSpawner")
+        if ISPc and S.housecat_handle then ISPc.destroy(S.housecat_handle) end
+        S.housecat_handle = nil
+    end)
     S.housecat_spawner = nil
     S.housecat_pending = false
     S.housecat_spawn_queued = false
@@ -14730,14 +15215,21 @@ function HC.spawn()
     local pgo = player and char_go(player)
     if not pgo then S.housecat_status = "load into the world first"; return false end
 
-    local SR = nil
-    local ok_sr = pcall(function() SR = require("EnemySpawner/spawnRequest") end)
-    if not ok_sr or not SR then S.housecat_status = "SpawnRequest unavailable"; return false end
+    -- 08-20: IrisSpawner carries the cat's CUSTOM prefab through opts.prefab_path,
+    -- so the rabbit chassis wears the W3 cat assets without EnemySpawner.
+    local ISPc = rawget(_G, "IrisSpawner")
+    local SR, spawner = nil, nil
+    if not ISPc then
+        local ok_sr = pcall(function() SR = require("EnemySpawner/spawnRequest") end)
+        if not ok_sr or not SR then S.housecat_status = "no spawner available"; return false end
+    end
 
     HC.delete()
-    local spawner = SR:new()
-    local ok_prefab, prefab_why = HC.install_prefab(spawner)
-    if not ok_prefab then S.housecat_status = tostring(prefab_why); return false end
+    if not ISPc then
+        spawner = SR:new()
+        local ok_prefab, prefab_why = HC.install_prefab(spawner)
+        if not ok_prefab then S.housecat_status = tostring(prefab_why); return false end
+    end
 
     local pos, rot = nil, nil
     pcall(function()
@@ -14758,6 +15250,19 @@ function HC.spawn()
         spawnMultiple = { enable = false, qty = 1 },
         ovrScale = { enable = false, scale = 1.0, normalizeSpeed = false },
     }
+    if ISPc then
+        local hcat, ecat = ISPc.spawn("ch299200_A_00", pos, rot, {
+            idle = true, label = "house cat", prefab_path = HC.prefab,
+        })
+        if not hcat then
+            S.housecat_status = "house-cat spawn refused: " .. tostring(ecat)
+            return false
+        end
+        S.housecat_handle = hcat
+        S.housecat_pending = true
+        S.housecat_status = "IRIS house-cat spawn requested (IrisSpawner)"
+        return true
+    end
     spawner:updateConfig(cfg)
     spawner:requestAddInstances("ch299200_A_00", pos, rot, cfg, 1)
     S.housecat_spawner = spawner
@@ -14775,20 +15280,30 @@ function HC.queued_spawn_tick()
 end
 
 function HC.spawn_tick()
+    -- 08-20: two possible sources now. IrisSpawner pumps ITSELF, so when the
+    -- cat came from there we only wait for its handle to fill; the legacy
+    -- spawner still needs its per-frame nudge.
     local spawner = S.housecat_spawner
-    if not spawner then return end
-    pcall(function()
-        spawner:updateInstanceCounts()
-        spawner:requestSpawnOutstanding()
-        if spawner:hasAnyOutstandingPostProc() then spawner:processPostProc() end
-    end)
+    local handle = S.housecat_handle
+    if not (spawner or handle) then return end
+    if spawner then
+        pcall(function()
+            spawner:updateInstanceCounts()
+            spawner:requestSpawnOutstanding()
+            if spawner:hasAnyOutstandingPostProc() then spawner:processPostProc() end
+        end)
+    end
     if not S.housecat_pending then return end
 
     local ch = nil
-    pcall(function()
-        local inst = spawner.instances and spawner.instances[1]
-        ch = inst and inst.instance and inst.instance:get_Chara()
-    end)
+    if handle and handle.chara then
+        ch = handle.chara
+    elseif spawner then
+        pcall(function()
+            local inst = spawner.instances and spawner.instances[1]
+            ch = inst and inst.instance and inst.instance:get_Chara()
+        end)
+    end
     if not ch then return end
 
     S.housecat_pending = false
@@ -15109,6 +15624,17 @@ function HC.bank_tick()
 end
 
 -- ⭐ SHUFFLE BAG. Every card plays once before any repeats, then reshuffle.
+function HC.clip_name(id)
+    id = tonumber(id)
+    if not id then return "-" end
+    for i = 1, #HC.clips do
+        if HC.clips[i].id == id then
+            return string.format("%d %s", id, HC.clips[i].name)
+        end
+    end
+    return tostring(id) .. " (not in roster)"
+end
+
 function HC.idle_shuffle(rec)
     local n = #HC.IDLE_DECK
     local bag = {}
@@ -15133,6 +15659,8 @@ function HC.idle_commit(rec, ch, bank, now, id, posture)
     rec.hc_idle_started = now
     rec.hc_idle_frame = nil
     rec.hc_idle_frame_prev = nil
+    rec.hc_idle_len = nil
+    rec.hc_idle_repins = 0
     play_motion(ch, bank, id)
 end
 
@@ -15167,6 +15695,198 @@ function HC.idle_advance(rec, ch, bank, now)
         return HC.idle_commit(rec, ch, bank, now, bridge, card.p)
     end
     return HC.idle_commit(rec, ch, bank, now, card.id, card.p)
+end
+
+-- ⭐ WARM THEM ALL UP FRONT (Aurora 08-20: "make sure all the materials are
+-- warmed in advance"). Coat mdf2s are kilobytes; the cost of holding all of
+-- them is nothing next to a cat that spawns the wrong colour.
+function HC.pin_all_coats()
+    for _, c in ipairs(HC.COATS) do
+        if c ~= "default" then pcall(function() HC.pin_coat(c) end) end
+    end
+end
+
+-- ⛔⛔ THE COAT IS AN INVARIANT, NOT A ONE-SHOT. The previous version deferred a
+-- single re-dress to warm_secs after the click -- and if the material was even
+-- marginally short of warm at that instant it silently fell back to the stock
+-- ginger and NEVER RETRIED. That is Aurora's "it doesn't load every time".
+-- Worse, it lived in the ImGui block, so it only ran while the panel was open.
+-- Now: re-assert on a throttle until the body actually wears what the record
+-- says, exactly like HC.assert_own holds think/nav/ai.
+function HC.coat_tick()
+    local ch = S.housecat_ch
+    if not ch then return end
+    local now = os.clock()
+    if now < (tonumber(S.housecat_coat_at) or 0.0) then return end
+    S.housecat_coat_at = now + 0.5
+    local rec = S.tamed and S.tamed[ch]
+    if not rec then return end
+    local want = rec.coat or "default"
+    -- A Tressym MDF has four slots (body/head/eye/wing), while the ordinary cat
+    -- coat holder has only three.  Recolour an active Tressym by deliberately
+    -- loading its matching four-slot MDF; never let this invariant writer put
+    -- an ordinary coat MDF on the winged mesh.
+    if S.tressym_proof then
+        local suffix = (want == "default") and "v07" or tostring(want)
+        local want_path = "riftspeak/tressym/iris_tressym_" .. suffix .. ".mdf2"
+        if S.tressym_mdf_path ~= want_path then
+            rec.hc_coat_applied = nil
+            if HC.pin_tressym_proof() then
+                S.tressym_apply_queued = true
+                S.tressym_pending_clip = tonumber(S.tressym_clip_id)
+                                      or HC.tressym_default_clip
+            end
+        elseif rec.hc_coat_applied ~= want then
+            local go = nil
+            pcall(function() go = char_go(ch) end)
+            local mesh = go and comp(go, "via.render.Mesh") or nil
+            if mesh and S.tressym_mdf_holder
+               and os.clock() >= (tonumber(S.tressym_warm_at) or 0.0) then
+                local ok = pcall(function() mesh:call("set_Material", S.tressym_mdf_holder) end)
+                if not ok then ok = pcall(function() mesh:call("setMaterial", S.tressym_mdf_holder) end) end
+                if ok then rec.hc_coat_applied = want end
+            end
+        end
+        return
+    end
+    if rec.hc_coat_applied == want then return end
+    local holder = (want == "default") and S.housecat_mdf_holder or HC.coat_holder(want)
+    if not holder then
+        pcall(function() HC.pin_coat(want) end)   -- still warming, or never pinned
+        return
+    end
+    local go = nil
+    pcall(function() go = char_go(ch) end)
+    if not go then return end
+    local mesh = nil
+    pcall(function() mesh = comp(go, "via.render.Mesh") end)
+    if not mesh then return end
+    local ok = pcall(function() mesh:call("set_Material", holder) end)
+    if not ok then ok = pcall(function() mesh:call("setMaterial", holder) end) end
+    if ok then
+        rec.hc_coat_applied = want
+        pcall(function() log.info("[IrisTaming] coat applied: " .. tostring(want)) end)
+    end
+end
+
+-- ⭐⭐ THE ONE IDLE DRIVER. This used to live inside the CLOSE-RANGE branch of
+-- the follow logic, so it only ran within ~2.2 m; further away an older shared
+-- driver took over, fired on a 3.5s timer regardless of clip length, and fell
+-- back to BANK 0 -- the vanilla rabbit's bank (Aurora 08-20: "the rabbit
+-- animations take over a lot, especially when it first spawns"). Driving idles
+-- from the frame tick makes distance irrelevant.
+-- ⛔ NO THROTTLE HERE, unlike every sibling in this block: completion detection
+-- is the one job that must sample EVERY frame. At 60fps a clip advances ~45
+-- frames between 0.5s samples and the wrap test becomes a coin flip.
+function HC.idle_tick()
+    local ch = S.housecat_ch
+    if not ch then return end
+    -- ⛔ CARRY LEGITIMATELY WINS this body's motion; firing a card mid-carry
+    -- would stomp the held pose on every completion.
+    if S.iris_carry then return end
+    local rec = S.tamed and S.tamed[ch]
+    if not rec then return end
+    -- ⛔ Bail only on an EXPLICIT gait: fmode is nil on a fresh spawn, and
+    -- bailing on "not idle" would freeze her before she ever settles.
+    if rec.fmode == "walk" or rec.fmode == "run" then return end
+    local go = nil
+    pcall(function() go = char_go(ch) end)
+    if not go then return end
+    local now = os.clock()
+    local hcs9 = species_clips(go)
+    -- ⛔⛔ NO 0.75s GATE ON THE READ. Sampling the playhead only
+    -- on the re-pin throttle was the bug behind "short and
+    -- spammy": at 60fps a clip advances ~45 frames between
+    -- samples, so on any idle shorter than that the
+    -- "frame went backwards" test fired essentially at random
+    -- and dealt a new card every second or so. The playhead is
+    -- now read EVERY TICK (three native calls, nothing); only
+    -- the RE-PIN stays throttled.
+    if hcs9 and hcs9.idle_bank then
+        local bank9 = tonumber(hcs9.idle_bank)
+        local bank0, fr9, ef9 = nil, nil, nil
+        pcall(function()
+            local mo9 = ch:call("get_Motion")
+            local l09 = mo9 and mo9:call("getLayer", 0)
+            if l09 then
+                bank0 = tonumber(l09:call("get_MotionBankID"))
+                fr9 = tonumber(l09:call("get_Frame"))
+                ef9 = tonumber(l09:call("get_EndFrame"))
+            end
+        end)
+        -- ⭐ BACKSTOP, checked in BOTH arms: a card that has
+        -- outlived its own length by a wide margin is stuck, and
+        -- the only honest response is to deal the next one.
+        local st0 = tonumber(rec.hc_idle_started) or now
+        local cap = math.max(tonumber(HC.IDLE_DWELL) or 4.0,
+                             ((tonumber(rec.hc_idle_len) or 6.0) * 1.3) + 1.0)
+        cap = math.min(cap, tonumber(HC.IDLE_MAX) or 14.0)
+        local stuck = (now >= st0 + cap)
+        if bank0 == bank9 then
+            -- ⭐ THE DECK ADVANCES ONLY HERE. ⛔ In the mismatch
+            -- arm below those frame numbers belong to the RABBIT's
+            -- clip, and advancing on them would deal cards at random.
+            local started = tonumber(rec.hc_idle_started) or 0.0
+            local prev = tonumber(rec.hc_idle_frame_prev)
+            local done = false
+            -- ⛔ endframe reads 0 for a beat after changeMotion, and
+            -- the 1.0s floor also covers a stale read; without both
+            -- this fires instantly and every tick.
+            -- ⛔⛔ A BRIDGE IS NOT A CARD. StandToSit is a ~40
+            -- frame transition; holding it for the full dwell
+            -- made it LOOP, which reads as the cat sitting down
+            -- over and over (Aurora 08-20: "a sit down one
+            -- spamming itself"). While a card is pending behind
+            -- a bridge, hand over the moment the bridge finishes.
+            local dwell = rec.hc_idle_pend and 0.25
+                          or (tonumber(HC.IDLE_DWELL) or 4.0)
+            -- remember how long this card actually is, so the
+            -- backstop can be tight rather than a flat timeout
+            if ef9 and ef9 > 0.0 and not rec.hc_idle_len then
+                rec.hc_idle_len = ef9 / 60.0
+            end
+            if fr9 and ef9 and ef9 > 0.0 and now >= started + dwell then
+                -- parked at the end...
+                if fr9 >= ef9 - 2.0 then done = true end
+                -- ...or WRAPPED. Most of these idles LOOP, so the
+                -- frame returns to 0 instead of parking -- the
+                -- end-of-clip test alone would never fire on them.
+                if prev and fr9 < prev - 0.5 then done = true end
+            end
+            if fr9 then
+                rec.hc_idle_frame_prev = fr9
+                rec.hc_idle_frame = fr9
+            end
+            if done or stuck or not rec.hc_idle_id then
+                HC.idle_advance(rec, ch, bank9, now)
+            end
+        elseif now >= (tonumber(rec.hc_idle_at) or 0.0) then
+            rec.hc_idle_at = now + ((bank0 == nil) and 4.0 or 0.75)
+            rec.hc_idle_repins = (tonumber(rec.hc_idle_repins) or 0) + 1
+            local id9 = tonumber(rec.hc_idle_id)
+            if stuck then
+                -- the layer never reads back as ours, so the
+                -- frame signals can never fire: advance on time
+                HC.idle_advance(rec, ch, bank9, now)
+            elseif not id9 then
+                HC.idle_advance(rec, ch, bank9, now)
+            else
+                -- ⛔ REPLAY THE CURRENT CARD, never a fresh draw:
+                -- the rabbit brain repaints layer 0 constantly, so
+                -- drawing here would change idle every 0.75s.
+                play_motion(ch, bank9, id9)
+                -- ...and put the playhead back, or each repaint
+                -- restarts the clip and it never reaches its end.
+                local at = tonumber(rec.hc_idle_frame)
+                if at and at > 1.0 then
+                    pcall(function()
+                        ch:call("get_Motion"):call("getLayer", 0)
+                          :call("set_Frame", at)
+                    end)
+                end
+            end
+        end
+    end
 end
 
 function HC.tail_tick()
@@ -15229,18 +15949,825 @@ function HC.tail_tick()
     end)
 end
 
+-- ============================================================================
+-- SETTLEMENT STRAYS (08-24)
+--
+-- A town is not a random disc around a teleport coordinate.  Every berth is
+-- recorded by Aurora while standing on a known-clear patch, persisted, and
+-- re-vetted before a body is requested.  Wild cats are NOT put in S.tamed and
+-- therefore cannot fight the one active companion for its singleton state.
+-- ============================================================================
+HC.WILD_FILE = "IrisHousecatStrays.json"
+HC.WILD_TRESSYM_DENOM = 4000
+HC.WILD_TRESSYM_DECK = {
+    { id = 159, p = "stand" }, { id = 160, p = "stand" },
+    { id = 161, p = "stand" }, { id = 169, p = "stand" },
+    { id = 170, p = "stand" }, { id = 182, p = "stand" },
+    { id = 183, p = "stand" }, { id = 184, p = "stand" },
+    { id = 185, p = "stand" }, { id = 171, p = "sit" },
+    { id = 175, p = "sit" },   { id = 176, p = "sit" },
+    { id = 177, p = "sit" },   { id = 178, p = "sit" },
+    { id = 179, p = "sit" },   { id = 180, p = "sit" },
+    { id = 181, p = "sit" },   { id = 174, p = "lie" },
+    { id = 186, p = "lie" },   { id = 187, p = "lie" },
+    { id = 188, p = "lie" },
+}
+HC.WILD_TRESSYM_T = { stand_sit = 189, sit_stand = 190 }
+-- Intentional wall/ledge berths use a compact seated deck. ⛔ Do NOT use the
+-- tempting 67-72 `PerchWall...` / `Perch...` names here: field test proved
+-- they are locator-bound furniture poses. With no source locator they rotate
+-- the skeleton around its root and hang the cat upside down from the ledge.
+HC.WILD_PERCH_DECK = {
+    { id = 5,  p = "sit" }, { id = 74, p = "sit" },
+    { id = 75, p = "sit" }, { id = 80, p = "sit" },
+    { id = 81, p = "sit" }, { id = 82, p = "sit" },
+    { id = 83, p = "sit" },
+}
+HC.WILD_TRESSYM_PERCH_DECK = {
+    { id = 171, p = "sit" }, { id = 175, p = "sit" },
+    { id = 176, p = "sit" }, { id = 177, p = "sit" },
+    { id = 178, p = "sit" }, { id = 179, p = "sit" },
+    { id = 180, p = "sit" }, { id = 181, p = "sit" },
+}
+
+function HC.wild_state()
+    if S.housecat_wild then return S.housecat_wild end
+    local d = nil
+    pcall(function() d = json.load_file(HC.WILD_FILE) end)
+    if type(d) ~= "table" then d = {} end
+    if type(d.anchors) ~= "table" then d.anchors = {} end
+    if type(d.individuals) ~= "table" then d.individuals = {} end
+    d.version = 1
+    d.active = {}
+    d.tressym_assets = {}
+    d.retry = {}
+    d.status = (#d.anchors == 0)
+        and "no surveyed stray berths yet"
+        or string.format("%d surveyed stray berths", #d.anchors)
+    S.housecat_wild = d
+    S.housecat_wild_by_addr = {}
+    S.housecat_wild_by_go = {}
+    return d
+end
+
+function HC.wild_save()
+    local W = HC.wild_state()
+    -- Write a fresh plain-data graph. Never hand the serializer runtime tables
+    -- that sit beside engine handles/resources in W: one field-test produced
+    -- an in-memory active anchor while disk silently contained anchors:null.
+    local anchors, individuals = {}, {}
+    for _, a in ipairs(W.anchors or {}) do
+        anchors[#anchors + 1] = {
+            id = tostring(a.id or ""), kind = tostring(a.kind or "ground"),
+            settlement = tostring(a.settlement or "Unlabelled"),
+            label = tostring(a.label or ""),
+            x = tonumber(a.x), y = tonumber(a.y), z = tonumber(a.z),
+            qx = tonumber(a.qx) or 0.0, qy = tonumber(a.qy) or 0.0,
+            qz = tonumber(a.qz) or 0.0, qw = tonumber(a.qw) or 1.0,
+        }
+    end
+    for id, ind in pairs(W.individuals or {}) do
+        individuals[tostring(id)] = {
+            coat = tostring(ind.coat or "default"),
+            tressym_roll = math.floor(tonumber(ind.tressym_roll) or 0),
+            tressym = ind.tressym == true,
+        }
+    end
+    local ok, err = pcall(function()
+        json.dump_file(HC.WILD_FILE,
+            { version = 1, anchors = anchors, individuals = individuals })
+    end)
+    if not ok then
+        W.status = "stray save FAILED: " .. tostring(err)
+        pcall(function() log.info("[IrisTaming] " .. W.status) end)
+    end
+    return ok
+end
+
+function HC.wild_identity(anchor)
+    local W = HC.wild_state()
+    local id = tostring(anchor and anchor.id or "")
+    if id == "" then return nil end
+    local ind = W.individuals[id]
+    if type(ind) ~= "table" then
+        local roll = math.random(1, HC.WILD_TRESSYM_DENOM)
+        ind = {
+            coat = HC.pick_coat(),
+            tressym_roll = roll,
+            tressym = roll == 1,
+        }
+        W.individuals[id] = ind
+        HC.wild_save()
+        pcall(function() log.info(string.format(
+            "[IrisTaming] stray identity %s: coat=%s Tressym=%d/%d%s",
+            id, tostring(ind.coat), roll, HC.WILD_TRESSYM_DENOM,
+            ind.tressym and " HIT" or "")) end)
+    end
+    return ind
+end
+
+function HC.wild_ground(x, y, z)
+    local hit = nil
+    pcall(function()
+        if S.terrain_y then hit = S.terrain_y(x, y, z) end
+        if not hit then hit = ground_probe(x, y, z) end
+    end)
+    return hit and tonumber(hit.y) or nil
+end
+
+-- Geometric proof, not a navmesh claim.  It catches void/water, slopes, ledge
+-- lips, crates/tables added over a point and low roofs.  The human survey is
+-- still load-bearing for lateral clearance because this install exposes no
+-- verified navigation or capsule-overlap query.
+function HC.wild_anchor_safe(anchor, capture)
+    if not anchor then return false, "missing anchor" end
+    local x, y, z = tonumber(anchor.x), tonumber(anchor.y), tonumber(anchor.z)
+    if not (x and y and z) then return false, "invalid coordinates" end
+    local gy = HC.wild_ground(x, y + 0.65, z)
+    if not gy then return false, "no ground (void or water)" end
+    if math.abs(gy - y) > (capture and 0.55 or 0.28) then
+        return false, string.format("ground moved %.2fm", gy - y)
+    end
+    local perch = tostring(anchor.kind or "ground") == "perch"
+    -- Ground berths prove a generous clear patch. An intentional perch proves
+    -- only the cat's support footprint; the drop beyond it is the point.
+    local ring = perch and 0.18 or 0.55
+    local lo, hi = gy, gy
+    for _, o in ipairs({ { ring, 0.0 }, { -ring, 0.0 },
+                         { 0.0, ring }, { 0.0, -ring } }) do
+        local ry = HC.wild_ground(x + o[1], gy + 0.65, z + o[2])
+        if not ry then return false, "edge or void beside berth" end
+        if ry < lo then lo = ry end
+        if ry > hi then hi = ry end
+    end
+    if hi - lo > 0.28 then return false, "slope, step or ledge" end
+    if not capture then
+        -- The player is standing on the capture point and can be hit by this
+        -- ray, so headroom is correctly deferred until the spawn-time proof.
+        local top = HC.wild_ground(x, gy + 0.95, z)
+        if top and top > gy + 0.42 then
+            return false, string.format("object/roof %.2fm over berth", top - gy)
+        end
+    end
+    return true, nil, gy
+end
+
+function HC.wild_q(anchor)
+    local q = nil
+    pcall(function()
+        q = Quaternion.new(tonumber(anchor.qx) or 0.0,
+            tonumber(anchor.qy) or 0.0, tonumber(anchor.qz) or 0.0,
+            tonumber(anchor.qw) or 1.0)
+    end)
+    return q
+end
+
+function HC.wild_pos(anchor)
+    local p = ValueType.new(sdk.find_type_definition("via.Position"))
+    p.x = tonumber(anchor.x) or 0.0
+    p.y = tonumber(anchor.y) or 0.0
+    p.z = tonumber(anchor.z) or 0.0
+    return p
+end
+
+function HC.wild_tressym_assets(coat)
+    local W = HC.wild_state()
+    coat = coat or "default"
+    local e = W.tressym_assets[coat]
+    if e then return e.dead and nil or e end
+    e = { warm_at = os.clock() + 2.0 }
+    W.tressym_assets[coat] = e
+    local suffix = (coat == "default") and "v07" or tostring(coat)
+    local mdf_path = "riftspeak/tressym/iris_tressym_" .. suffix .. ".mdf2"
+    local ok, err = pcall(function()
+        e.mesh_res = sdk.create_resource("via.render.MeshResource", HC.tressym_mesh)
+        e.mdf_res = sdk.create_resource("via.render.MeshMaterialResource", mdf_path)
+        e.mot_res = sdk.create_resource("via.motion.MotionListResource", HC.tressym_motlist)
+        if not (e.mesh_res and e.mdf_res and e.mot_res) then
+            error("Tressym resource unavailable for " .. coat)
+        end
+        e.mesh_res:add_ref(); e.mdf_res:add_ref(); e.mot_res:add_ref()
+        e.mesh_holder = e.mesh_res:create_holder("via.render.MeshResourceHolder")
+        e.mdf_holder = e.mdf_res:create_holder("via.render.MeshMaterialResourceHolder")
+        e.mot_holder = e.mot_res:create_holder("via.motion.MotionListResourceHolder")
+        if not (e.mesh_holder and e.mdf_holder and e.mot_holder) then
+            error("Tressym holder creation failed for " .. coat)
+        end
+        e.mesh_holder:add_ref(); e.mdf_holder:add_ref(); e.mot_holder:add_ref()
+        e.mdf_path = mdf_path
+    end)
+    if not ok then
+        e.dead = true; e.err = tostring(err)
+        W.status = "Tressym assets failed: " .. tostring(err)
+        return nil
+    end
+    return e
+end
+
+function HC.wild_assets_ready(ind)
+    if ind and ind.tressym == true then
+        local e = HC.wild_tressym_assets(ind.coat)
+        return e ~= nil and os.clock() >= (tonumber(e.warm_at) or 0.0)
+    end
+    local ready = HC.mesh_ready()
+    if ready then HC.load_motlist() end
+    return ready and S.housecat_bank_holder ~= nil
+end
+
+function HC.wild_register_bank(rec, ch, bank_id, mot_holder)
+    local motion = nil
+    pcall(function() motion = ch:call("get_Motion") end)
+    if not (motion and mot_holder) then return false, "motion bank assets unavailable" end
+    local ok, err = pcall(function()
+        local count = tonumber(motion:call("getDynamicMotionBankCount")) or 0
+        local bank, index = nil, count
+        for i = 0, count - 1 do
+            local cand = motion:call("getDynamicMotionBank", i)
+            local id = nil
+            if cand then pcall(function() id = cand:call("get_BankID") end) end
+            if tonumber(id) == tonumber(bank_id) then bank, index = cand, i; break end
+        end
+        if not bank then
+            motion:call("setDynamicMotionBankCount", count + 1)
+            bank = sdk.create_instance("via.motion.DynamicMotionBank")
+            bank = bank and bank:add_ref() or nil
+            if not bank then error("could not create DynamicMotionBank") end
+            rec.bank_pin = bank
+        end
+        bank:call("set_MotionList", mot_holder)
+        bank:call("set_OverwriteBankID", true)
+        bank:call("set_BankID", bank_id)
+        motion:call("setDynamicMotionBank", index, bank)
+    end)
+    if not ok then return false, tostring(err) end
+    rec.bank_id = bank_id
+    rec.bank_ready_at = os.clock() + 2.0
+    return true
+end
+
+function HC.wild_press_off(rec)
+    if not (rec and rec.go) then return end
+    local now = os.clock()
+    if now < (tonumber(rec.press_off_at) or 0.0) then return end
+    rec.press_off_at = now + 0.5
+    pcall(function()
+        local comps = rec.go:call("get_Components")
+        local n = 0
+        pcall(function() n = comps:get_size() end)
+        if n == 0 then pcall(function() n = tonumber(comps:call("get_Length")) or 0 end) end
+        for i = 0, (tonumber(n) or 0) - 1 do
+            pcall(function()
+                local c = nil
+                pcall(function() c = comps:get_element(i) end)
+                if not c then c = comps:call("get_Item", i) end
+                local tn = c:get_type_definition():get_full_name()
+                if tn:find("AdjustPress", 1, true)
+                    or tn:find("PressDetector", 1, true)
+                    or tn:find("CharacterPress", 1, true) then
+                    c:call("set_Enabled", false)
+                end
+            end)
+        end
+    end)
+end
+
+function HC.wild_dress(rec)
+    local ch = rec and rec.handle and rec.handle.chara
+    local go = ch and char_go(ch)
+    if not (ch and go) then return false, "spawned body is not ready" end
+    local mesh = comp(go, "via.render.Mesh")
+    if not mesh then return false, "rabbit chassis has no render Mesh" end
+    local ind = rec.identity or {}
+    local holder, mat_holder, mot_holder, bank_id = nil, nil, nil, nil
+    if ind.tressym == true then
+        local e = HC.wild_tressym_assets(ind.coat)
+        if not e or os.clock() < (tonumber(e.warm_at) or 0.0) then
+            return false, "Tressym assets still streaming"
+        end
+        holder, mat_holder, mot_holder, bank_id =
+            e.mesh_holder, e.mdf_holder, e.mot_holder, HC.tressym_bank_id
+    else
+        if not HC.mesh_ready() then return false, "cat assets still streaming" end
+        holder = S.housecat_res:create_holder("via.render.MeshResourceHolder")
+        if holder then holder:add_ref() end
+        mat_holder = (ind.coat == "default") and S.housecat_mdf_holder
+                     or HC.coat_holder(ind.coat)
+        mot_holder, bank_id = S.housecat_bank_holder, HC.bank_id
+    end
+    if not (holder and mat_holder and mot_holder) then
+        return false, "coat or motion holder is not resident"
+    end
+    local ok, err = pcall(function()
+        mesh:call("set_Enabled", false)
+        local mok = pcall(function() mesh:call("setMesh", holder) end)
+        if not mok then mesh:call("set_Mesh", holder) end
+        local aok = pcall(function() mesh:call("set_Material", mat_holder) end)
+        if not aok then mesh:call("setMaterial", mat_holder) end
+        mesh:call("set_Enabled", true)
+    end)
+    if not ok then
+        pcall(function() mesh:call("set_Enabled", true) end)
+        return false, "mesh/material assignment failed: " .. tostring(err)
+    end
+    rec.mesh_holder = holder
+    rec.material_holder = mat_holder
+    rec.mot_holder = mot_holder
+    rec.pending_bank_id = bank_id
+
+    full_pacify(ch); strip_hate(ch); clear_targets(ch)
+    set_immunity(ch, true)
+    -- Birth must match HC.adopt's field-proven chassis contract. Most
+    -- importantly, do NOT register a bank, scale, or rewrite the transform on
+    -- the prefab's first live frame. The normal spawner deliberately stages
+    -- those operations because the body is still completing native post-proc.
+    set_think_stop(ch, false); set_nav_stop(ch, false)
+    pcall(function() set_player_fsm(go, true) end)
+    pcall(function() ch:call("setCharacterControllerEnable", true) end)
+    pcall(function() iris_body_solid(ch, go, true) end)
+    set_ground_glue(go, true)
+    pcall(function()
+        local dm = comp(go, "app.AIDecisionMaker")
+        if dm then dm:call("set_Enabled", false) end
+        local nav = comp(go, "app.NavigationAI")
+        if nav then nav:call("set_Enabled", true) end
+    end)
+    local addr = nil
+    pcall(function() addr = tostring(ch:get_address()) end)
+    if addr then
+        S.housecat_wild_by_addr[addr] = rec
+        rec.addr = addr
+    end
+    pcall(function()
+        rec.go_addr = tostring(go:get_address())
+        S.housecat_wild_by_go[rec.go_addr] = rec
+    end)
+    rec.ch, rec.go, rec.dressed = ch, go, true
+    rec.birth_stage = "settling"
+    rec.settle_at = os.clock() + 2.0
+    rec.pose_ready = false
+    rec.hc_posture = "stand"
+    -- The custom prefab can repaint its stock mesh/material during its last
+    -- post-process beats. The companion path already cures this at +1.2s;
+    -- wild individuals need the same delayed invariant or a blackcat roll can
+    -- visibly settle as the stock ginger.
+    rec.visual_rebind_at = os.clock() + 1.2
+    rec.visual_rebind_n = 0
+    return true
+end
+
+-- Reuse the normal house cat's proven birth order:
+--   body live -> wait 2s -> scale -> wait 2s -> attach bank -> warm -> animate.
+-- The first settlement implementation collapsed all of this into the body's
+-- first frame and then tried to repair the resulting pose through Y offsets.
+function HC.wild_settle_tick(rec)
+    if not (rec and rec.dressed and rec.ch and rec.go) then return end
+    local now = os.clock()
+    if rec.birth_stage == "settling" then
+        if now < (tonumber(rec.settle_at) or now) then return end
+        local ok = pcall(function()
+            local s = tonumber(C.housecat_natural_scale) or 1.2
+            rec.go:call("get_Transform"):call("set_LocalScale", Vector3f.new(s, s, s))
+        end)
+        if not ok then rec.dress_why = "settled body rejected scale"; return end
+        rec.birth_stage = "scaled"
+        rec.bank_at = now + 2.0
+        HC.wild_state().status = string.format("%s scaled; custom bank attaches in 2s",
+            rec.identity and rec.identity.tressym and "Tressym" or "stray")
+        return
+    end
+    if rec.birth_stage == "scaled" then
+        if now < (tonumber(rec.bank_at) or now) then return end
+        local ok, why = HC.wild_register_bank(rec, rec.ch,
+            rec.pending_bank_id, rec.mot_holder)
+        if not ok then
+            rec.dress_why = "bank registration failed: " .. tostring(why)
+            rec.bank_at = now + 2.0
+            return
+        end
+        rec.birth_stage = "bank_warming"
+        HC.wild_state().status = string.format("%s bank attached; warming",
+            rec.identity and rec.identity.tressym and "Tressym" or "stray")
+        return
+    end
+    if rec.birth_stage == "bank_warming"
+        and now >= (tonumber(rec.bank_ready_at) or now + 1.0) then
+        rec.birth_stage = "ready"
+        rec.pose_ready = true
+        HC.wild_state().status = string.format("%s %s is active at %s",
+            rec.identity and rec.identity.tressym and "Tressym" or "stray",
+            tostring(rec.identity and rec.identity.coat or "default"),
+            tostring(rec.anchor and rec.anchor.settlement or "?"))
+    end
+end
+
+function HC.wild_visual_rebind_tick(rec)
+    local due = tonumber(rec and rec.visual_rebind_at)
+    if not due or os.clock() < due then return end
+    if not (rec.go and rec.mesh_holder and rec.material_holder) then
+        rec.visual_rebind_at = nil; return
+    end
+    local mesh = comp(rec.go, "via.render.Mesh")
+    if not mesh then return end
+    local ok = pcall(function()
+        mesh:call("set_Enabled", false)
+        local mok = pcall(function() mesh:call("setMesh", rec.mesh_holder) end)
+        if not mok then mesh:call("set_Mesh", rec.mesh_holder) end
+        local aok = pcall(function() mesh:call("set_Material", rec.material_holder) end)
+        if not aok then mesh:call("setMaterial", rec.material_holder) end
+        mesh:call("set_Enabled", true)
+    end)
+    if not ok then pcall(function() mesh:call("set_Enabled", true) end) end
+    rec.visual_rebind_n = (tonumber(rec.visual_rebind_n) or 0) + 1
+    -- Two passes cover the same async window without becoming a permanent
+    -- per-frame material writer.
+    rec.visual_rebind_at = (rec.visual_rebind_n < 2) and (os.clock() + 1.5) or nil
+end
+
+function HC.wild_anchor_pin_tick(rec)
+    if not (rec and rec.dressed and rec.go and rec.anchor) then return end
+    pcall(function()
+        local cur = upos(rec.go)
+        local a = rec.anchor
+        local yoff = tonumber(C.housecat_stray_y_offset) or 0.0
+        local target_y = (tonumber(a.y) or 0.0) + yoff
+        local dx = cur and (cur.x - (tonumber(a.x) or 0.0)) or 99.0
+        local dz = cur and (cur.z - (tonumber(a.z) or 0.0)) or 99.0
+        local own_y = math.abs(yoff) > 0.0001
+        local dy = own_y and (cur and (cur.y - target_y) or 99.0) or 0.0
+        -- X/Z keep a stationary stray on its surveyed berth. With the valid FSM
+        -- contract restored, GroundFixer owns Y just as it does for the proven
+        -- companion. A non-zero diagnostic override deliberately opts back into
+        -- a full XYZ pin, but zero is the production path.
+        if not cur or (dx * dx + dy * dy + dz * dz) > 0.0001 then
+            local p = HC.wild_pos(a)
+            p.y = own_y and target_y or (cur and cur.y or target_y)
+            set_upos(rec.go, p)
+        end
+    end)
+end
+
+function HC.wild_joint_y(rec, name)
+    local y = nil
+    pcall(function()
+        local tf = rec and rec.go and rec.go:call("get_Transform")
+        local jt = tf and tf:call("getJointByName", tostring(name))
+        local p = jt and jt:call("get_UniversalPosition")
+        y = p and tonumber(p.y) or nil
+    end)
+    return y
+end
+
+function HC.wild_y_diag(rec)
+    if not (rec and rec.go and rec.anchor) then return nil end
+    local d = { anchor = tonumber(rec.anchor.y) }
+    pcall(function()
+        local p = upos(rec.go); d.root = p and tonumber(p.y) or nil
+        local q = rec.go:call("get_Transform"):call("get_Rotation")
+        if q then d.qx, d.qy, d.qz, d.qw = q.x, q.y, q.z, q.w end
+        local l0 = rec.ch and rec.ch:call("get_Motion"):call("getLayer", 0)
+        if l0 then
+            d.bank = tonumber(l0:call("get_MotionBankID"))
+            d.motion = tonumber(l0:call("get_MotionID"))
+        end
+    end)
+    d.ltoe = HC.wild_joint_y(rec, "L_FrontLeg_Toes")
+    d.rtoe = HC.wild_joint_y(rec, "R_FrontLeg_Toes")
+    d.spine = HC.wild_joint_y(rec, "Spine_2")
+    d.tail = HC.wild_joint_y(rec, "Tail")
+    d.head = HC.wild_joint_y(rec, "Head") or HC.wild_joint_y(rec, "Head_0")
+    d.ground = HC.wild_ground(tonumber(rec.anchor.x),
+        (tonumber(rec.anchor.y) or 0.0) + 0.65, tonumber(rec.anchor.z))
+    return d
+end
+
+function HC.wild_auto_align_paws(rec)
+    local d = HC.wild_y_diag(rec)
+    if not d then return false, "no active stray diagnostic" end
+    local paw = nil
+    if d.ltoe and d.rtoe then paw = math.min(d.ltoe, d.rtoe)
+    else paw = d.ltoe or d.rtoe end
+    local surface = d.ground or d.anchor
+    if not (paw and surface) then return false, "front-paw joint or surface Y unavailable" end
+    local old = tonumber(C.housecat_stray_y_offset) or 0.0
+    local next9 = math.max(-1.0, math.min(3.0, old + surface - paw))
+    C.housecat_stray_y_offset = next9
+    pcall(save_state)
+    return true, string.format("paws %.3f -> surface %.3f; offset %.3f -> %.3f",
+        paw, surface, old, next9)
+end
+
+function HC.wild_idle_shuffle(rec, deck)
+    local bag = {}
+    for i = 1, #deck do bag[i] = i end
+    for i = #bag, 2, -1 do
+        local j = math.random(i); bag[i], bag[j] = bag[j], bag[i]
+    end
+    rec.hc_idle_bag = bag
+end
+
+function HC.wild_idle_commit(rec, id, posture)
+    rec.hc_idle_id = tonumber(id)
+    if posture then rec.hc_posture = posture end
+    rec.hc_idle_started = os.clock()
+    rec.hc_idle_frame = nil; rec.hc_idle_prev = nil; rec.hc_idle_len = nil
+    play_motion(rec.ch, rec.bank_id, rec.hc_idle_id)
+end
+
+function HC.wild_idle_advance(rec)
+    local pend = tonumber(rec.hc_idle_pend)
+    if pend then
+        rec.hc_idle_pend = nil
+        return HC.wild_idle_commit(rec, pend, rec.hc_idle_pend_posture)
+    end
+    local is_tressym = rec.identity and rec.identity.tressym == true
+    local is_perch = rec.anchor and tostring(rec.anchor.kind) == "perch"
+    local deck = is_perch
+        and (is_tressym and HC.WILD_TRESSYM_PERCH_DECK or HC.WILD_PERCH_DECK)
+        or (is_tressym and HC.WILD_TRESSYM_DECK or HC.IDLE_DECK)
+    if type(rec.hc_idle_bag) ~= "table" or #rec.hc_idle_bag == 0 then
+        HC.wild_idle_shuffle(rec, deck)
+    end
+    local card = deck[table.remove(rec.hc_idle_bag)]
+    if not card then return end
+    local from = tostring(rec.hc_posture or "stand")
+    local bridge = nil
+    local trans = is_tressym and HC.WILD_TRESSYM_T or HC.IDLE_T
+    if from == "stand" and card.p ~= "stand" then
+        bridge = trans.stand_sit
+    elseif from ~= "stand" and card.p == "stand" then
+        bridge = trans.sit_stand
+    end
+    if bridge then
+        rec.hc_idle_pend = card.id
+        rec.hc_idle_pend_posture = card.p
+        return HC.wild_idle_commit(rec, bridge, card.p)
+    end
+    HC.wild_idle_commit(rec, card.id, card.p)
+end
+
+function HC.wild_idle_tick(rec)
+    if not (rec and rec.dressed and rec.ch and rec.bank_id) then return end
+    local now = os.clock()
+    if now < (tonumber(rec.bank_ready_at) or 0.0) then return end
+    local bank, fr, ef = nil, nil, nil
+    pcall(function()
+        local l0 = rec.ch:call("get_Motion"):call("getLayer", 0)
+        if l0 then
+            bank = tonumber(l0:call("get_MotionBankID"))
+            fr = tonumber(l0:call("get_Frame")); ef = tonumber(l0:call("get_EndFrame"))
+        end
+    end)
+    if not rec.hc_idle_id then return HC.wild_idle_advance(rec) end
+    if bank ~= tonumber(rec.bank_id) then
+        if now >= (tonumber(rec.hc_repin_at) or 0.0) then
+            rec.hc_repin_at = now + 0.75
+            play_motion(rec.ch, rec.bank_id, rec.hc_idle_id)
+            local at = tonumber(rec.hc_idle_frame)
+            if at and at > 1.0 then pcall(function()
+                rec.ch:call("get_Motion"):call("getLayer", 0):call("set_Frame", at)
+            end) end
+        end
+        return
+    end
+    local started = tonumber(rec.hc_idle_started) or now
+    if ef and ef > 0 and not rec.hc_idle_len then rec.hc_idle_len = ef / 60.0 end
+    local dwell = rec.hc_idle_pend and 0.25 or HC.IDLE_DWELL
+    local cap = math.min(HC.IDLE_MAX,
+        math.max(dwell, ((tonumber(rec.hc_idle_len) or 6.0) * 1.3) + 1.0))
+    local done = now >= started + cap
+    if fr and ef and ef > 0 and now >= started + dwell then
+        if fr >= ef - 2.0 then done = true end
+        if rec.hc_idle_prev and fr < rec.hc_idle_prev - 0.5 then done = true end
+    end
+    if fr then rec.hc_idle_frame = fr; rec.hc_idle_prev = fr end
+    if done then HC.wild_idle_advance(rec) end
+end
+
+function HC.wild_destroy(id, why)
+    local W = HC.wild_state()
+    local rec = W.active[tostring(id)]
+    if not rec then return false end
+    if rec.addr then S.housecat_wild_by_addr[rec.addr] = nil end
+    if rec.go_addr then S.housecat_wild_by_go[rec.go_addr] = nil end
+    local ISP = rawget(_G, "IrisSpawner")
+    if ISP and rec.handle then pcall(function() ISP.destroy(rec.handle) end) end
+    W.active[tostring(id)] = nil
+    W.status = string.format("stray %s removed (%s)", tostring(id), tostring(why or "cleanup"))
+    return true
+end
+
+function HC.wild_capture_tick()
+    local W = HC.wild_state()
+    local req = W.capture_req
+    if not req then return false end
+    W.capture_req = nil
+    local player = get_player(); local pgo = player and char_go(player)
+    local pp = pgo and upos(pgo)
+    if not pp then W.status = "capture failed: load into the world"; return true end
+    local anchor = { x = pp.x, y = pp.y, z = pp.z,
+        kind = (tostring(req.kind or "ground") == "perch") and "perch" or "ground",
+        settlement = tostring(req.settlement or "Unlabelled"),
+        label = tostring(req.label or "") }
+    local ok, why, gy = HC.wild_anchor_safe(anchor, true)
+    if not ok then W.status = "capture refused: " .. tostring(why); return true end
+    anchor.y = (tonumber(gy) or pp.y) + 0.025
+    local min_d = tonumber(C.housecat_stray_min_anchor) or 8.0
+    for _, a in ipairs(W.anchors) do
+        local dx, dz = anchor.x - (tonumber(a.x) or 0), anchor.z - (tonumber(a.z) or 0)
+        if math.sqrt(dx * dx + dz * dz) < min_d then
+            W.status = string.format("capture refused: another berth is within %.0fm", min_d)
+            return true
+        end
+    end
+    pcall(function()
+        local q = pgo:call("get_Transform"):call("get_Rotation")
+        if q then anchor.qx, anchor.qy, anchor.qz, anchor.qw = q.x, q.y, q.z, q.w end
+    end)
+    local stem = anchor.settlement:lower():gsub("[^%w]+", "_"):gsub("^_+", ""):gsub("_+$", "")
+    if stem == "" then stem = "stray" end
+    anchor.id = string.format("%s_%d_%03d", stem, os.time(), #W.anchors + 1)
+    W.anchors[#W.anchors + 1] = anchor
+    local ind = HC.wild_identity(anchor)
+    HC.wild_save()
+    W.status = string.format("captured %s berth: %s, roll %d/%d%s",
+        anchor.settlement, tostring(ind and ind.coat or "?"),
+        tonumber(ind and ind.tressym_roll) or 0, HC.WILD_TRESSYM_DENOM,
+        (ind and ind.tressym) and " - TRESSYM" or "")
+    return true
+end
+
+function HC.wild_manage_tick()
+    local W = HC.wild_state()
+    if HC.wild_capture_tick() then return end
+    if W.force_req then
+        local id = tostring(W.force_req); W.force_req = nil
+        HC.wild_destroy(id, "identity changed")
+        local ind = W.individuals[id]
+        if ind then
+            ind.tressym = ind.tressym ~= true
+            ind.tressym_roll = ind.tressym and 1
+                or math.max(2, tonumber(ind.tressym_roll) or 2)
+            HC.wild_save()
+            W.status = string.format("DEV: %s is now %s on its next stream-in",
+                id, ind.tressym and "a Tressym" or "an ordinary stray")
+        end
+        return
+    end
+    if W.delete_req then
+        local id = tostring(W.delete_req); W.delete_req = nil
+        HC.wild_destroy(id, "berth deleted")
+        for i = #W.anchors, 1, -1 do
+            if tostring(W.anchors[i].id) == id then table.remove(W.anchors, i); break end
+        end
+        W.individuals[id] = nil; HC.wild_save()
+        W.status = "deleted surveyed berth " .. id
+        return
+    end
+    local player = get_player(); local pgo = player and char_go(player)
+    local pp = pgo and upos(pgo)
+    if not pp then return end
+
+    local despawn = tonumber(C.housecat_stray_despawn) or 78.0
+    for id, rec in pairs(W.active) do
+        if rec.handle and rec.handle.stage == "failed" then
+            W.retry[id] = os.clock() + 30.0
+            HC.wild_destroy(id, "spawn failed")
+            return
+        end
+        local a = rec.anchor
+        local dx, dy, dz = (a.x or 0) - pp.x, (a.y or 0) - pp.y, (a.z or 0) - pp.z
+        if math.sqrt(dx * dx + dy * dy + dz * dz) > despawn then
+            HC.wild_destroy(id, "out of range")
+            return
+        end
+        if rec.handle and rec.handle.chara and not rec.dressed then
+            local ok, why = HC.wild_dress(rec)
+            if ok then
+                W.status = string.format("%s %s is active at %s",
+                    rec.identity.tressym and "Tressym" or "stray",
+                    tostring(rec.identity.coat), tostring(a.settlement))
+            elseif not tostring(why):find("streaming", 1, true) then
+                W.retry[id] = os.clock() + 30.0
+                HC.wild_destroy(id, why)
+            end
+            return
+        end
+    end
+
+    if C.housecat_strays_enabled == false then
+        for id in pairs(W.active) do HC.wild_destroy(id, "system disabled"); return end
+        return
+    end
+    local active_n, by_settlement = 0, {}
+    for _, rec in pairs(W.active) do
+        active_n = active_n + 1
+        local s = tostring(rec.anchor.settlement or "Unlabelled")
+        by_settlement[s] = (by_settlement[s] or 0) + 1
+    end
+    if active_n >= math.floor(tonumber(C.housecat_stray_global_cap) or 4) then return end
+    local activate = tonumber(C.housecat_stray_activate) or 48.0
+    local spawn_min = tonumber(C.housecat_stray_spawn_min) or 5.0
+    local set_cap = math.floor(tonumber(C.housecat_stray_settlement_cap) or 2)
+    local choices = {}
+    for _, a in ipairs(W.anchors) do
+        local id = tostring(a.id or "")
+        local s = tostring(a.settlement or "Unlabelled")
+        if id ~= "" and not W.active[id]
+            and os.clock() >= (tonumber(W.retry and W.retry[id]) or 0.0)
+            and (by_settlement[s] or 0) < set_cap then
+            local dx, dy, dz = (a.x or 0) - pp.x, (a.y or 0) - pp.y, (a.z or 0) - pp.z
+            local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if d >= spawn_min and d <= activate then choices[#choices + 1] = { a = a, d = d } end
+        end
+    end
+    table.sort(choices, function(a, b) return a.d < b.d end)
+    local pick = nil
+    for i = 1, math.min(#choices, 4) do
+        local cand = choices[i]
+        local safe, why = HC.wild_anchor_safe(cand.a, false)
+        if safe then
+            pick = cand; break
+        end
+        W.retry[tostring(cand.a.id)] = os.clock() + 5.0
+        W.status = string.format("berth %s blocked: %s",
+            tostring(cand.a.label or cand.a.id), tostring(why))
+    end
+    if not pick then return end
+    local ind = HC.wild_identity(pick.a)
+    if not HC.wild_assets_ready(ind) then
+        W.status = ind.tressym and "warming Tressym assets" or "warming stray-cat assets"
+        return
+    end
+    local ISP = rawget(_G, "IrisSpawner")
+    if not ISP then W.status = "IrisSpawner is not loaded"; return end
+    local handle, err = ISP.spawn("ch299200_A_00", HC.wild_pos(pick.a), HC.wild_q(pick.a), {
+        idle = true, label = ind.tressym and "wild Tressym" or "settlement stray",
+        prefab_path = HC.prefab,
+    })
+    if not handle then W.status = "stray spawn refused: " .. tostring(err); return end
+    W.active[tostring(pick.a.id)] = {
+        handle = handle, anchor = pick.a, identity = ind, requested_at = os.clock(),
+    }
+    W.status = string.format("requested %s at %s (%s)",
+        ind.tressym and "Tressym" or "stray", tostring(pick.a.settlement), tostring(handle.route))
+end
+
+function HC.wild_tick()
+    local W = HC.wild_state()
+    for _, rec in pairs(W.active) do
+        pcall(function()
+            -- IrisSpawner can publish the body between manager pulses. Perform
+            -- only the normal path's safe first-frame mesh/adoption hand-off;
+            -- scale, bank and motion are deliberately staged afterwards.
+            if not rec.dressed and rec.handle and rec.handle.chara then
+                local ok, why = HC.wild_dress(rec)
+                if ok then
+                    W.status = string.format("%s %s is settling at %s",
+                        rec.identity.tressym and "Tressym" or "stray",
+                        tostring(rec.identity.coat), tostring(rec.anchor.settlement))
+                else
+                    rec.dress_why = tostring(why)
+                end
+            end
+            if rec.dressed and rec.ch then
+                set_think_stop(rec.ch, true); set_nav_stop(rec.ch, true); set_ai(rec.ch, false)
+                HC.wild_visual_rebind_tick(rec)
+                HC.wild_settle_tick(rec)
+                if rec.pose_ready == true then
+                    HC.wild_anchor_pin_tick(rec)
+                    HC.wild_idle_tick(rec)
+                end
+            end
+        end)
+    end
+    local now = os.clock()
+    if now < (tonumber(W.manage_at) or 0.0) then return end
+    W.manage_at = now + 0.35
+    if S.tame_hud_world_visible ~= true then return end
+    HC.wild_manage_tick()
+end
+
+HC.wild_state()
+
 _G.IrisTaming.spawn_housecat = HC.spawn
 _G.IrisTaming.delete_housecat = HC.delete
 re.on_application_entry("LateUpdateBehavior", function()
     pcall(HC.assert_own)
     pcall(HC.bank_tick)
+    pcall(HC.idle_tick)
+    pcall(HC.coat_tick)
     pcall(HC.test_tick)
+    pcall(HC.tressym_proof_tick)
     pcall(HC.carry_scale_tick)
     pcall(HC.cure_material_tick)
+    pcall(HC.wild_tick)
 end)
 re.on_application_entry("PrepareRendering", function()
     pcall(HC.carry_paw_tick)
     pcall(HC.tail_tick)
+    -- Last writer for the isolated airborne motion test: ground-follow glue may
+    -- run in LateUpdate, so the render-stage pin keeps the test visibly aloft.
+    pcall(HC.tressym_flight_test_tick)
 end)
 -- GRIP AID: the probe's climb-stamina hold extends to WILD GRIFFINS while this is on
 -- (ride the commuter to its nest without falling out of the sky)
@@ -15535,6 +17062,8 @@ re.on_frame(function()
                 local nm = go_name(go)
                 local companion_name = (companion_addr and ach and ach == companion_addr) and companion_nm or nil
                 local tier, rgb, sense_name = nil, nil, nil
+                local settlement_stray = ach and S.housecat_wild_by_addr
+                    and S.housecat_wild_by_addr[tostring(ach)] or nil
                 local resident_name = nil
                 pcall(function()
                     local hb9 = rawget(_G, "IrisHomesteadBox")
@@ -15543,7 +17072,13 @@ re.on_frame(function()
                         resident_name = (hb9.resident_name and hb9.resident_name(ga9)) or "Homestead animal"
                     end
                 end)
-                if resident_name then
+                if settlement_stray then
+                    local rare9 = settlement_stray.identity
+                        and settlement_stray.identity.tressym == true
+                    sense_name = rare9 and "Tressym" or "Stray Cat"
+                    tier = rare9 and "ultra rare - 1 in 4000" or "settlement stray"
+                    rgb = rare9 and 0xD070FF or 0xFFB060
+                elseif resident_name then
                     -- A resident is already family.  Mark it as such before the species
                     -- ladder, otherwise the shared cow/hen/rabbit chassis advertises a tame
                     -- which every actual rite should refuse.
@@ -18864,71 +20399,7 @@ re.on_frame(function()
                         rec.hc_anim_spd = 1.0
                         set_player_speed(ch, 1.0)   -- the native brain gets a 1.0 body
                     end
-                    -- W3 IDLE HOLD (08-18, housecat only): this window hands the body back to
-                    -- the native rabbit brain, which repaints layer 0 with RABBIT idles. Put
-                    -- the Witcher idle back whenever the layer drifts off bank 904; if the
-                    -- layer bank is unreadable, degrade to a slow re-pin (never a flicker).
-                    local hcs9 = species_clips(go)
-                    if hcs9 and hcs9.idle_bank and now >= (tonumber(rec.hc_idle_at) or 0.0) then
-                        local bank9 = tonumber(hcs9.idle_bank)
-                        local bank0, fr9, ef9 = nil, nil, nil
-                        pcall(function()
-                            local mo9 = ch:call("get_Motion")
-                            local l09 = mo9 and mo9:call("getLayer", 0)
-                            if l09 then
-                                bank0 = tonumber(l09:call("get_MotionBankID"))
-                                fr9 = tonumber(l09:call("get_Frame"))
-                                ef9 = tonumber(l09:call("get_EndFrame"))
-                            end
-                        end)
-                        if bank0 == bank9 then
-                            rec.hc_idle_at = now + 0.75
-                            -- ⭐ THE DECK ADVANCES ONLY HERE. ⛔ In the mismatch
-                            -- arm below those frame numbers belong to the RABBIT's
-                            -- clip, and advancing on them would deal cards at random.
-                            local started = tonumber(rec.hc_idle_started) or 0.0
-                            local prev = tonumber(rec.hc_idle_frame_prev)
-                            local done = false
-                            -- ⛔ endframe reads 0 for a beat after changeMotion, and
-                            -- the 1.0s floor also covers a stale read; without both
-                            -- this fires instantly and every tick.
-                            if fr9 and ef9 and ef9 > 0.0 and now >= started + 1.0 then
-                                -- parked at the end...
-                                if fr9 >= ef9 - 2.0 then done = true end
-                                -- ...or WRAPPED. Most of these idles LOOP, so the
-                                -- frame returns to 0 instead of parking -- the
-                                -- end-of-clip test alone would never fire on them.
-                                if prev and fr9 < prev - 0.5 then done = true end
-                            end
-                            if fr9 then
-                                rec.hc_idle_frame_prev = fr9
-                                rec.hc_idle_frame = fr9
-                            end
-                            if done or not rec.hc_idle_id then
-                                HC.idle_advance(rec, ch, bank9, now)
-                            end
-                        else
-                            rec.hc_idle_at = now + ((bank0 == nil) and 4.0 or 0.75)
-                            local id9 = tonumber(rec.hc_idle_id)
-                            if not id9 then
-                                HC.idle_advance(rec, ch, bank9, now)
-                            else
-                                -- ⛔ REPLAY THE CURRENT CARD, never a fresh draw:
-                                -- the rabbit brain repaints layer 0 constantly, so
-                                -- drawing here would change idle every 0.75s.
-                                play_motion(ch, bank9, id9)
-                                -- ...and put the playhead back, or each repaint
-                                -- restarts the clip and it never reaches its end.
-                                local at = tonumber(rec.hc_idle_frame)
-                                if at and at > 1.0 then
-                                    pcall(function()
-                                        ch:call("get_Motion"):call("getLayer", 0)
-                                          :call("set_Frame", at)
-                                    end)
-                                end
-                            end
-                        end
-                    end
+                    -- ⭐ idles are driven by HC.idle_tick() now (any distance)
                     -- ⛔ AND GHOST IT. This branch wins over the follow branch below whenever
                     -- she is within 2.2m -- which is EXACTLY the range where the auto-step
                     -- happens -- so the solidity gate down there would never have run when it
@@ -19124,7 +20595,15 @@ re.on_frame(function()
                                     set_player_speed(ch, 1.0)   -- never leave a sped gait behind
                                 end
                             end
-                            if rec.fmode == "idle" and now >= (tonumber(rec.fidle_at) or 0.0) then
+                            -- ⛔⛔ THE HOUSE CAT IS NOT DRIVEN FROM HERE. This
+                            -- timer fires every 3.5s regardless of clip length
+                            -- (so it truncates), picks at random from the legacy
+                            -- idle_cycle string, and falls back to BANK 0 -- the
+                            -- RABBIT's own bank. HC.idle_tick owns her idles at
+                            -- every distance now. Gated on rec.housecat, not on
+                            -- species, so crows/rats/bats are provably untouched.
+                            if rec.fmode == "idle" and not rec.housecat
+                               and now >= (tonumber(rec.fidle_at) or 0.0) then
                                 rec.fidle_at = now + (tonumber(C.crow_idle_period) or 3.5)
                                 -- idle repertoire, RANDOM, species-aware; bathe pair per species
                                 -- (bat: none -- its 60:0 is EAT; rat: stand-on-two-legs)
@@ -19135,7 +20614,15 @@ re.on_frame(function()
                                 else
                                     local ids = {}
                                     for s2 in tostring((sp8 and sp8.idle_cycle) or C.crow_idle_clips or "0,1,2"):gmatch("%d+") do ids[#ids + 1] = tonumber(s2) end
-                                    if #ids > 0 then play_motion(ch, (sp8 and tonumber(sp8.idle_bank)) or 0, ids[math.random(#ids)] or 0) end
+                                    -- ⛔ A "quiet" profile means the bank is not
+                                    -- attached yet: play NOTHING. Only species
+                                    -- that genuinely live on bank 0 (crows) keep
+                                    -- the old fallback.
+                                    local bank8 = sp8 and tonumber(sp8.idle_bank)
+                                    if not bank8 and sp8 and sp8.quiet then
+                                        ids = {}
+                                    end
+                                    if #ids > 0 then play_motion(ch, bank8 or 0, ids[math.random(#ids)] or 0) end
                                 end
                             end
                         end
@@ -23044,24 +24531,250 @@ re.on_draw_ui(function()
                     for i, c in ipairs(HC.COATS) do if c == cur then idx = i end end
                     local cchg, cnew = imgui.combo("Coat##tame_housecat_coat", idx, HC.COATS)
                     if cchg and rec then
+                        -- Just record the wish. HC.coat_tick re-asserts it every
+                        -- 0.5s until the body actually wears it, so a material
+                        -- that is still warming can no longer lose the race.
                         rec.coat = HC.COATS[cnew] or "default"
-                        HC.pin_coat(rec.coat)
                         pcall(save_state)
-                        S.housecat_recoat_at = os.clock() + HC.warm_secs
                         S.status = "cat coat -> " .. tostring(rec.coat)
                     elseif cchg then
                         S.status = "no live cat to re-coat"
                     end
-                    -- the material needs its async warm before it can be applied,
-                    -- so the re-dress is deferred rather than done on the click
-                    if S.housecat_recoat_at and os.clock() >= S.housecat_recoat_at then
-                        S.housecat_recoat_at = nil
-                        if S.housecat_ch then pcall(function() HC.apply_mesh(S.housecat_ch) end) end
-                    end
                     if rec then
-                        imgui.text("   coat: " .. tostring(rec.coat or "default")
-                            .. (HC.coat_holder(rec.coat) and " (loaded)" or " (stock/warming)"))
+                        local want = rec.coat or "default"
+                        imgui.text("   coat: " .. tostring(want) .. "  |  worn: "
+                            .. tostring(rec.hc_coat_applied or "none")
+                            .. ((rec.hc_coat_applied == want) and "  OK" or "  applying..."))
                     end
+                end
+                -- ⭐ LIVE ANIMATION READOUT (Aurora 08-20: "put what animation
+                -- is currently playing somewhere in the panel"). Shows the card
+                -- we commanded, any bridge pending behind it, and the live
+                -- playhead -- enough to name a clip that is misbehaving.
+                do
+                    local rec9 = S.housecat_ch and S.tamed and S.tamed[S.housecat_ch]
+                    if rec9 then
+                        local fr, ef, bk = -1, -1, -1
+                        pcall(function()
+                            local l0 = HC.layer0()
+                            if l0 then
+                                fr = tonumber(l0:call("get_Frame")) or -1
+                                ef = tonumber(l0:call("get_EndFrame")) or -1
+                                bk = tonumber(l0:call("get_MotionBankID")) or -1
+                            end
+                        end)
+                        imgui.text(string.format("NOW: %s   frame %.0f/%.0f  bank %d%s",
+                            HC.clip_name(rec9.hc_idle_id), fr, ef, bk,
+                            rec9.hc_idle_pend
+                                and ("   [bridge -> " .. HC.clip_name(rec9.hc_idle_pend) .. "]")
+                                or ""))
+                        imgui.text(string.format("     re-pins on this card: %d  (high = the layer is not reading back as ours)",
+                            tonumber(rec9.hc_idle_repins) or 0))
+                        imgui.text(string.format("     posture %s  |  deck %d left  |  held %.1fs",
+                            tostring(rec9.hc_posture or "stand"),
+                            (type(rec9.hc_idle_bag) == "table") and #rec9.hc_idle_bag or 0,
+                            os.clock() - (tonumber(rec9.hc_idle_started) or os.clock())))
+                    end
+                end
+                if imgui.tree_node("Settlement strays (survey + population)##tame_housecat_strays") then
+                    local W9 = HC.wild_state()
+                    imgui.text("Curated berths only: stand exactly where a cat may safely sit.")
+                    imgui.text("Ground berths reject ledges; perch berths prove a smaller cat-sized support.")
+                    local sw9
+                    sw9, C.housecat_strays_enabled = imgui.checkbox(
+                        "Enable natural settlement strays##hcwild_enabled",
+                        C.housecat_strays_enabled ~= false)
+                    if sw9 then pcall(save_state) end
+                    local x9
+                    x9, C.housecat_stray_activate = imgui.drag_float(
+                        "Stream in within m##hcwild_act", tonumber(C.housecat_stray_activate) or 48.0,
+                        1.0, 15.0, 100.0)
+                    if x9 then pcall(save_state) end
+                    x9, C.housecat_stray_despawn = imgui.drag_float(
+                        "Stream out beyond m##hcwild_des", tonumber(C.housecat_stray_despawn) or 78.0,
+                        1.0, 30.0, 160.0)
+                    if x9 then pcall(save_state) end
+                    x9, C.housecat_stray_global_cap = imgui.drag_int(
+                        "Global active cap##hcwild_gcap",
+                        math.floor(tonumber(C.housecat_stray_global_cap) or 4), 1, 1, 10)
+                    if x9 then pcall(save_state) end
+                    x9, C.housecat_stray_settlement_cap = imgui.drag_int(
+                        "Per-settlement active cap##hcwild_scap",
+                        math.floor(tonumber(C.housecat_stray_settlement_cap) or 2), 1, 1, 6)
+                    if x9 then pcall(save_state) end
+                    x9, C.housecat_stray_y_offset = imgui.drag_float(
+                        "Diagnostic Y override m (0 = GroundFixer)##hcwild_yoff",
+                        tonumber(C.housecat_stray_y_offset) or 0.0,
+                        0.01, -1.0, 3.0)
+                    if x9 then pcall(save_state) end
+                    local cset9, set9 = imgui.input_text(
+                        "Settlement##hcwild_settlement",
+                        tostring(S.housecat_wild_settlement or "Vernworth"))
+                    if cset9 then S.housecat_wild_settlement = set9 end
+                    local clab9, lab9 = imgui.input_text(
+                        "Spot note##hcwild_label",
+                        tostring(S.housecat_wild_label or "quiet street"))
+                    if clab9 then S.housecat_wild_label = lab9 end
+                    local kind_labels9 = { "Ground / street", "Wall / ledge perch" }
+                    local kind9 = math.floor(tonumber(S.housecat_wild_kind) or 1)
+                    local ckind9, knew9 = imgui.combo(
+                        "Berth type##hcwild_kind", kind9, kind_labels9)
+                    if ckind9 then S.housecat_wild_kind = knew9; kind9 = knew9 end
+                    if imgui.button("CAPTURE safe stray berth at my feet##hcwild_capture") then
+                        W9.capture_req = {
+                            settlement = tostring(S.housecat_wild_settlement or "Vernworth"),
+                            label = tostring(S.housecat_wild_label or "quiet street"),
+                            kind = (kind9 == 2) and "perch" or "ground",
+                        }
+                        W9.status = "capture queued for the next live world tick"
+                    end
+                    imgui.text("Walk at least 5m away after capture; the cat will then stream in.")
+                    local active9 = 0
+                    for _ in pairs(W9.active or {}) do active9 = active9 + 1 end
+                    imgui.text(string.format("Berths %d | active %d | Tressym chance exactly 1/%d (0.025%%)",
+                        #W9.anchors, active9, HC.WILD_TRESSYM_DENOM))
+                    imgui.text("STATUS: " .. tostring(W9.status or "waiting"))
+                    do
+                        local live9 = nil
+                        for _, r9 in pairs(W9.active or {}) do
+                            if r9.dressed then live9 = r9; break end
+                        end
+                        if live9 then
+                            local yd9 = HC.wild_y_diag(live9) or {}
+                            imgui.text(string.format(
+                                "Y DIAG anchor %.3f | ground %.3f | root %.3f",
+                                tonumber(yd9.anchor) or -999.0,
+                                tonumber(yd9.ground) or -999.0,
+                                tonumber(yd9.root) or -999.0))
+                            imgui.text(string.format(
+                                "       L paw %.3f | R paw %.3f | spine %.3f | head %.3f | tail %.3f",
+                                tonumber(yd9.ltoe) or -999.0,
+                                tonumber(yd9.rtoe) or -999.0,
+                                tonumber(yd9.spine) or -999.0,
+                                tonumber(yd9.head) or -999.0,
+                                tonumber(yd9.tail) or -999.0))
+                            imgui.text(string.format(
+                                "MOTION bank %d (want %d) | clip %d (want %d)",
+                                tonumber(yd9.bank) or -1, tonumber(live9.bank_id) or -1,
+                                tonumber(yd9.motion) or -1, tonumber(live9.hc_idle_id) or -1))
+                            imgui.text(string.format(
+                                "ROOT Q  x %.3f | y %.3f | z %.3f | w %.3f",
+                                tonumber(yd9.qx) or -999.0, tonumber(yd9.qy) or -999.0,
+                                tonumber(yd9.qz) or -999.0, tonumber(yd9.qw) or -999.0))
+                            if imgui.button("Reset Y offset to 0##hcwild_yzero") then
+                                C.housecat_stray_y_offset = 0.0
+                                pcall(save_state)
+                            end
+                        end
+                    end
+                    imgui.separator()
+                    for i9, a9 in ipairs(W9.anchors) do
+                        local id9 = tostring(a9.id or i9)
+                        local ind9 = HC.wild_identity(a9) or {}
+                        imgui.text(string.format("%d. %s - %s [%s] | %s | roll %d/%d%s%s",
+                            i9, tostring(a9.settlement or "Unlabelled"),
+                            tostring(a9.label or ""), tostring(a9.kind or "ground"),
+                            tostring(ind9.coat or "?"),
+                            tonumber(ind9.tressym_roll) or 0, HC.WILD_TRESSYM_DENOM,
+                            ind9.tressym and "  TRESSYM" or "",
+                            W9.active[id9] and "  [ACTIVE]" or ""))
+                        if imgui.button("Delete berth##hcwild_del_" .. id9) then
+                            W9.delete_req = id9
+                            W9.status = "delete queued for the next live world tick"
+                        end
+                        imgui.same_line()
+                        if imgui.button((ind9.tressym and "DEV: make ordinary" or "DEV: force Tressym")
+                            .. "##hcwild_force_" .. id9) then
+                            W9.force_req = id9
+                            W9.status = "identity change queued for the next live world tick"
+                        end
+                    end
+                    imgui.tree_pop()
+                end
+                -- ⭐⭐ THE BONE-ADDITION TEST (Aurora asked; the pegasus session
+                -- needs the same answer). We have only ever REPOSITIONED the
+                -- host's 58 bones. This mesh ships a 59th, IRIS_WING_TEST, that
+                -- ch99_200 does not have. Verified offline: the other 58 kept
+                -- BIT-IDENTICAL world matrices, so the motlist is unaffected.
+                --   FOUND -> the engine takes our bone list wholesale: a tressym
+                --            can have real, animated wings.
+                --   nil   -> we are limited to the host's bones; wings must hang
+                --            off something a cat already owns.
+                --   cat does not render at all -> the engine REJECTED the mesh,
+                --            which is also an answer. Uninstall the pak to undo.
+                do
+                    local jt, err9 = nil, nil
+                    if S.housecat_ch then
+                        local okj = pcall(function()
+                            local go9 = char_go(S.housecat_ch)
+                            local tf9 = go9 and go9:call("get_Transform")
+                            jt = tf9 and tf9:call("getJointByName", "IRIS_WING_TEST")
+                        end)
+                        if not okj then err9 = "probe threw" end
+                    end
+                    imgui.text("BONE TEST  IRIS_WING_TEST: " ..
+                        (err9 or (S.housecat_ch == nil and "spawn her first"
+                         or (jt and "FOUND -- the engine accepts NEW bones"
+                             or "not found -- host bones only"))))
+                end
+                imgui.separator()
+                imgui.text("TRESSYM FULL MOTION TEST (only the spawned IRIS house cat)")
+                imgui.text("Requires IRIS Tressym Withers Test v0.7 in Fluffy Mod Manager.")
+                if imgui.button("Apply Tressym + perch##tame_tressym_proof") then
+                    HC.queue_tressym_proof(HC.tressym_default_clip)
+                end
+                imgui.same_line()
+                if imgui.button("Restore ordinary house cat##tame_tressym_restore") then
+                    HC.restore_from_tressym_proof()
+                end
+                if S.tressym_proof then
+                    for _, group in ipairs(HC.tressym_groups) do
+                        if imgui.tree_node(group .. "##tame_tressym_group_" .. group) then
+                            local shown = 0
+                            for _, clip in ipairs(HC.tressym_clips) do
+                                if clip.group == group then
+                                    if shown > 0 and shown % 3 ~= 0 then imgui.same_line() end
+                                    if imgui.button(string.format("%d %s##tame_tressym_clip_%d",
+                                        clip.id, clip.name, clip.id)) then
+                                        HC.play_tressym_clip(clip.id)
+                                    end
+                                    shown = shown + 1
+                                end
+                            end
+                            if group == "Experimental" then
+                                imgui.text("   Diagnostic only: these roll onto the wing roots; never automate them.")
+                            end
+                            imgui.tree_pop()
+                        end
+                    end
+                    imgui.text("   One-shots hold their last frame; idle/locomotion/loop clips repeat.")
+                    if imgui.button("Run lifted flight sequence##tame_tressym_flight_test") then
+                        HC.start_tressym_flight_test()
+                    end
+                    if S.tressym_flight_test then
+                        imgui.same_line()
+                        if imgui.button("Abort + return to launch##tame_tressym_flight_abort") then
+                            HC.stop_tressym_flight_test(true)
+                            HC.play_tressym_clip(158, true)
+                            S.tressym_status = "lifted test aborted: perched at launch point"
+                        end
+                    end
+                    imgui.text("   Sequence rises 1.4 m in place, then returns to the exact launch point.")
+                end
+                imgui.text("   " .. tostring(S.tressym_status or "not loaded"))
+                if S.tressym_proof then
+                    local fr, ef, bk = 0.0, 0.0, -1
+                    pcall(function()
+                        local layer = HC.layer0()
+                        if layer then
+                            fr = tonumber(layer:call("get_Frame")) or 0.0
+                            ef = tonumber(layer:call("get_EndFrame")) or 0.0
+                            bk = tonumber(layer:call("get_MotionBankID")) or -1
+                        end
+                    end)
+                    imgui.text(string.format("   LIVE clip %s %s  frame %.0f / %.0f  bank %d",
+                        tostring(S.tressym_clip_id or "?"), tostring(S.tressym_clip_name or ""),
+                        fr, ef, bk))
                 end
                 if imgui.button("Spawn / replace IRIS house cat##tame_housecat_spawn") then
                     if not HC.spawn() then S.status = "house cat: " .. tostring(S.housecat_status) end

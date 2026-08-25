@@ -189,12 +189,22 @@ function route3_flap_takeoff_tick(now)
         if S.route3_flap_phase ~= "landing" then
             S.route3_flap_phase = "landing"
             play_griffin_motion(tonumber(C.landing_motion) or 5030, tonumber(C.landing_bank) or 0, true)
+            route3_flap_kill_root_motion()
+            S.route3_flap_rootkill_last = now
             S.route3_flap_landing_loop_at = now + 0.9
             S.route3_air_visual_status = "flapA landing start"
         elseif S.route3_flap_landing_loop_at and now >= S.route3_flap_landing_loop_at then
             S.route3_flap_landing_loop_at = nil
             play_griffin_motion(tonumber(C.route3_landing_descent_clip) or 5031, 0, true)
+            route3_flap_kill_root_motion()
+            S.route3_flap_rootkill_last = now
             S.route3_air_visual_status = "flapA landing descent loop"
+        elseif (now - (tonumber(S.route3_flap_rootkill_last) or 0.0)) >= 1.0 then
+            -- Landing is still transform-owned. A new base clip can silently
+            -- re-arm root extraction, so maintain the same one-writer law used
+            -- by cruise/soar until touchdown hands the body back.
+            S.route3_flap_rootkill_last = now
+            route3_flap_kill_root_motion()
         end
         return true
     end

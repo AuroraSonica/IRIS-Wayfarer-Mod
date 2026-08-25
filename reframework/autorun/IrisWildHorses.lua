@@ -2012,9 +2012,29 @@ local function apply_horse(job)
     -- MaterialAccessDict; set_Material turns those into dangling pointers and its next
     -- onUpdate is the exact c0000005 in every v1.0/v1.2/08-11 crash dump.
     -- resetController() drops the cache; the InitializeFailed latch stops tryInitialize
-    -- from re-caching against a material layout it does not understand. Doe eye-glow is
-    -- lost on unicorns only -- a creature with a glowing horn will cope.
-    if unicorn_body then
+    -- from re-caching against a material layout it does not understand.
+    -- ⛔⛔⛔ 2026-08-22 CTD — THE "unicorn only" GATE WAS THE BUG. Summoning tamed horse
+    -- Chad (ch299011_A_00, plain horse, variant nil) CTD'd twice in a row:
+    --     18:29:56.561  stable horse restore: forced ch299011 body into horse conversion
+    --     18:29:56.721  horse applied (1 total); render swap complete   <- set_Material
+    --     18:29:56.729  c0000005 @ 140ef52de = app.EyeGlowController.onUpdate
+    --                                          called from app.Monster.update
+    -- 8 ms. The identical 11 ms signature as the 08-11 unicorn crash, on a body with the
+    -- vanilla FOUR-material table (every horse.mdf2 build v1.9→v2.3 is 4 mats:
+    -- body/eye/oral/vfx — verified byte-level, so the count theory stays dead).
+    -- ⇒ The mechanism was NEVER unicorn-specific. ANY set_Material on a LIVE app.Monster
+    -- dangles MaterialAccessDict. The plain horse only ever "was field-proven" because
+    -- the OLD EnemySpawner route delivered a body so slowly that the +0.15 s swap landed
+    -- before EyeGlowController had initialised and cached anything. The 08-20 migration
+    -- to IrisSpawner's CATALOG route ("route=catalog done in 0.0s") makes the body live
+    -- and ticking within ~30 ms, so it now caches against the DOE materials during those
+    -- 150 ms and set_Material frees them under it. IrisWildHorses.lua last changed 08-18
+    -- — the horse module never saw the spawner that broke its timing assumption.
+    -- ⇒ RUN IT UNCONDITIONALLY, exactly as IrisWildCats.neutralise_eyeglow already does
+    -- for every cat conversion. Left latched off afterwards on purpose (re-enabling
+    -- re-caches against the very layout that broke it). Cost: the doe eye-glow, on a
+    -- body that is wearing a W3 horse mesh and has no use for it.
+    do
         local neutralised = "app.Monster component not found"
         pcall(function()
             local monster = get_component(job.go, "app.Monster")
@@ -2027,7 +2047,8 @@ local function apply_horse(job)
             pcall(function() ctrl:call("set_InitializeFailed", true) end)
             neutralised = "reset + init latch set"
         end)
-        log("unicorn swap: EyeGlowController via app.Monster field -- " .. neutralised)
+        log((unicorn_body and "unicorn" or "horse")
+            .. " swap: EyeGlowController via app.Monster field -- " .. neutralised)
     end
 
     set_mesh_enabled(mesh, false)
