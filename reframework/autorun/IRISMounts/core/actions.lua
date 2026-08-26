@@ -8,6 +8,54 @@ local M = {}
 
 M.buttons = { "Y", "X", "A", "B", "L1", "L2", "R1", "R2" }
 
+-- Species adapters own their physical bindings, but the state machine which
+-- consumes an input continues to own its edge/hold state.  This distinction is
+-- deliberate: Griffin actions share buttons across ground/flight and several
+-- readers must continue sampling while their action is not currently eligible.
+function M.binding(adapter, action_id)
+    local bindings = adapter and adapter.bindings or nil
+    local binding = type(bindings) == "table" and bindings[tostring(action_id or "")] or nil
+    return type(binding) == "table" and binding or nil
+end
+
+-- Resolve one adapter binding through caller-supplied readers.  Input policy
+-- (mounted, airborne, cooldowns, edge detection and action lockouts) stays with
+-- the proven caller; this helper only translates metadata into a held state.
+function M.binding_down(adapter, C, action_id, readers)
+    C = type(C) == "table" and C or {}
+    readers = type(readers) == "table" and readers or {}
+    local binding = M.binding(adapter, action_id)
+    if not binding then return false, nil end
+
+    local names = binding.buttons
+    if binding.buttons_key then names = C[binding.buttons_key] end
+    local compact = tostring(names or ""):gsub("%s+", "")
+    if compact == "" and binding.blank_buttons ~= nil then
+        names = binding.blank_buttons
+        compact = tostring(names or ""):gsub("%s+", "")
+    end
+
+    local down = false
+    if compact ~= "" and type(readers.gamepad) == "function" then
+        local value = binding.compact_buttons == true and compact or names
+        local ok, result = pcall(readers.gamepad, value)
+        down = ok and result == true
+    end
+
+    if not down and type(readers.keyboard) == "function" then
+        local raw_key = binding.key
+        if binding.key_key then raw_key = C[binding.key_key] end
+        if raw_key == nil then raw_key = binding.default_key end
+        local key = math.floor(tonumber(raw_key) or 0)
+        if key > 0 then
+            local ok, result = pcall(readers.keyboard, key)
+            down = ok and result == true
+        end
+    end
+
+    return down, binding
+end
+
 local function resolve_value(value, C, S)
     if type(value) == "function" then return value(C, S) end
     return value

@@ -12745,6 +12745,19 @@ local read_raw_gamepad_axis = ctx.input.read_raw_gamepad_axis
 local read_axis = ctx.input.read_axis
 local button_on = ctx.input.button_on
 
+-- The Griffin adapter now owns physical action bindings.  Existing action
+-- ticks retain their independent edge/hold state and every eligibility guard;
+-- this reader is intentionally unaware of ground/flight mode.
+ctx.griffin_action_readers = {
+    gamepad = function(names) return raw_gamepad_button_down(names) == true end,
+    keyboard = function(vk) return type(iris_kb) == "function" and iris_kb(vk) == true end,
+}
+
+function route3_griffin_action_down(action_id)
+    return ctx.actions.binding_down(ctx.species.get("griffin"), C, action_id,
+        ctx.griffin_action_readers)
+end
+
 function griffin_apply_axis_deadzone(x, z, dz)
     return ctx.input.apply_axis_deadzone(x, z, dz)
 end
@@ -21216,13 +21229,7 @@ end
 function route3_divebomb_hotkey_tick()
     if route3_drake_mounted and route3_drake_mounted() then S.route3_divebomb_btn_prev = false; return end
     if C.route3_divebomb_enabled ~= true or S.mounted ~= true then S.route3_divebomb_btn_prev = false; return end
-    local down = false
-    local names = tostring(C.route3_divebomb_buttons or ""):gsub("%s+", "")
-    if names ~= "" then pcall(function() down = raw_gamepad_button_down(C.route3_divebomb_buttons) end) end
-    if not down then
-        local vk = math.floor(tonumber(C.route3_divebomb_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("dive_bomb")
     if down == true and S.route3_divebomb_btn_prev ~= true then route3_divebomb_start("button") end
     S.route3_divebomb_btn_prev = down == true
 end
@@ -22972,13 +22979,7 @@ function route3_dogfight_hotkey_tick()
         return
     end
     local now = os.clock()
-    local down = false
-    local names = tostring(C.route3_dogfight_buttons or ""):gsub("%s+", "")
-    if names ~= "" then pcall(function() down = raw_gamepad_button_down(C.route3_dogfight_buttons) end) end
-    if not down then
-        local vk = math.floor(tonumber(C.route3_dogfight_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("dogfight")
     if down == true and S.route3_dogfight_btn_prev ~= true then
         if griffin_hit_reaction_busy and griffin_hit_reaction_busy() then
             -- Preserve the edge, but reacquire the target only when the reaction
@@ -25046,13 +25047,7 @@ function route3_gustair_tick()
     local st = S.route3_gustair
     local now = os.clock()
     if st and (S.mounted ~= true or S.airborne ~= true) then route3_gustair_end("grounded"); return end
-    local down = false
-    local names = tostring(C.route3_gustair_buttons or ""):gsub("%s+", "")
-    if names ~= "" then pcall(function() down = raw_gamepad_button_down(names) end) end
-    if not down then
-        local vk = math.floor(tonumber(C.route3_gust_key) or 0)   -- same key as the ground gust: H grounded = gust, H airborne = air gale
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("air_gust")
     if down and S.route3_gustair_btn ~= true and not st and S.mounted == true and S.airborne == true then
         -- never during another special
         local cross = false   -- ⛔ same one-node-at-a-time law as the dogfight (05-08 crash tape)
@@ -25515,13 +25510,7 @@ function route3_airpress_tick()
     local st = S.route3_airpress
     local now = os.clock()
     if st and (S.mounted ~= true or S.airborne ~= true) then route3_airpress_end("grounded"); return end
-    local down = false
-    local names = tostring(C.route3_airpress_buttons or ""):gsub("%s+", "")
-    if names ~= "" then pcall(function() down = raw_gamepad_button_down(names) end) end
-    if not down then
-        local vk = math.floor(tonumber(C.route3_airpress_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("air_press")
     if down and S.route3_airpress_btn ~= true and not st and S.mounted == true and S.airborne == true then
         -- never during another special
         if not (griffin_grab_active() or griffin_divebomb_active()
@@ -26797,12 +26786,7 @@ function route3_rise_tick()
         return
     end
     local down = S.route3_rise_action_down == true
-    local names = tostring(C.route3_rise_buttons or ""):gsub("%s+", "")
-    if not down and names ~= "" then pcall(function() down = raw_gamepad_button_down(names) end) end
-    if not down then
-        local vk = math.floor(tonumber(C.route3_rise_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    if not down then down = route3_griffin_action_down("loop") end
     if down and S.route3_rise_btn ~= true then
         local cd_ok = now >= (tonumber(S.route3_rise_cd_at) or 0.0)
         -- not during specials that own the pose, never while the takeoff lock holds,
@@ -27100,14 +27084,7 @@ end
 function route3_gust_tick()
     if route3_drake_mounted and route3_drake_mounted() then S.route3_gust = nil; return end
     if C.route3_gust_enabled ~= true then return end
-    local down = false
-    local names = tostring(C.route3_gust_buttons or ""):gsub("%s+", "")
-    if names == "" then names = "west,square" end   -- contextual: X = gust when grounded, dive bomb when airborne
-    pcall(function() down = raw_gamepad_button_down(names) end)
-    if not down then
-        local vk = math.floor(tonumber(C.route3_gust_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("ground_gust")
     local st = S.route3_gust
     local now = os.clock()
     local bank = math.floor(tonumber(C.route3_gust_bank) or 50)
@@ -27431,14 +27408,7 @@ end
 function route3_gatk_tick()
     if route3_drake_mounted and route3_drake_mounted() then S.route3_gatk = nil; S.route3_gatk_btn = false; return end
     if C.route3_gatk_enabled ~= true then return end
-    local down = false
-    local names = tostring(C.route3_gatk_buttons or ""):gsub("%s+", "")
-    if names == "" then names = "north,triangle" end
-    pcall(function() down = raw_gamepad_button_down(names) end)
-    if not down then
-        local vk = math.floor(tonumber(C.route3_gatk_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("ground_attack")
 
     local now = os.clock()
     local pressed = down and S.route3_gatk_btn ~= true
@@ -42285,13 +42255,7 @@ end
 function route3_grab_hotkey_tick()
     if route3_drake_mounted and route3_drake_mounted() then S.route3_grab_btn_prev = false; return end
     if C.route3_grab_enabled ~= true or S.mounted ~= true then S.route3_grab_btn_prev = false; return end
-    local down = false
-    local names = tostring(C.route3_grab_buttons or ""):gsub("%s+", "")
-    if names ~= "" then pcall(function() down = raw_gamepad_button_down(C.route3_grab_buttons) end) end
-    if not down then
-        local vk = math.floor(tonumber(C.route3_grab_key) or 0)
-        if vk > 0 then pcall(function() down = iris_kb(vk) end) end
-    end
+    local down = route3_griffin_action_down("grab")
     if down == true and S.route3_grab_btn_prev ~= true then
         if C.route3_grab_native == true then
             -- NATIVE catch on the grab button (over the homebrew grab): press to
@@ -43133,13 +43097,7 @@ function griffin_ground_eat_tick()
         griffin_ground_eat_scan()
         if S.route3_ground_eat_ready and S.mounted == true
             and S.airborne ~= true then
-            local down = false
-            pcall(function() down = raw_gamepad_button_down("r2") == true end)
-            pcall(function()
-                if not down and type(iris_kb) == "function" then
-                    down = iris_kb(0x45) == true
-                end
-            end)
+            local down = route3_griffin_action_down("eat")
             local pressed = down and S.route3_ground_eat_prev ~= true
             S.route3_ground_eat_prev = down
             if pressed then griffin_ground_eat_start() end

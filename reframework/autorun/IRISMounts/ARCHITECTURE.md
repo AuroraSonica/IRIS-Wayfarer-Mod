@@ -5,6 +5,8 @@ The field-verified Drake baseline is Git commit `d4728f1`, tagged
 deliberately change mount behaviour while code is being moved.
 The first full-restart-tested modularisation checkpoint is `08613bd` on
 `refactor/iris-mount-engine`, also pushed to GitHub before the August update.
+The neutral feature-namespace checkpoint is `ce7fecf`; Griffin and Drake were
+both full-restart tested after that relocation.
 
 ## Current reality
 
@@ -40,12 +42,17 @@ The first profile and identity extraction seams now exist:
 - `IRISMounts.core.actions` resolves the active species adapter's declarative
   action meanings into HUD labels, including Griffin charge/carry/eat contexts
   and Drake attack variants. Its dispatcher now translates Drake X/Y/LT/RT
-  edges into adapter action IDs and invokes the matching proven handler;
+  edges into adapter action IDs and invokes the matching proven handler. The
+  same module also resolves adapter-owned physical bindings without taking
+  ownership of input edges or action eligibility;
 - `IRISMounts.species.drake` now owns the exact authored nodes, clips, stages,
   combo data and camera parameters for all eight dispatched Drake combat
   actions. The runtime injects only the generic node/motion attack executors.
-  Griffin's independent grab/charge/eat/dive/gust state machines have not yet
-  been collapsed behind the dispatcher.
+  Griffin's adapter now owns the bindings for dive bomb, dogfight, air gust,
+  air press, loop/quick-rise, ground gust, ground attack, grab and eat. Their
+  independent state machines deliberately retain their existing edge/hold
+  state and guards; collapsing those overlapping readers into Drake's central
+  dispatcher would change behaviour rather than merely split code.
 
 Reset Scripts deliberately refreshes stateless profile/input/action/species
 modules while preserving `IRISMounts.context`, so edited adapter data cannot
@@ -124,9 +131,11 @@ not receive copied mount engines.
    Low-level input reader and adapter-owned HUD/action-meaning resolver
    implemented and smoke-tested. Drake's central combat edge detector uses the
    shared dispatcher, and its byte-identical handler payloads now live behind an
-   explicit factory in the Drake adapter. Field verification of that relocation
-   is pending before the separately owned Griffin state machines adopt the same
-   boundary.
+   explicit factory in the Drake adapter. That relocation and the neutral
+   feature namespace have passed full-restart field verification. Griffin's
+   physical bindings now cross the adapter boundary while its proven,
+   independently owned state machines stay in place; field verification of the
+   binding pass is pending.
 5. **Mounting, seating and animation ownership** — move native grab, rider/pawn
    placement, motion leases and the root-motion law as an inseparable tested set.
 6. **Locomotion and optional flight** — extract the single transform authority;
