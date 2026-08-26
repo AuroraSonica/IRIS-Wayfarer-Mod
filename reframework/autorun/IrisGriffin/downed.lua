@@ -79,8 +79,12 @@ local IRIS_HITBACK = {
     ch253000 = {bank = 10, f = 0, b = 10, l = 20, r = 30,
         af = 300, ab = 310, al = 320, ar = 330},
     ch254    = {bank = 10, f = 0, b = 10, l = 20, r = 30},
-    ch257000 = {bank = 10, f = 0, b = 0,  l = 0,  r = 0},
-    ch257001 = {bank = 10, f = 0, b = 0,  l = 0,  r = 0},
+    -- Drake owns only one small aerial hitback direction (10:300), so use it
+    -- for every incoming direction rather than painting grounded 10:0 in flight.
+    ch257000 = {bank = 10, f = 0, b = 0,  l = 0,  r = 0,
+        af = 300, ab = 300, al = 300, ar = 300},
+    ch257001 = {bank = 10, f = 0, b = 0,  l = 0,  r = 0,
+        af = 300, ab = 300, al = 300, ar = 300},
     ch258000 = {bank = 10, f = 0, b = 0,  l = 0,  r = 0},
     ch260000 = {bank = 10, f = 0, b = 10, l = 20, r = 30},
     ch299003 = {bank = 10, f = 0, b = 10, l = 20, r = 30},
@@ -294,11 +298,23 @@ local function iris_hit_reaction_is_airborne(ch, go, hb)
 end
 
 function griffin_downed_special_move_busy()
-    -- Any native attack/rise node owns the body. A delayed flinch is harmless;
-    -- painting a reaction over a live node is the intermittent T-pose/CTD path.
+    -- Any native attack/rise node owns the body. Painting a reaction over it is
+    -- the intermittent T-pose/CTD path, and queueing one for afterwards steals
+    -- the next input, so the caller now discards only the cosmetic reaction.
     if S.route3_dogfight or S.route3_gustair or S.route3_quick_burst
-        or S.route3_gatk or S.route3_gust then return true end
+        or S.route3_gatk or S.route3_gust or S.route3_drake_attack
+        or S.route3_divebomb or S.route3_swoop or S.route3_grab
+        or S.route3_predation_eat or S.route3_live_window then return true end
+    local owner = S.base_owner
+    if type(owner) == "table" and tostring(owner.name or "") ~= "hitreact"
+        and os.clock() < (tonumber(owner.until_clock) or 0.0) then return true end
     if S.route3_node_lock_at ~= nil or S.route3_node_exit_until ~= nil then return true end
+    local horse_busy = false
+    pcall(function()
+        local api = rawget(_G, "IrisHorseMount")
+        horse_busy = api and api.move_busy and api.move_busy() == true or false
+    end)
+    if horse_busy then return true end
     return false
 end
 function griffin_downed_hit_controller(ch, addr)
@@ -1861,9 +1877,19 @@ function griffin_downed_tick()
         end
     end
     -- HIT REACTION, played from the tick (never re-entrantly from the damage
-    -- hook). If a native attack currently owns the body, retain this request and
-    -- play it after that node retires. Conversely, dogfight queues behind a live
-    -- reaction in the ride file.
+    -- hook). Damage remains authoritative during an owned move, but its cosmetic
+    -- flinch must be discarded: retaining it to play after the move steals the
+    -- next action and can strand a mount inside the reaction/node lockout.
+    if S.hit_react_addr and C.route3_attack_reaction_guard ~= false
+        and griffin_downed_special_move_busy() then
+        S.hit_react_guard_blocks = (tonumber(S.hit_react_guard_blocks) or 0) + 1
+        S.hit_react_guard_status = string.format(
+            "move poise: reaction discarded; damage retained (%d)",
+            tonumber(S.hit_react_guard_blocks) or 0)
+        S.hit_react_addr = nil
+        S.hit_react_dir = nil
+        S.hit_react_deadline = nil
+    end
     if S.hit_react_addr then
         local addr = S.hit_react_addr
         local nowh = os.clock()

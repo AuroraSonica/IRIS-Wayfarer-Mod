@@ -14847,6 +14847,18 @@ rawset(_G, "IrisHorseMount", {
         return not game_object or object_address(game_object)
             == object_address(S.costume.horse_go)
     end,
+    -- Shared companion damage code asks this before painting a hitback clip.
+    -- HP damage is untouched; this only declares that the mounted action layer
+    -- already has an owner and must not be interrupted (or flinched afterwards).
+    move_busy = function(game_object)
+        if not (S.ride_pose_on and S.costume) then return false end
+        if game_object and object_address(game_object)
+            ~= object_address(S.costume.horse_go) then return false end
+        local costume = S.costume
+        if S.wyrm_native_lease or S.wyrm_attack then return true end
+        if costume.jump or costume.fall_anim or costume.jump_land_until then return true end
+        return costume.force_hold == true and costume.hit_react_hold ~= true
+    end,
     begin_hit_reaction = function(game_object, seconds)
         if not (S.ride_pose_on and S.costume
             and object_address(game_object)

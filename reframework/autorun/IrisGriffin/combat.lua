@@ -853,15 +853,21 @@ function iris_mc_request_collider(go, request_id, label)
     return iris_mc_request_collider_tracks(go, { ReqId1 = request_id }, label)
 end
 
--- Native volume extension for the Drake bite lease.  The capture proves its
--- authored clips already post ReqId1=50, so reposting 50 would restart the
--- request rather than make it reach farther.  Scaling HitController's own
--- collider preserves the genuine receiver transaction, hit-stop, reaction and
--- damage while still allowing a geometric miss.
+-- Native volume extension for Drake bite and breath leases. Reposting a known
+-- request id restarts the attack; scaling HitController's own authored volume
+-- preserves the genuine receiver transaction, hit-stop, reaction and damage
+-- while still allowing a geometric miss. Breath uses modest independent
+-- ground/air defaults because aerial targets need a wider forward lane.
 function iris_mc_drake_collider_scale_dispatch(args)
     local st = S.route3_drake_attack
     local stage = type(st) == "table" and st.stage or nil
     local multiplier = tonumber(stage and stage.collider_scale)
+    if (not multiplier or multiplier <= 1.001)
+        and type(st) == "table" and st.fire_track == true then
+        multiplier = st.fire_air == true
+            and (tonumber(C.route3_drake_air_fire_collider_scale) or 1.35)
+            or (tonumber(C.route3_drake_ground_fire_collider_scale) or 1.35)
+    end
     if not multiplier or multiplier <= 1.001 then return nil end
     local hc = nil
     pcall(function() hc = sdk.to_managed_object(args[2]) end)

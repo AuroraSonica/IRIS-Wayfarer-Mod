@@ -11,7 +11,7 @@ $repo = $PSScriptRoot
 
 function Copy-Into($src, $destDir) {
     if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force $destDir | Out-Null }
-    Copy-Item $src -Destination $destDir -Force -ErrorAction SilentlyContinue
+    Copy-Item $src -Destination $destDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── 1. THE MOD CODE (every IRIS-family Lua, mirrored at install paths) ──────────
@@ -25,6 +25,7 @@ Copy-Into "$live\autorun\*Iris*.lua"            $auto      # IrisTaming, IrisFar
 Copy-Into "$live\autorun\Griffin*.lua"          $auto      # GriffinRideProbe - Iris, GriffinScreechThrottle
 Copy-Into "$live\autorun\ReyDauGriffinPort.lua" $auto
 Copy-Into "$live\autorun\IrisGriffin\*.lua"     (Join-Path $auto "IrisGriffin")
+Copy-Into "$live\autorun\IRISMounts\*"           (Join-Path $auto "IRISMounts")
 # re-home the dev-only tools out of the install set
 foreach ($t in $devTools) {
     $src = Join-Path $auto $t
