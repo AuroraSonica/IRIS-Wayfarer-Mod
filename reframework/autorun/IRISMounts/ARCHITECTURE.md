@@ -3,22 +3,26 @@
 The field-verified Drake baseline is Git commit `d4728f1`, tagged
 `drake-complete-2026-08-25`. The split begins after that point and must not
 deliberately change mount behaviour while code is being moved.
+The first full-restart-tested modularisation checkpoint is `08613bd` on
+`refactor/iris-mount-engine`, also pushed to GitHub before the August update.
 
 ## Current reality
 
 `GriffinRideProbe - Iris.lua` is still the large runtime entry point, but
-the code is not wholly monolithic. Five substantial systems already live under
-`IrisGriffin/`:
+the code is not wholly monolithic. Five substantial shared systems now live
+under `IRISMounts/core/`:
 
 - `combat.lua`: shared mounted targeting, native hit transactions and combos;
 - `downed.lua`: shared companion down/revive protection;
-- `flap.lua`: flight animation presentation;
+- `flight_animation.lua`: flight animation presentation;
 - `orders.lua`: companion orders and combat leases;
 - `stable.lua`: persistent companions, health and taming records.
 
-Those modules use a shared context table and many inherited global functions.
-The immediate task is to make their dependencies explicit and species-neutral,
-not to duplicate them under each animal.
+The old `IrisGriffin/` paths are compatibility loaders. A dual-name package
+cache bridge ensures Reset Scripts reuses an already-loaded legacy instance
+instead of registering the same globals/hooks twice. The implementations use
+the neutral shared context, but still inherit many runtime globals; making
+those dependencies explicit remains separate work.
 
 The first profile and identity extraction seams now exist:
 
@@ -43,14 +47,16 @@ The first profile and identity extraction seams now exist:
   Griffin's independent grab/charge/eat/dive/gust state machines have not yet
   been collapsed behind the dispatcher.
 
-Reset Scripts deliberately refreshes these stateless core/species modules while
-preserving `IRISMounts.context`, so edited adapter data cannot remain trapped in
-Lua's module cache and the process-lifetime `C`/`S` tables are not replaced.
+Reset Scripts deliberately refreshes stateless profile/input/action/species
+modules while preserving `IRISMounts.context`, so edited adapter data cannot
+remain trapped in Lua's module cache and the process-lifetime `C`/`S` tables are
+not replaced. Stateful feature modules are deliberately cache-aliased rather
+than refreshed because several install hooks or publish runtime globals.
 
-No locomotion, flight, seating or combat implementation has moved yet. The
-signature-guarded migration pipeline remains intact as one compatibility unit.
-Decomposing its species-specific rules into adapters is deferred until this
-mechanical extraction has survived an in-game smoke test.
+No locomotion, flight physics or seating implementation has moved yet. Shared
+combat and flight presentation now have neutral paths, while Drake combat
+payloads live in its adapter. The signature-guarded migration pipeline remains
+intact as one compatibility unit.
 
 ## Target layout
 
@@ -62,6 +68,7 @@ autorun/
     core/
       runtime.lua
       animation.lua
+      flight_animation.lua
       input.lua
       actions.lua
       profiles.lua
@@ -125,8 +132,10 @@ not receive copied mount engines.
 6. **Locomotion and optional flight** — extract the single transform authority;
    flight becomes a capability module rather than a second engine.
 7. **Existing feature modules** — move combat/downed/orders/stable/flap into the
-   neutral namespace one at a time, replacing global dependencies with explicit
-   context exports.
+   neutral namespace, retaining legacy loaders and replacing global dependencies
+   with explicit context exports. Namespace relocation and Reset-safe cache
+   bridging implemented as one exact mechanical batch; field verification and
+   explicit dependency cleanup remain.
 8. **Entrypoint cutover** — add `IRISMounts.lua`, turn the old filename into a
    guarded compatibility loader, smoke-test Reset Scripts and a full restart,
    then retire the old name only after parity.

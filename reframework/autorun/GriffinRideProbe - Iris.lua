@@ -1955,8 +1955,8 @@ local function merge_config(dst, src)
     return dst
 end
 
--- C and S live in the context module so the feature modules can bind them (see
--- IrisGriffin/context.lua). They are refilled IN PLACE, never replaced: require() caches
+-- C and S live in the context module so the feature modules can bind them. They
+-- are refilled IN PLACE, never replaced: require() caches
 -- modules, and a script reset does not reliably clear that cache, so a module holding
 -- `local C = ctx.C` from a previous load must keep pointing at the live table.
 -- The generic mount-engine context now owns process-lifetime config/runtime
@@ -1984,8 +1984,7 @@ ctx.profiles = require("IRISMounts.core.profiles")
 ctx.profile_migrations = require("IRISMounts.core.profile_migrations")
 ctx.actions = require("IRISMounts.core.actions")
 
--- Compatibility helpers for feature modules that have not yet moved into the
--- neutral namespace. They accept saved species keys or live GameObject names;
+-- Compatibility helpers accept saved species keys or live GameObject names;
 -- neither helper retains a managed-object reference across Reset Scripts.
 function iris_mount_species_adapter(identity)
     return MountSpecies.resolve(identity)
@@ -44849,18 +44848,32 @@ ctx.raw_gamepad_button_down = raw_gamepad_button_down
 ctx.set_object_rotation_only = set_object_rotation_only
 ctx.set_character_rotation_only = set_character_rotation_only
 
-require("IrisGriffin.flap")
-require("IrisGriffin.orders")
-require("IrisGriffin.stable")
-require("IrisGriffin.downed")
+-- Reset Scripts may retain either the old IrisGriffin module key or the new
+-- neutral one. Bind both names to the same cached instance before requiring so
+-- moved modules cannot register their globals/hooks twice during this cutover.
+local function iris_require_mount_feature(neutral_name, legacy_name)
+    local loaded = package.loaded[neutral_name]
+    if loaded == nil then loaded = package.loaded[legacy_name] end
+    if loaded == nil then loaded = require(neutral_name) end
+    package.loaded[neutral_name] = loaded
+    package.loaded[legacy_name] = loaded
+    return loaded
+end
+
+iris_require_mount_feature("IRISMounts.core.flight_animation", "IrisGriffin.flap")
+iris_require_mount_feature("IRISMounts.core.orders", "IrisGriffin.orders")
+iris_require_mount_feature("IRISMounts.core.stable", "IrisGriffin.stable")
+iris_require_mount_feature("IRISMounts.core.downed", "IrisGriffin.downed")
 -- ⛔ WRAPPED, unlike its siblings, and deliberately: a throw inside a require here kills the rest
 -- of this chunk -- which is where re.on_frame is registered -- so a fault in the NEWEST module
 -- would take the whole mod down with it. Every iris_mc_* call site is type-guarded or pcall'd, so
 -- a failed load degrades to "combat features absent" and says so loudly in the log.
 do
-    local ok, err = pcall(function() require("IrisGriffin.combat") end)
+    local ok, err = pcall(function()
+        iris_require_mount_feature("IRISMounts.core.combat", "IrisGriffin.combat")
+    end)
     if not ok then
-        pcall(function() log.error("[GriffinRideProbe (IRIS)] IrisGriffin/combat.lua FAILED to load: "
+        pcall(function() log.error("[GriffinRideProbe (IRIS)] IRISMounts/core/combat.lua FAILED to load: "
             .. tostring(err)) end)
     end
 end
