@@ -7,18 +7,22 @@ The first full-restart-tested modularisation checkpoint is `08613bd` on
 `refactor/iris-mount-engine`, also pushed to GitHub before the August update.
 The neutral feature-namespace checkpoint is `ce7fecf`; Griffin and Drake were
 both full-restart tested after that relocation.
+The adapter-owned Griffin binding checkpoint is `a600ee2`; all Griffin and
+Drake controls were field-tested before it was pushed.
 
 ## Current reality
 
 `GriffinRideProbe - Iris.lua` is still the large runtime entry point, but
-the code is not wholly monolithic. Five substantial shared systems now live
+the code is not wholly monolithic. Six substantial shared systems now live
 under `IRISMounts/core/`:
 
 - `combat.lua`: shared mounted targeting, native hit transactions and combos;
 - `downed.lua`: shared companion down/revive protection;
 - `flight_animation.lua`: flight animation presentation;
 - `orders.lua`: companion orders and combat leases;
-- `stable.lua`: persistent companions, health and taming records.
+- `stable.lua`: persistent companions, health and taming records;
+- `ui.lua`: shared companion health/stamina, progress, blessing and rodeo HUD
+  publication plus D2D rendering.
 
 The old `IrisGriffin/` paths are compatibility loaders. A dual-name package
 cache bridge ensures Reset Scripts reuses an already-loaded legacy instance
@@ -53,6 +57,9 @@ The first profile and identity extraction seams now exist:
   independent state machines deliberately retain their existing edge/hold
   state and guards; collapsing those overlapping readers into Drake's central
   dispatcher would change behaviour rather than merely split code.
+- Mounted-combat stamina accounting now lives with `core/combat.lua`, while
+  its shared gauge and the other companion HUDs live in `core/ui.lua`. This is
+  an exact mechanical relocation pending a full-restart field test.
 
 Reset Scripts deliberately refreshes stateless profile/input/action/species
 modules while preserving `IRISMounts.context`, so edited adapter data cannot
@@ -135,7 +142,7 @@ not receive copied mount engines.
    feature namespace have passed full-restart field verification. Griffin's
    physical bindings now cross the adapter boundary while its proven,
    independently owned state machines stay in place; field verification of the
-   binding pass is pending.
+   binding pass has passed field verification.
 5. **Mounting, seating and animation ownership** — move native grab, rider/pawn
    placement, motion leases and the root-motion law as an inseparable tested set.
 6. **Locomotion and optional flight** — extract the single transform authority;

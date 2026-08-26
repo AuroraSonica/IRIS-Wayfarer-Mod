@@ -2505,4 +2505,108 @@ function iris_mc_draw_panel()
     imgui.tree_pop()
 end
 
+-- Shared mounted-combat stamina: accounting belongs beside the attacks
+-- which consume it; the UI module only publishes and renders the gauge.
+function route3_combat_stamina_busy()
+    return type(S.route3_drake_attack) == "table"
+        or type(S.route3_combat_combo) == "table"
+        or type(S.route3_gatk) == "table"
+        or type(S.route3_gust) == "table"
+        or type(S.route3_gustair) == "table"
+        or type(S.route3_airpress) == "table"
+        or type(S.route3_dogfight) == "table"
+        or type(S.route3_divebomb) == "table"
+        or type(S.route3_swoop) == "table"
+        or S.route3_drake_sprint_hit_active == true
+end
+
+function route3_combat_stamina_tick()
+    local now = os.clock()
+    local maxv = math.max(1.0, tonumber(C.route3_combat_stamina_max) or 100.0)
+    local _, go = reacquire_griffin()
+    local addr = nil
+    pcall(function() addr = go and go:get_address() end)
+    if not addr then
+        S.route3_combat_stamina_clock = now
+        S.route3_combat_stamina_active = nil
+        return
+    end
+    if S.route3_combat_stamina_mount_addr ~= addr then
+        S.route3_combat_stamina_mount_addr = addr
+        S.route3_combat_stamina = maxv
+        S.route3_combat_stamina_clock = now
+        S.route3_combat_stamina_regen_at = now
+    end
+    S.route3_combat_stamina_active = S.mounted == true and true or nil
+    local last = tonumber(S.route3_combat_stamina_clock) or now
+    local dt = math.max(0.0, math.min(0.10, now - last))
+    S.route3_combat_stamina_clock = now
+    local cur = math.max(0.0, math.min(maxv,
+        tonumber(S.route3_combat_stamina) or maxv))
+    if S.mounted == true and route3_combat_stamina_busy() then
+        S.route3_combat_stamina_regen_at = now
+            + math.max(0.0, tonumber(C.route3_combat_stamina_regen_delay) or 1.5)
+    elseif C.route3_combat_stamina_enabled == false then
+        cur = maxv
+    elseif now >= (tonumber(S.route3_combat_stamina_regen_at) or 0.0) then
+        cur = math.min(maxv, cur
+            + math.max(0.0, tonumber(C.route3_combat_stamina_regen) or 12.0) * dt)
+    end
+    S.route3_combat_stamina = cur
+    S.route3_combat_stamina_frac = cur / maxv
+end
+
+function route3_combat_stamina_cost(label)
+    local s = tostring(label or ""):lower()
+    if s:find("charge", 1, true) then
+        return tonumber(C.route3_combat_stamina_cost_charge) or 15.0
+    end
+    if s:find("grand", 1, true) then
+        local maxv = math.max(1.0, tonumber(C.route3_combat_stamina_max) or 100.0)
+        local fraction = math.max(0.0, math.min(1.0,
+            tonumber(C.route3_combat_stamina_grand_magic_fraction) or 0.90))
+        return maxv * fraction
+    end
+    if s:find("magic", 1, true) or s:find("thunder", 1, true) then
+        return tonumber(C.route3_combat_stamina_cost_magic) or 55.0
+    end
+    if s:find("breath", 1, true) or s:find("flame", 1, true) then
+        return tonumber(C.route3_combat_stamina_cost_breath) or 35.0
+    end
+    if s:find("tail", 1, true) or s:find("gust", 1, true)
+        or s:find("press", 1, true) then
+        return tonumber(C.route3_combat_stamina_cost_heavy) or 28.0
+    end
+    if s:find("bite", 1, true) or s:find("combo", 1, true)
+        or s:find("peck", 1, true) then
+        return tonumber(C.route3_combat_stamina_cost_melee) or 18.0
+    end
+    return tonumber(C.route3_combat_stamina_cost_special) or 40.0
+end
+
+function route3_combat_stamina_spend(cost, label)
+    if C.route3_combat_stamina_enabled == false then return true end
+    route3_combat_stamina_tick()
+    local maxv = math.max(1.0, tonumber(C.route3_combat_stamina_max) or 100.0)
+    cost = math.max(0.0, math.min(maxv, tonumber(cost) or route3_combat_stamina_cost(label)))
+    local cur = math.max(0.0, math.min(maxv,
+        tonumber(S.route3_combat_stamina) or maxv))
+    if cur + 0.001 < cost then
+        S.route3_combat_stamina_status = string.format(
+            "%s refused: %.0f/%.0f combat stamina", tostring(label or "Attack"), cur, cost)
+        S.route3_combat_stamina_flash_until = os.clock() + 0.5
+        status("Not enough mount combat stamina")
+        return false
+    end
+    cur = cur - cost
+    S.route3_combat_stamina = cur
+    S.route3_combat_stamina_frac = cur / maxv
+    S.route3_combat_stamina_regen_at = os.clock()
+        + math.max(0.0, tonumber(C.route3_combat_stamina_regen_delay) or 1.5)
+    S.route3_combat_stamina_status = string.format(
+        "%s cost %.0f (%.0f/%.0f)", tostring(label or "Attack"), cost, cur, maxv)
+    return true
+end
+
+
 log.info("[IrisMountCombat] shared mount combat loaded (" .. tostring(MOD) .. ")")
