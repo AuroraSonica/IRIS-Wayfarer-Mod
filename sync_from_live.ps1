@@ -21,10 +21,9 @@ $auto = Join-Path $repo "reframework\autorun"
 $devAuto = Join-Path $repo "dev\autorun"
 $devTools = @("!IrisPerfProbe.lua", "IrisFlightRecorder.lua", "IrisSurgeTape.lua",
               "ReyDauGriffinPort.lua", "IrisPawnObserve.lua")
-# Interactables' dormant R&D lab travels in dev\, not the install set
-Copy-Into "$live\autorun\InteractButton.lua" (Join-Path $repo "dev\autorun")
+# ⛔ Interactables/InteractButton are NOT synced here — "Immersive Interactables" has
+#    its own repo (C:\Users\Krist\Immersive-Interactables), it is not an IRIS mod.
 Copy-Into "$live\autorun\*Iris*.lua"            $auto      # IrisTaming, IrisFarming, 000IrisInputGate...
-Copy-Into "$live\autorun\Interactables.lua"     $auto      # the Interactables mod (sit/work/sleep/cook — 2026-08-27 release line)
 Copy-Into "$live\autorun\Griffin*.lua"          $auto      # GriffinRideProbe - Iris, GriffinScreechThrottle
 Copy-Into "$live\autorun\ReyDauGriffinPort.lua" $auto
 Copy-Into "$live\autorun\IrisGriffin\*.lua"     (Join-Path $auto "IrisGriffin")
